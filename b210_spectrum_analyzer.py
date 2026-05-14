@@ -43,20 +43,38 @@ class b210_spectrum_analyzer(gr.top_block, Qt.QWidget):
             self.setWindowIcon(Qt.QIcon.fromTheme('gnuradio-grc'))
         except BaseException as exc:
             print(f"Qt GUI: Could not set Icon: {str(exc)}", file=sys.stderr)
-        self.top_scroll_layout = Qt.QVBoxLayout()
-        self.setLayout(self.top_scroll_layout)
-        self.top_scroll = Qt.QScrollArea()
-        self.top_scroll.setFrameStyle(Qt.QFrame.NoFrame)
-        self.top_scroll_layout.addWidget(self.top_scroll)
-        self.top_scroll.setWidgetResizable(True)
-        self.top_widget = Qt.QWidget()
-        self.top_scroll.setWidget(self.top_widget)
-        self.top_layout = Qt.QVBoxLayout(self.top_widget)
-        self.top_grid_layout = Qt.QGridLayout()
-        self.top_layout.addLayout(self.top_grid_layout)
+        self.main_layout = Qt.QHBoxLayout(self)
+        self.main_layout.setContentsMargins(4, 4, 4, 4)
+        self.main_layout.setSpacing(4)
+
+        self.plots_splitter = Qt.QSplitter(QtCore.Qt.Vertical)
+        self.plots_splitter.setChildrenCollapsible(False)
+        self.main_layout.addWidget(self.plots_splitter, 1)
+
+        self.sidebar = Qt.QWidget()
+        self.sidebar.setMinimumWidth(280)
+        self.sidebar.setMaximumWidth(360)
+        self.sidebar_layout = Qt.QVBoxLayout(self.sidebar)
+        self.sidebar_layout.setContentsMargins(0, 0, 0, 0)
+        self.main_layout.addWidget(self.sidebar, 0)
+
+        self._tuning_group = Qt.QGroupBox("Tuning")
+        self._tuning_group_layout = Qt.QVBoxLayout(self._tuning_group)
+        self.sidebar_layout.addWidget(self._tuning_group)
+
+        self._rx_group = Qt.QGroupBox("RX")
+        self._rx_group_layout = Qt.QVBoxLayout(self._rx_group)
+        self.sidebar_layout.addWidget(self._rx_group)
+
+        self._record_group = Qt.QGroupBox("Recording")
+        self._record_group_layout = Qt.QVBoxLayout(self._record_group)
+        self.sidebar_layout.addWidget(self._record_group)
+
+        self.sidebar_layout.addStretch(1)
 
         self.settings = Qt.QSettings("gnuradio/flowgraphs", "b210_spectrum_analyzer")
 
+        self.resize(1280, 780)
         try:
             geometry = self.settings.value("geometry")
             if geometry:
@@ -96,7 +114,7 @@ class b210_spectrum_analyzer(gr.top_block, Qt.QWidget):
         self._samp_rate_combo_box.currentIndexChanged.connect(
             lambda i: self.set_samp_rate(self._samp_rate_options[i]))
         # Create the radio buttons
-        self.top_layout.addWidget(self._samp_rate_tool_bar)
+        self._rx_group_layout.addWidget(self._samp_rate_tool_bar)
         # Create the options list
         self._record_options = [0, 1]
         # Create the labels list
@@ -112,10 +130,10 @@ class b210_spectrum_analyzer(gr.top_block, Qt.QWidget):
         self._record_combo_box.currentIndexChanged.connect(
             lambda i: self.set_record(self._record_options[i]))
         # Create the radio buttons
-        self.top_layout.addWidget(self._record_tool_bar)
+        self._record_group_layout.addWidget(self._record_tool_bar)
         self._gain_range = qtgui.Range(0, 76, 1, 40, 200)
         self._gain_win = qtgui.RangeWidget(self._gain_range, self.set_gain, "RX Gain (dB)", "counter_slider", float, QtCore.Qt.Horizontal)
-        self.top_layout.addWidget(self._gain_win)
+        self._rx_group_layout.addWidget(self._gain_win)
         self.uhd_usrp_source_0 = uhd.usrp_source(
             ",".join(('serial=3273A91', '')),
             uhd.stream_args(
@@ -164,7 +182,7 @@ class b210_spectrum_analyzer(gr.top_block, Qt.QWidget):
 
         self._qtgui_waterfall_sink_x_0_win = sip.wrapinstance(self.qtgui_waterfall_sink_x_0.qwidget(), Qt.QWidget)
 
-        self.top_layout.addWidget(self._qtgui_waterfall_sink_x_0_win)
+        self.plots_splitter.addWidget(self._qtgui_waterfall_sink_x_0_win)
         self.qtgui_freq_sink_x_0 = qtgui.freq_sink_c(
             1024, #size
             window.WIN_BLACKMAN_hARRIS, #wintype
@@ -182,7 +200,7 @@ class b210_spectrum_analyzer(gr.top_block, Qt.QWidget):
         self.qtgui_freq_sink_x_0.enable_grid(True)
         self.qtgui_freq_sink_x_0.set_fft_average(1.0)
         self.qtgui_freq_sink_x_0.enable_axis_labels(True)
-        self.qtgui_freq_sink_x_0.enable_control_panel(True)
+        self.qtgui_freq_sink_x_0.enable_control_panel(False)
         self.qtgui_freq_sink_x_0.set_fft_window_normalized(False)
 
 
@@ -206,7 +224,10 @@ class b210_spectrum_analyzer(gr.top_block, Qt.QWidget):
             self.qtgui_freq_sink_x_0.set_line_alpha(i, alphas[i])
 
         self._qtgui_freq_sink_x_0_win = sip.wrapinstance(self.qtgui_freq_sink_x_0.qwidget(), Qt.QWidget)
-        self.top_layout.addWidget(self._qtgui_freq_sink_x_0_win)
+        self.plots_splitter.insertWidget(0, self._qtgui_freq_sink_x_0_win)
+        self.plots_splitter.setStretchFactor(0, 1)
+        self.plots_splitter.setStretchFactor(1, 1)
+        self.plots_splitter.setSizes([400, 400])
         # Create the options list
         self._freq_preset_options = [408000000.0, 680500000.0, 1299500000.0, 1422000000.0, 1666000000.0, 2304000000.0, 0]
         # Create the labels list
@@ -214,7 +235,7 @@ class b210_spectrum_analyzer(gr.top_block, Qt.QWidget):
         # Create the combo box
         # Create the radio buttons
         self._freq_preset_group_box = Qt.QGroupBox("Pulsar Band" + ": ")
-        self._freq_preset_box = Qt.QHBoxLayout()
+        self._freq_preset_box = Qt.QVBoxLayout()
         class variable_chooser_button_group(Qt.QButtonGroup):
             def __init__(self, parent=None):
                 Qt.QButtonGroup.__init__(self, parent)
@@ -231,20 +252,20 @@ class b210_spectrum_analyzer(gr.top_block, Qt.QWidget):
         self._freq_preset_callback(self.freq_preset)
         self._freq_preset_button_group.buttonClicked[int].connect(
             lambda i: self.set_freq_preset(self._freq_preset_options[i]))
-        self.top_layout.addWidget(self._freq_preset_group_box)
+        self._tuning_group_layout.addWidget(self._freq_preset_group_box)
         self._freq_offset_0_range = qtgui.Range(-100e6, 100e6, 100e3, 0, 200)
         self._freq_offset_0_win = qtgui.RangeWidget(self._freq_offset_0_range, self.set_freq_offset_0, "Coarse Tune (Hz)", "counter_slider", float, QtCore.Qt.Horizontal)
-        self.top_layout.addWidget(self._freq_offset_0_win)
+        self._tuning_group_layout.addWidget(self._freq_offset_0_win)
         self._freq_offset_range = qtgui.Range(-10e6, 10e6, 100e3, 0, 200)
         self._freq_offset_win = qtgui.RangeWidget(self._freq_offset_range, self.set_freq_offset, "Fine Tune (Hz)", "counter_slider", float, QtCore.Qt.Horizontal)
-        self.top_layout.addWidget(self._freq_offset_win)
+        self._tuning_group_layout.addWidget(self._freq_offset_win)
         self._freq_manual_tool_bar = Qt.QToolBar(self)
         self._freq_manual_tool_bar.addWidget(Qt.QLabel("Manual Frequency (Hz)" + ": "))
         self._freq_manual_line_edit = Qt.QLineEdit(str(self.freq_manual))
         self._freq_manual_tool_bar.addWidget(self._freq_manual_line_edit)
         self._freq_manual_line_edit.editingFinished.connect(
             lambda: self.set_freq_manual(eng_notation.str_to_num(str(self._freq_manual_line_edit.text()))))
-        self.top_layout.addWidget(self._freq_manual_tool_bar)
+        self._tuning_group_layout.addWidget(self._freq_manual_tool_bar)
         self.foo_valve_0 = foo.valve(item_size=gr.sizeof_gr_complex*1, open=bool(not record))
         self.blocks_sigmf_sink_minimal_0 = blocks.sigmf_sink_minimal(
             item_size=gr.sizeof_gr_complex,
