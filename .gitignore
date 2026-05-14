@@ -1,0 +1,41 @@
+# SigMF binary IQ recordings — large, regenerable from the radio
+*.sigmf-data
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Packaging artifacts (PyInstaller, py2app, Briefcase, cx_Freeze)
+build/
+dist/
+*.app/
+*.dmg
+*.msi
+*.exe
+*.pkg
+
+# OS cruft
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editors / IDEs
+# Track a curated subset of .vscode for cross-machine consistency;
+# ignore everything else (workspace state, transient files).
+.vscode/*
+!.vscode/settings.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~
+.claude/
+
+# Logs
+*.log

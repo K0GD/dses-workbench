@@ -1,0 +1,22 @@
+{
+  "files.associations": {
+    "*.grc": "yaml",
+    "*.sigmf-meta": "json"
+  },
+  "search.exclude": {
+    "**/*.sigmf-data": true,
+    "**/build": true,
+    "**/dist": true
+  },
+  "files.exclude": {
+    "**/__pycache__": true,
+    "**/*.pyc": true
+  },
+  "python.analysis.typeCheckingMode": "basic",
+  "python.terminal.activateEnvironment": true,
+  "[python]": {
+    "editor.formatOnSave": false,
+    "editor.tabSize": 4,
+    "editor.insertSpaces": true
+  }
+}
