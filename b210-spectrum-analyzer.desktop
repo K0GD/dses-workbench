@@ -1,0 +1,11 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=B210 Spectrum Analyzer
+Comment=Pulsar RFI spectrum analyzer for Ettus USRP B210
+Exec=__INSTALL_DIR__/launcher.sh
+Icon=__INSTALL_DIR__/icons/icon.png
+Path=__INSTALL_DIR__
+Categories=Science;HamRadio;Education;
+Terminal=false
+StartupNotify=true
