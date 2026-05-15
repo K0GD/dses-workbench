@@ -1,0 +1,38 @@
+# environment.yml
+# Project-local conda env for the Spectrum_Analyzer_PY project (USRP B210).
+# Create with: conda env create --prefix ./.conda -f environment.yml
+# Update with: conda env update --prefix ./.conda -f environment.yml --prune
+
+name: spectrum-analyzer-py   # ignored when using --prefix; kept for documentation
+
+channels:
+  - conda-forge
+
+dependencies:
+  - python=3.12
+
+  # --- GNU Radio core ---
+  # Metapackage pulls in qtgui, uhd, blocks, filter, fft, analog, digital,
+  # audio, channels, zeromq, etc. — everything you need for a spectrum analyzer.
+  - gnuradio
+
+  # --- USRP / UHD ---
+  # 'gnuradio' already brings in gnuradio-uhd as a dep, but pin 'uhd' explicitly
+  # so the CLI tools (uhd_find_devices, uhd_usrp_probe, uhd_images_downloader)
+  # are available from this env.
+  - uhd
+
+  # --- Scientific / DSP stack ---
+  - numpy
+  - scipy
+  - matplotlib
+
+  # --- GUI ---
+  # pyqt is needed for GNU Radio's qtgui blocks and for building your own Qt UI.
+  # pyqtgraph is much faster than matplotlib for live FFT / waterfall displays.
+  - pyqt
+  - pyqtgraph
+
+  # --- Tooling ---
+  - pip            # so pip-only packages can be installed into THIS env
+  - ipython        # nicer REPL for interactive testing

@@ -29,6 +29,8 @@ import time
 import foo
 import sip
 import threading
+import os
+from pathlib import Path
 
 
 
@@ -73,6 +75,15 @@ class b210_spectrum_analyzer(gr.top_block, Qt.QWidget):
         self.sidebar_layout.addStretch(1)
 
         self.settings = Qt.QSettings("gnuradio/flowgraphs", "b210_spectrum_analyzer")
+
+        default_recording_dir = str(Path.home() / "Documents" / "B210_Recordings")
+        self.recording_dir = self.settings.value("recording_dir", default_recording_dir, type=str)
+        os.makedirs(self.recording_dir, exist_ok=True)
+
+        self._recording_dir_button = Qt.QPushButton("Folder: " + self._elided_dir())
+        self._recording_dir_button.setToolTip(self.recording_dir)
+        self._recording_dir_button.clicked.connect(self._on_change_recording_dir)
+        self._record_group_layout.addWidget(self._recording_dir_button)
 
         self.resize(1280, 780)
         try:
@@ -269,7 +280,7 @@ class b210_spectrum_analyzer(gr.top_block, Qt.QWidget):
         self.foo_valve_0 = foo.valve(item_size=gr.sizeof_gr_complex*1, open=bool(not record))
         self.blocks_sigmf_sink_minimal_0 = blocks.sigmf_sink_minimal(
             item_size=gr.sizeof_gr_complex,
-            filename='DSES_Spectrum_Analyzer',
+            filename=os.path.join(self.recording_dir, 'DSES_Spectrum_Analyzer'),
             sample_rate=samp_rate,
             center_freq=center_freq,
             author='Rick',
@@ -294,6 +305,30 @@ class b210_spectrum_analyzer(gr.top_block, Qt.QWidget):
         self.wait()
 
         event.accept()
+
+    def _elided_dir(self):
+        d = self.recording_dir
+        if len(d) > 32:
+            return "..." + d[-29:]
+        return d
+
+    def _on_change_recording_dir(self):
+        new_dir = Qt.QFileDialog.getExistingDirectory(
+            self,
+            "Choose recording folder",
+            self.recording_dir,
+        )
+        if not new_dir:
+            return
+        self.recording_dir = new_dir
+        self.settings.setValue("recording_dir", new_dir)
+        self._recording_dir_button.setText("Folder: " + self._elided_dir())
+        self._recording_dir_button.setToolTip(new_dir)
+        Qt.QMessageBox.information(
+            self,
+            "Recording folder changed",
+            "New folder will be used the next time the program is launched."
+        )
 
     def get_freq_preset(self):
         return self.freq_preset
