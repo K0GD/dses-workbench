@@ -9,6 +9,7 @@ __pycache__/
 .venv/
 venv/
 env/
+/.conda/
 
 # Packaging artifacts (PyInstaller, py2app, Briefcase, cx_Freeze)
 build/
