@@ -67,6 +67,18 @@ WINDOWS = {
 FFT_SIZES = [256, 512, 1024, 2048, 4096, 8192]
 
 
+def _pretty_rate(hz: float) -> str:
+    """Format a sample rate in Hz as a short human-readable string for the
+    sample-rate combo. 1_000_000 -> '1 MHz', 2_048_000 -> '2.048 MHz',
+    250_000 -> '250 kHz'."""
+    mhz = hz / 1e6
+    if mhz >= 1:
+        if abs(mhz - round(mhz)) < 1e-6:
+            return f"{int(round(mhz))} MHz"
+        return f"{mhz:g} MHz"
+    return f"{hz / 1e3:g} kHz"
+
+
 # === User-editable settings (INI-backed, persisted across runs) ===
 
 def _default_recording_dir():
@@ -2318,11 +2330,88 @@ class b210_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         # Blocks
         ##################################################
 
-        # --- Sample-rate selector ---
-        self._samp_rate_options = [1000000.0, 2000000.0, 4000000.0, 5000000.0, 8000000.0,
-                                   10000000.0, 16000000.0, 20000000.0, 25000000.0]
-        self._samp_rate_labels = ['1 MHz', '2 MHz', '4 MHz', '5 MHz', '8 MHz',
-                                  '10 MHz', '16 MHz', '20 MHz', '25 MHz']
+        # --- Resolve data source FIRST so the sample-rate combo + gain
+        # slider built below can pull their options from the source's
+        # capabilities (SDRPlay caps at 10 MHz; B210 goes to 25 MHz; etc.).
+        chosen = resolve_device(
+            self._app_settings.get_str('rx', 'device_driver'),
+            self._app_settings.get_str('rx', 'device_serial'),
+            parent=self)
+        if not chosen:
+            raise SystemExit(0)
+        self._playback_mode = (chosen == PLAYBACK_SENTINEL)
+        self._playback_path = None
+        # In live mode: RadioSource wrapper around the actual radio block.
+        # In playback mode: None (the file_source + throttle live in their
+        # own attributes).
+        self._source: 'RadioSource | None' = None
+        # Backwards-compat alias used by _start_recording / _stop_recording
+        # and the live-only setter guards. Kept as None in playback mode.
+        self.uhd_usrp_source_0 = None
+
+        if self._playback_mode:
+            # Sample rate and center frequency come from the file's metadata,
+            # not from the saved settings. Override the locals + self vars
+            # before any widget construction that uses them.
+            self._playback_path = find_default_sample_path()
+            assert self._playback_path is not None
+            pb_sr, pb_cf, _dtype = load_sigmf_meta(self._playback_path)
+            self._playback_center_freq = pb_cf
+            self.samp_rate = samp_rate = pb_sr
+            self.center_freq = center_freq = pb_cf
+            self._device_serial = None
+            self._device_driver = None
+            self._file_source = blocks.file_source(
+                gr.sizeof_gr_complex,
+                self._playback_path + '.sigmf-data',
+                repeat=True)
+            self._throttle = blocks.throttle(gr.sizeof_gr_complex, samp_rate, True)
+            self._rotator = blocks.rotator_cc(0.0)
+            # No RadioSource for playback; the sidebar uses a single-item
+            # rate combo and a disabled gain slider (handled below).
+            sr_options = [pb_sr]
+            gain_range_tuple = (0.0, 76.0, 1.0)
+            device_label_text = f"Playback: {Path(self._playback_path).name}.sigmf-data"
+        else:
+            assert isinstance(chosen, dict)
+            self._device_driver = chosen['driver']
+            self._device_serial = chosen['serial']
+            self._save_setting('rx', 'device_driver', self._device_driver)
+            self._save_setting('rx', 'device_serial', self._device_serial)
+            try:
+                if self._device_driver == DRIVER_UHD_B200:
+                    src: RadioSource = UhdB200Source(
+                        serial=chosen['serial'], samp_rate=samp_rate,
+                        center_freq=center_freq, gain=gain)
+                else:
+                    src = SoapyGenericSource(
+                        driver=self._device_driver,
+                        serial=chosen['serial'],
+                        samp_rate=samp_rate,
+                        center_freq=center_freq,
+                        gain=gain,
+                        product=chosen.get('product', ''))
+                    # Snap requested rate to the driver's nearest supported.
+                    if src.samp_rate_options:
+                        samp_rate = min(
+                            src.samp_rate_options,
+                            key=lambda r: abs(r - samp_rate))
+                        self.samp_rate = samp_rate
+            except Exception as exc:
+                QtWidgets.QMessageBox.critical(
+                    self, "Radio failed to open",
+                    f"Could not open {chosen['label']}:\n\n"
+                    f"{type(exc).__name__}: {exc}")
+                raise SystemExit(0)
+            self._source = src
+            self.uhd_usrp_source_0 = src.block
+            sr_options = list(src.samp_rate_options)
+            gain_range_tuple = src.gain_range
+            device_label_text = f"Device: {chosen['product']} {self._device_serial}".strip()
+
+        # --- Sample-rate selector (device-aware options) ---
+        self._samp_rate_options = sr_options
+        self._samp_rate_labels = [_pretty_rate(r) for r in sr_options]
         self._samp_rate_tool_bar = QtWidgets.QToolBar(self)
         self._samp_rate_tool_bar.addWidget(QtWidgets.QLabel("Sample Rate: "))
         self._samp_rate_combo_box = QtWidgets.QComboBox()
@@ -2331,7 +2420,8 @@ class b210_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
             self._samp_rate_combo_box.addItem(_label)
         self._samp_rate_callback = lambda i: QtCore.QMetaObject.invokeMethod(
             self._samp_rate_combo_box, "setCurrentIndex",
-            QtCore.Q_ARG("int", self._samp_rate_options.index(i)))
+            QtCore.Q_ARG("int", self._samp_rate_options.index(i)
+                         if i in self._samp_rate_options else 0))
         self._samp_rate_callback(self.samp_rate)
         self._samp_rate_combo_box.currentIndexChanged.connect(
             lambda i: self.set_samp_rate(self._samp_rate_options[i]))
@@ -2360,119 +2450,24 @@ class b210_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         self._recording_status.setWordWrap(True)
         self._record_group_layout.addWidget(self._recording_status)
 
-        # --- Gain slider ---
-        self._gain_range = Range(0, 76, 1, self.gain, 200)
+        # --- Gain slider (device-aware range) ---
+        gmin, gmax, gstep = gain_range_tuple
+        clamped_gain = max(gmin, min(gmax, self.gain))
+        if clamped_gain != self.gain:
+            self.gain = clamped_gain  # device range is narrower than saved value
+        self._gain_range = Range(gmin, gmax, gstep, clamped_gain, 200)
         self._gain_win = RangeWidget(self._gain_range, self.set_gain, "RX Gain (dB)",
                                       "counter_slider", float, Qt.Horizontal)
         self._rx_group_layout.addWidget(self._gain_win)
 
-        # --- Device picker button (shows the currently-selected serial) ---
-        self._device_button = QtWidgets.QPushButton()  # text set below
+        # --- Device picker button (label already computed above) ---
+        self._device_button = QtWidgets.QPushButton(device_label_text)
         self._device_button.setToolTip(
             "Click to pick a different attached radio (when more than one is connected).")
         self._device_button.clicked.connect(self._on_change_device_clicked)
-        self._rx_group_layout.addWidget(self._device_button)
-
-        # --- Resolve data source: live radio, SigMF playback, or quit ---
-        chosen = resolve_device(
-            self._app_settings.get_str('rx', 'device_driver'),
-            self._app_settings.get_str('rx', 'device_serial'),
-            parent=self)
-        if not chosen:
-            raise SystemExit(0)
-        self._playback_mode = (chosen == PLAYBACK_SENTINEL)
-        self._playback_path = None
-        # In live mode: RadioSource wrapper around the actual radio block.
-        # In playback mode: None (the file_source + throttle live in their
-        # own attributes).
-        self._source: 'RadioSource | None' = None
-        # Backwards-compat alias used by _start_recording / _stop_recording
-        # and the live-only setter guards. Kept as None in playback mode.
-        self.uhd_usrp_source_0 = None
-
         if self._playback_mode:
-            # Sample rate and center frequency come from the file's metadata,
-            # not from the saved settings. Override the locals + self vars
-            # before any widget construction that uses them. We preserve the
-            # file's *actual* center frequency separately because tuning
-            # in playback mode is a digital frequency shift relative to it.
-            self._playback_path = find_default_sample_path()
-            assert self._playback_path is not None, \
-                "PLAYBACK_SENTINEL implies the sample file exists"
-            pb_sr, pb_cf, _dtype = load_sigmf_meta(self._playback_path)
-            self._playback_center_freq = pb_cf
-            self.samp_rate = samp_rate = pb_sr
-            self.center_freq = center_freq = pb_cf
-            self._device_serial = None
-            self._device_driver = None
-            self._device_button.setText(
-                f"Playback: {Path(self._playback_path).name}.sigmf-data")
             self._device_button.setEnabled(False)
-        else:
-            # In the live branch `chosen` is the device dict from
-            # resolve_device(); the PLAYBACK_SENTINEL string path is the
-            # only other possibility and was handled above.
-            assert isinstance(chosen, dict)
-            self._device_driver = chosen['driver']
-            self._device_serial = chosen['serial']
-            self._save_setting('rx', 'device_driver', self._device_driver)
-            self._save_setting('rx', 'device_serial', self._device_serial)
-            # Keep the sidebar button short: just the product + serial.
-            self._device_button.setText(
-                f"Device: {chosen['product']} {self._device_serial}".strip())
-
-        # --- Data source block ---
-        if self._playback_mode:
-            self._file_source = blocks.file_source(
-                gr.sizeof_gr_complex,
-                self._playback_path + '.sigmf-data',
-                repeat=True)
-            # Throttle paces file_source to the original capture rate; without
-            # it the file is read as fast as Python can stream it.
-            self._throttle = blocks.throttle(gr.sizeof_gr_complex, samp_rate, True)
-            # Digital frequency shift so the user can virtually retune within
-            # the recording's bandwidth. phase_inc=0 keeps the file's original
-            # center frequency; set_center_freq updates this.
-            self._rotator = blocks.rotator_cc(0.0)
-        else:
-            # Build the source through the RadioSource interface. UHD
-            # drives B200/B210; everything else (SDRPlay / RTL-SDR / HackRF
-            # / Airspy / BladeRF / Lime / PlutoSDR) goes through gr-soapy.
-            assert isinstance(chosen, dict)  # re-narrow for the type checker
-            driver = chosen['driver']
-            try:
-                src: RadioSource
-                if driver == DRIVER_UHD_B200:
-                    src = UhdB200Source(
-                        serial=chosen['serial'], samp_rate=samp_rate,
-                        center_freq=center_freq, gain=gain)
-                else:
-                    src = SoapyGenericSource(
-                        driver=driver,
-                        serial=chosen['serial'],
-                        samp_rate=samp_rate,
-                        center_freq=center_freq,
-                        gain=gain,
-                        product=chosen.get('product', ''))
-                    # If the Soapy driver only supports a discrete rate
-                    # list, pick the closest supported rate ≤ what we
-                    # asked for and update self.samp_rate to match.
-                    if src.samp_rate_options:
-                        samp_rate = min(
-                            src.samp_rate_options,
-                            key=lambda r: abs(r - samp_rate))
-                        self.samp_rate = samp_rate
-            except Exception as exc:
-                QtWidgets.QMessageBox.critical(
-                    self, "Radio failed to open",
-                    f"Could not open {chosen['label']}:\n\n"
-                    f"{type(exc).__name__}: {exc}")
-                raise SystemExit(0)
-            self._source = src
-            # Keep the legacy attribute pointing at the raw GR block so the
-            # recording-chain connect/disconnect and the live-mode setter
-            # guards don't need to change yet.
-            self.uhd_usrp_source_0 = src.block
+        self._rx_group_layout.addWidget(self._device_button)
 
         # --- Spectrum display (replaces qtgui freq_sink + waterfall_sink) ---
         # Decimate aggressively before the Python sink: at 20 MS/s a pure-Python
