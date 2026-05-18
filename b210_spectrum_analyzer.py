@@ -83,9 +83,13 @@ DEFAULTS = {
     'rx': {
         'gain_db':         40.0,
         'samp_rate_hz':    20e6,
-        # 'auto' = first B210 found on the bus. Set to a specific UHD serial
-        # (e.g. '3273A91') to pin the app to one device when several are
-        # attached. Updated by the device-picker dialog.
+        # Saved (driver, serial) identifies the radio to open at startup.
+        # Driver: 'uhd_b200' for B200/B210, or a Soapy driver name
+        # ('sdrplay', 'rtlsdr', 'hackrf', 'airspy', 'bladerf', …).
+        # Serial: 'auto' picks the first found (silent if there's only one).
+        # Both are updated by the device-picker dialog when the user
+        # chooses a different radio.
+        'device_driver':   'uhd_b200',
         'device_serial':   'auto',
     },
     'recording': {
@@ -1277,37 +1281,97 @@ def _addr_to_dict(a):
     return d
 
 
-def find_b210s():
-    """Enumerate attached USRPs and return a list of dicts with keys
-    'serial', 'product', 'name'. Filters to B200-family (B200/B210) since
-    that's all this app supports. Returns [] on any UHD failure."""
+# Driver identifiers used internally. Settings store the chosen one in
+# [rx]/device_driver and the corresponding serial in [rx]/device_serial.
+DRIVER_UHD_B200 = "uhd_b200"
+
+# Soapy drivers we surface to the picker. Anything not in this list is
+# still enumerable via SoapySDR.Device.enumerate() with no filter, but we
+# only advertise these to avoid showing internal/loopback adapters.
+SOAPY_KNOWN_DRIVERS = ("sdrplay", "rtlsdr", "hackrf", "airspy",
+                       "airspyhf", "bladerf", "lime", "plutosdr")
+
+
+def find_b200_uhd():
+    """Return UHD B200-family devices as {driver, serial, product, label}."""
     try:
         addrs = uhd.find('type=b200')
     except Exception as exc:
-        print(f"USRP discovery failed: {exc}", file=sys.stderr)
+        print(f"UHD discovery failed: {exc}", file=sys.stderr)
         return []
     out = []
     for a in addrs:
         d = _addr_to_dict(a)
+        serial = d.get('serial', '')
+        product = d.get('product', d.get('type', 'B200'))
         out.append({
-            'serial':  d.get('serial', ''),
-            'product': d.get('product', d.get('type', '')),
-            'name':    d.get('name', ''),
+            'driver':  DRIVER_UHD_B200,
+            'serial':  serial,
+            'product': product,
+            'label':   f"USRP {product} — {serial or '(no serial)'}",
         })
     return out
 
 
-class DevicePickerDialog(QtWidgets.QDialog):
-    """Modal dialog listing the attached B210s. OK returns the selected
-    serial; Cancel returns None. Used both at startup (when multiple
-    devices are attached and no saved serial matches) and from the
-    'Device' button in the RX sidebar."""
+def find_soapy_devices():
+    """Return SoapySDR devices (RSPx, RTL-SDR, HackRF, …) as
+    {driver, serial, product, label}. Skipped silently if SoapySDR isn't
+    importable."""
+    try:
+        import SoapySDR
+    except Exception:
+        return []
+    try:
+        addrs = SoapySDR.Device.enumerate()
+    except Exception as exc:
+        print(f"SoapySDR discovery failed: {exc}", file=sys.stderr)
+        return []
+    out = []
+    for a in addrs:
+        try:
+            d = dict(a)
+        except Exception:
+            continue
+        drv = (d.get('driver') or '').lower()
+        if drv not in SOAPY_KNOWN_DRIVERS:
+            continue
+        # Each Soapy driver names its serial field differently. Try the
+        # common keys; fall back to the driver name + index for display.
+        serial = (d.get('serial') or d.get('serial_number')
+                  or d.get('device_id') or '')
+        product = (d.get('label') or d.get('product')
+                   or d.get('hardware') or drv)
+        # SDRPlay-specific: drop the redundant "SDRPlay Dev0: " prefix some
+        # label fields use, keep just the model name.
+        if drv == 'sdrplay' and product.startswith('SDRPlay Dev'):
+            try:
+                product = product.split(':', 1)[1].strip()
+            except IndexError:
+                pass
+        out.append({
+            'driver':  drv,
+            'serial':  serial,
+            'product': product,
+            'label':   f"{product} — {serial or '(no serial)'}  [{drv}]",
+        })
+    return out
 
-    def __init__(self, devices, current_serial=None, parent=None,
-                 prompt="Pick a USRP to use:"):
+
+def find_all_radios():
+    """Combined enumeration of every supported SDR backend."""
+    return find_b200_uhd() + find_soapy_devices()
+
+
+class DevicePickerDialog(QtWidgets.QDialog):
+    """Modal dialog listing every attached SDR. selected_device() returns
+    the picked device dict (with 'driver' and 'serial' keys); Cancel
+    returns None."""
+
+    def __init__(self, devices, current_driver=None, current_serial=None,
+                 parent=None, prompt="Pick a radio to use:"):
         super().__init__(parent)
-        self.setWindowTitle("Choose USRP")
-        self.setMinimumWidth(420)
+        self.setWindowTitle("Choose Radio")
+        self.setMinimumWidth(460)
         layout = QtWidgets.QVBoxLayout(self)
 
         layout.addWidget(QtWidgets.QLabel(prompt))
@@ -1317,11 +1381,11 @@ class DevicePickerDialog(QtWidgets.QDialog):
         font.setStyleHint(QtGui.QFont.Monospace)
         self._list.setFont(font)
         for dev in devices:
-            label = self._format(dev)
-            item = QtWidgets.QListWidgetItem(label)
-            item.setData(Qt.UserRole, dev['serial'])
+            item = QtWidgets.QListWidgetItem(dev['label'])
+            item.setData(Qt.UserRole, dev)
             self._list.addItem(item)
-            if dev['serial'] and dev['serial'] == current_serial:
+            if (dev['driver'] == current_driver
+                    and dev['serial'] == (current_serial or '')):
                 self._list.setCurrentItem(item)
         if self._list.currentItem() is None and self._list.count() > 0:
             self._list.setCurrentRow(0)
@@ -1334,43 +1398,38 @@ class DevicePickerDialog(QtWidgets.QDialog):
         btns.rejected.connect(self.reject)
         layout.addWidget(btns)
 
-    @staticmethod
-    def _format(dev):
-        serial = dev.get('serial') or '(no serial)'
-        product = dev.get('product') or '?'
-        name = dev.get('name')
-        suffix = f"  [{name}]" if name else ''
-        return f"{serial}  —  {product}{suffix}"
-
-    def selected_serial(self):
+    def selected_device(self):
         item = self._list.currentItem()
         return item.data(Qt.UserRole) if item else None
 
 
-def resolve_device_serial(saved_serial, parent=None):
-    """Decide which B210 to open. Returns the serial to pass to
-    uhd.usrp_source, the PLAYBACK_SENTINEL if no device is attached but a
-    bundled SigMF sample is present, or None if the user canceled and
-    there's nothing to fall back on. `saved_serial` is from settings (may
-    be 'auto' or a specific serial)."""
-    devices = find_b210s()
+def resolve_device(saved_driver, saved_serial, parent=None):
+    """Decide which SDR to open. Returns one of:
+        - a device dict {driver, serial, product, label}
+        - PLAYBACK_SENTINEL if no device is attached but the bundled SigMF
+          sample is present
+        - None if the user canceled the picker and there's nothing to fall
+          back on.
+    `saved_driver` and `saved_serial` come from settings."""
+    devices = find_all_radios()
 
     if not devices:
         sample = find_default_sample_path()
         if sample is None:
             QtWidgets.QMessageBox.critical(
-                parent, "No USRP found",
-                "No B210 was detected on the USB bus, and no bundled SigMF "
+                parent, "No radio found",
+                "No supported SDR was detected (looked for UHD B200/B210 and "
+                "SoapySDR-recognised devices: SDRPlay, RTL-SDR, HackRF, "
+                "Airspy, BladeRF, Lime, PlutoSDR), and no bundled SigMF "
                 "sample file was found next to the program.\n\n"
-                "Plug a B210 into a USB 3 port and relaunch, or place "
+                "Plug a supported radio in and relaunch, or place "
                 f"'{SIGMF_SAMPLE_BASENAME}.sigmf-data' and "
                 f"'{SIGMF_SAMPLE_BASENAME}.sigmf-meta' alongside "
                 "b210_spectrum_analyzer.py to enable demo playback.")
             return None
-        # Fall back to playback. Inform the user so this isn't silent.
         QtWidgets.QMessageBox.information(
             parent, "Playback mode",
-            "No B210 detected — starting in SigMF playback mode.\n\n"
+            "No radio detected — starting in SigMF playback mode.\n\n"
             f"File: {Path(sample).name}.sigmf-data\n\n"
             "The sample loops continuously. Sample rate, gain, and recording "
             "are disabled (no hardware). Tuning is enabled and digitally "
@@ -1378,28 +1437,31 @@ def resolve_device_serial(saved_serial, parent=None):
             "outside it and you'll just see noise.")
         return PLAYBACK_SENTINEL
 
-    saved = (saved_serial or '').strip()
-    serials = [d['serial'] for d in devices]
+    saved_driver = (saved_driver or '').strip()
+    saved_serial = (saved_serial or '').strip()
+    # Backwards-compat: pre-v1.0.0 INIs only had device_serial; assume B210.
+    if saved_serial and not saved_driver:
+        saved_driver = DRIVER_UHD_B200
 
-    # Pinned to a specific serial: use it if present, otherwise fall back
-    # to picker/auto with a note.
-    if saved and saved.lower() != 'auto':
-        if saved in serials:
-            return saved
+    # Pinned to a specific (driver, serial): use it if present.
+    if saved_serial and saved_serial.lower() != 'auto':
+        for d in devices:
+            if d['driver'] == saved_driver and d['serial'] == saved_serial:
+                return d
         QtWidgets.QMessageBox.warning(
-            parent, "Saved USRP not attached",
-            f"The saved USRP serial '{saved}' is not currently attached.\n\n"
-            f"Falling back to device picker.")
+            parent, "Saved radio not attached",
+            f"The saved radio ({saved_driver} / {saved_serial}) is not "
+            f"currently attached. Falling back to the device picker.")
         # Fall through to picker/auto logic.
 
-    # Auto-mode: 1 device = silent use; >1 = ask the user.
+    # Auto mode: 1 device = silent use; >1 = ask the user.
     if len(devices) == 1:
-        return devices[0]['serial']
+        return devices[0]
 
-    dlg = DevicePickerDialog(devices, current_serial=saved or None,
-                             parent=parent)
+    dlg = DevicePickerDialog(devices, current_driver=saved_driver,
+                             current_serial=saved_serial, parent=parent)
     if dlg.exec() == QtWidgets.QDialog.Accepted:
-        return dlg.selected_serial()
+        return dlg.selected_device()
     return None
 
 
@@ -2174,16 +2236,18 @@ class b210_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         # --- Device picker button (shows the currently-selected serial) ---
         self._device_button = QtWidgets.QPushButton()  # text set below
         self._device_button.setToolTip(
-            "Click to pick which USRP to use (when more than one is attached).")
+            "Click to pick a different attached radio (when more than one is connected).")
         self._device_button.clicked.connect(self._on_change_device_clicked)
         self._rx_group_layout.addWidget(self._device_button)
 
-        # --- Resolve data source: live USRP, SigMF playback, or quit ---
-        chosen_serial = resolve_device_serial(
-            self._app_settings.get_str('rx', 'device_serial'), parent=self)
-        if not chosen_serial:
+        # --- Resolve data source: live radio, SigMF playback, or quit ---
+        chosen = resolve_device(
+            self._app_settings.get_str('rx', 'device_driver'),
+            self._app_settings.get_str('rx', 'device_serial'),
+            parent=self)
+        if not chosen:
             raise SystemExit(0)
-        self._playback_mode = (chosen_serial == PLAYBACK_SENTINEL)
+        self._playback_mode = (chosen == PLAYBACK_SENTINEL)
         self._playback_path = None
         # In live mode: RadioSource wrapper around the actual radio block.
         # In playback mode: None (the file_source + throttle live in their
@@ -2207,13 +2271,22 @@ class b210_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
             self.samp_rate = samp_rate = pb_sr
             self.center_freq = center_freq = pb_cf
             self._device_serial = None
+            self._device_driver = None
             self._device_button.setText(
                 f"Playback: {Path(self._playback_path).name}.sigmf-data")
             self._device_button.setEnabled(False)
         else:
-            self._device_serial = chosen_serial
-            self._save_setting('rx', 'device_serial', chosen_serial)
-            self._device_button.setText(f"Device: {chosen_serial}")
+            # In the live branch `chosen` is the device dict from
+            # resolve_device(); the PLAYBACK_SENTINEL string path is the
+            # only other possibility and was handled above.
+            assert isinstance(chosen, dict)
+            self._device_driver = chosen['driver']
+            self._device_serial = chosen['serial']
+            self._save_setting('rx', 'device_driver', self._device_driver)
+            self._save_setting('rx', 'device_serial', self._device_serial)
+            # Keep the sidebar button short: just the product + serial.
+            self._device_button.setText(
+                f"Device: {chosen['product']} {self._device_serial}".strip())
 
         # --- Data source block ---
         if self._playback_mode:
@@ -2229,12 +2302,24 @@ class b210_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
             # center frequency; set_center_freq updates this.
             self._rotator = blocks.rotator_cc(0.0)
         else:
-            # Build the source through the RadioSource interface so future
-            # backends (SoapySDR for SDRPlay / RTL-SDR / HackRF) drop in
-            # at this single site without touching the rest of __init__.
-            self._source = UhdB200Source(
-                serial=chosen_serial, samp_rate=samp_rate,
-                center_freq=center_freq, gain=gain)
+            # Build the source through the RadioSource interface. Phase 3
+            # adds a SoapyGenericSource branch here for SDRPlay / RTL-SDR /
+            # HackRF / etc.; until then any non-UHD device routes through
+            # the picker's "saved device not attached" warning when its
+            # driver doesn't match.
+            assert isinstance(chosen, dict)  # re-narrow for the type checker
+            if self._device_driver == DRIVER_UHD_B200:
+                self._source = UhdB200Source(
+                    serial=chosen['serial'], samp_rate=samp_rate,
+                    center_freq=center_freq, gain=gain)
+            else:
+                QtWidgets.QMessageBox.critical(
+                    self, "Driver not yet supported",
+                    f"The selected radio uses the '{self._device_driver}' "
+                    f"driver, which isn't wired up yet in this build. "
+                    f"Pick a UHD B210 from the device picker, or attach one "
+                    f"and relaunch.")
+                raise SystemExit(0)
             # Keep the legacy attribute pointing at the raw GR block so the
             # recording-chain connect/disconnect and the live-mode setter
             # guards don't need to change yet.
@@ -2607,28 +2692,34 @@ class b210_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         )
 
     def _on_change_device_clicked(self):
-        """Re-open the device picker. Switching to a different USRP needs a
-        full flowgraph rebuild, so for now we just save the choice and tell
-        the user it'll take effect next launch."""
-        devices = find_b210s()
+        """Re-open the device picker. Switching to a different radio needs
+        a full flowgraph rebuild, so for now we just save the choice and
+        tell the user it'll take effect next launch."""
+        devices = find_all_radios()
         if not devices:
             QtWidgets.QMessageBox.warning(
-                self, "No USRP found",
-                "No B210 is currently attached. Plug one in and try again.")
+                self, "No radio found",
+                "No supported SDR is currently attached. Plug one in and "
+                "try again.")
             return
         dlg = DevicePickerDialog(
-            devices, current_serial=self._device_serial, parent=self,
-            prompt="Pick a USRP for the next launch:")
+            devices, current_driver=self._device_driver,
+            current_serial=self._device_serial, parent=self,
+            prompt="Pick a radio for the next launch:")
         if dlg.exec() != QtWidgets.QDialog.Accepted:
             return
-        new_serial = dlg.selected_serial()
-        if not new_serial or new_serial == self._device_serial:
+        new_dev = dlg.selected_device()
+        if not new_dev:
             return
-        self._save_setting('rx', 'device_serial', new_serial)
+        if (new_dev['driver'] == self._device_driver
+                and new_dev['serial'] == self._device_serial):
+            return
+        self._save_setting('rx', 'device_driver', new_dev['driver'])
+        self._save_setting('rx', 'device_serial', new_dev['serial'])
         QtWidgets.QMessageBox.information(
-            self, "USRP changed",
-            f"Will use serial '{new_serial}' on next launch.\n\n"
-            f"(Hot-swap of the USRP source is not supported yet — "
+            self, "Radio changed",
+            f"Will use {new_dev['label']} on next launch.\n\n"
+            f"(Hot-swap of the radio source is not supported yet — "
             f"close and re-open the program to apply.)")
 
     def get_freq_preset(self):
