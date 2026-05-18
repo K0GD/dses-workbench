@@ -298,11 +298,32 @@ The build script (`build_install_docx.py`) accepts CLI options so the same code 
 
 Defaults match the install-guide build, so a bare `build_install_docx.py` invocation builds `Installing.md` → `DSES_RFI_Spectrum_Analyzer_Installation.{docx,pdf}` with `Installation Guide` as subtitle.
 
-### 7.4 Memory / notes worth knowing
+### 7.4 Multi-radio architecture
+
+The application drives any of:
+
+- **UHD B200-family**: B200, B210. Via `uhd.usrp_source`, wrapped in `UhdB200Source`.
+- **SoapySDR-supported devices**: SDRPlay (RSP1A / RSP1B / RSPduo / RSPdx), RTL-SDR, HackRF, Airspy, Airspy HF+, BladeRF, LimeSDR, PlutoSDR. Via `gnuradio.soapy.source`, wrapped in `SoapyGenericSource`.
+
+The split-out classes live next to each other in `b210_spectrum_analyzer.py`:
+
+```text
+RadioSource           — abstract: gr block + set_samp_rate / set_center_freq / set_gain
+  UhdB200Source       — UHD path
+  SoapyGenericSource  — gr-soapy path; per-driver capabilities in SOAPY_DEFAULTS
+```
+
+`find_all_radios()` = `find_b200_uhd()` + `find_soapy_devices()`. The picker shows them in a single list. Settings hold `(device_driver, device_serial)`.
+
+Per-driver capabilities (sample-rate options, gain range) come from the `SOAPY_DEFAULTS` table at module top. Add a new Soapy backend by listing its driver string and adding an entry there.
+
+**SDRPlay-specific:** SDRPlay devices need both the SDRplay API installer (from sdrplay.com) and the `soapysdr-module-sdrplay` conda package. Neither ships in Radioconda by default. The install guide's §1A documents the steps for users.
+
+### 7.5 Memory / notes worth knowing
 
 A few project facts that don't fit elsewhere:
 
 - The B210 USRP serial used during development is **3273A91**. New users with their own B210s get auto-detected; no source change needed (see §8 of the install guide).
 - macOS users on Apple Silicon must install the **arm64** Radioconda build; mixing an x86_64 Radioconda with arm64 Qt produces confusing errors at startup.
-- On Linux, Radioconda's udev rules must be activated for the B210 (see install guide §2.2).
+- On Linux, Radioconda's udev rules must be activated for the B210 (see install guide §2.2). SDRPlay devices on Linux similarly need the udev rules from the SDRplay API installer.
 - The auto-update check is harmless if the manifest URL is unreachable — failures are silent in the background path. Don't panic if you accidentally delete the manifest; users just don't see new-version notifications until you restore it.

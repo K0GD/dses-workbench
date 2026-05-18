@@ -10,15 +10,18 @@ This document covers:
 - How to update to a new version.
 - Common troubleshooting and a reference for advanced settings.
 
-The application itself is one Python file plus a few launchers and an icon. The heavy machinery — GNU Radio, UHD, PySide6, NumPy, SciPy — is supplied by **Radioconda**, which you install separately as a one-time prerequisite.
+The application itself is one Python file plus a few launchers and an icon. The heavy machinery — GNU Radio, UHD, SoapySDR, PySide6, NumPy, SciPy — is supplied by **Radioconda**, which you install separately as a one-time prerequisite.
+
+**Supported radios.** The program is designed around the Ettus USRP B210 but also drives any SoapySDR-compatible receiver: SDRPlay RSP1A / RSP1B / RSPduo / RSPdx (with one extra setup step — see §1A), RTL-SDR, HackRF, Airspy / Airspy HF+, BladeRF, LimeSDR, and PlutoSDR. The sample-rate combo and gain slider adapt automatically to whichever device you pick at startup.
 
 
 ## 1. What the recipient needs to know first
 
-Each recipient performs **two installs**, in this order:
+Each recipient performs **two installs**, in this order (plus a third optional step if you're using SDRPlay):
 
-1. **Install Radioconda** (one-time). Radioconda is a curated conda distribution that bundles GNU Radio, UHD, and the surrounding scientific Python stack for software-defined radio. We require version 4.8 or newer (it ships with UHD ≥ 4.8). Download: <https://github.com/ryanvolz/radioconda/releases>.
+1. **Install Radioconda** (one-time). Radioconda is a curated conda distribution that bundles GNU Radio, UHD, SoapySDR, and the surrounding scientific Python stack for software-defined radio. We require version 4.8 or newer (it ships with UHD ≥ 4.8). Download: <https://github.com/ryanvolz/radioconda/releases>.
 2. **Install this app**, which is just a small zip of Python and launcher scripts.
+3. **If using SDRPlay only:** install the SDRplay API + SoapySDRPlay module (see §1A). Other supported radios work without any extra setup.
 
 Updates to the app afterwards are a small zip replace — Radioconda does not need to be re-installed for every release.
 
@@ -30,9 +33,43 @@ Updates to the app afterwards are a small zip replace — Radioconda does not ne
 | CPU | x86_64 *or* Apple Silicon (M1/M2/M3/M4) |
 | RAM | 4 GB free |
 | USB | One USB 3.0 port (5 Gbps) for the B210 |
-| Hardware | Ettus USRP B210. The app auto-selects the only attached B210 if there's one; with multiple, a picker appears at startup. See §8 for details. |
+| Hardware | Ettus USRP B210 *or* any SoapySDR-supported receiver (SDRPlay RSPx, RTL-SDR, HackRF, Airspy, BladeRF, LimeSDR, PlutoSDR). With one radio attached the app uses it silently; with several, a picker appears. See §8 for details. |
 | Disk | ~3 GB for Radioconda, plus ~1 MB for this app |
 | Display | 1280 × 800 minimum; 14″ MacBook Pro is the layout target |
+
+
+## 1A. Optional: extra setup for SDRPlay (RSP1A / RSP1B / RSPduo)
+
+If you're using an **SDRPlay** receiver (RSP1A, RSP1B, RSPduo, or RSPdx), you need two extra pieces beyond Radioconda. **Skip this section entirely if you're only using a B210, RTL-SDR, HackRF, Airspy, BladeRF, LimeSDR, or PlutoSDR — those work out of the box once Radioconda is installed.**
+
+### 1A.1 Install the SDRplay API
+
+SDRPlay devices need the manufacturer's proprietary API driver. Download and install it from <https://www.sdrplay.com/api/> — pick the installer for your OS.
+
+- **Windows:** run the `.exe` installer; accept defaults. A reboot may be needed.
+- **Linux:** run the `.run` installer with `sudo`.
+- **macOS:** run the `.pkg` installer.
+
+After installation, verify the API can see your unit with the SDRplay Service / Status app (Windows) or `SDRplayService` (Linux/macOS). You should see your RSP listed.
+
+### 1A.2 Install the SoapySDRPlay module
+
+This is the glue between SDRplay's API and the SoapySDR layer the program uses.
+
+```text
+Windows / Linux / macOS — from an activated Radioconda prompt:
+  conda install -c conda-forge soapysdr-module-sdrplay
+```
+
+Verify it loaded:
+
+```text
+SoapySDRUtil --info
+```
+
+…should list `sdrplay` in the "Available factories" line. If it doesn't, the API install in §1A.1 didn't take — recheck that.
+
+When you launch the spectrum analyzer with an RSP attached, it will appear in the device picker as e.g. `RSPduo — 1234567 [sdrplay]`.
 
 
 ## 2. Installing Radioconda
@@ -282,7 +319,7 @@ Settings should be saved automatically on every change and on app close. If they
 The settings INI is plain text and editable while the app is closed. Sections:
 
 - `[tuning]` — preset/coarse/fine/manual frequency in Hz.
-- `[rx]` — sample rate in Hz, RX gain in dB.
+- `[rx]` — sample rate in Hz, RX gain in dB, `device_driver` (e.g. `uhd_b200`, `sdrplay`, `rtlsdr`), `device_serial`.
 - `[recording]` — SigMF recording folder.
 - `[spectrum]` — FFT size, window, averaging, max/min hold, Y-axis range, grid, axis-label toggles, dark/light background, trace styling for each background.
 - `[waterfall]` — intensity range, colormap (per background), grid/axis-label toggles, row count.
@@ -296,18 +333,20 @@ To reset every value to its default: use **Help → About → Restore Defaults�
 
 ## 8. Appendix B — Device selection and SigMF playback
 
-### Choosing among multiple B210s
+### Choosing among multiple radios
 
-Most users have exactly one B210. The app handles that case silently:
+The program enumerates everything supported at launch — Ettus B210s via UHD, plus any SoapySDR-recognised receiver (SDRPlay, RTL-SDR, HackRF, Airspy, Airspy HF+, BladeRF, LimeSDR, PlutoSDR). Behavior:
 
-- **No B210 attached, no playback sample:** an error dialog says "No USRP found" and explains how to enable playback (see below). The app exits.
-- **No B210 attached, but `sample.sigmf-data` + `sample.sigmf-meta` are present next to the program:** the app falls back to **SigMF playback mode** (see below). An informational dialog announces the fallback.
-- **One B210 attached:** the app opens it and saves its serial to `settings.ini` for next time.
-- **Two or more B210s attached:** a picker dialog appears showing serial + product name; pick one and the app remembers your choice. If the remembered device isn't attached on a later launch, the picker re-opens.
+- **No radio attached, no playback sample:** an error dialog says "No radio found" and explains how to enable playback (see below). The app exits.
+- **No radio attached, but `sample.sigmf-data` + `sample.sigmf-meta` are present next to the program:** the app falls back to **SigMF playback mode** (see below). An informational dialog announces the fallback.
+- **One radio attached:** the app opens it and remembers it in `settings.ini`.
+- **Multiple radios attached:** a picker dialog appears with each device's product name, serial, and driver (e.g. `RSPduo — 1234567 [sdrplay]` or `USRP B210 — 3273A91`). Pick one and the app remembers your choice. If the remembered device isn't attached on a later launch, the picker re-opens.
 
-The **RX** sidebar group has a button labeled `Device: <serial>` showing which USRP the current session is using. Clicking it re-opens the picker; the new choice takes effect on the next launch.
+The **RX** sidebar group has a button labeled `Device: <product> <serial>` showing which radio the current session is using. Clicking it re-opens the picker; the new choice takes effect on the next launch.
 
-To pin a specific device permanently without using the picker, edit `settings.ini` and set `device_serial` under `[rx]` to the serial reported by `uhd_find_devices`. Use the literal value `auto` to restore the default "first found" behavior.
+The sample-rate combo and gain-slider range adapt automatically to whichever radio is open. SDRPlay caps at 10 MHz; RTL-SDR maxes around 3.2 MHz; HackRF goes to 20 MHz; the B210 to 25 MHz. Saved gain is clamped to the new device's range if you switch to a narrower one.
+
+To pin a specific device permanently without using the picker, edit `settings.ini` and set `device_driver` + `device_serial` under `[rx]`. Use `device_serial = auto` to restore the default "first found" behavior.
 
 ### SigMF playback mode (no-device fallback)
 
