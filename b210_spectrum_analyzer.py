@@ -1466,7 +1466,28 @@ def resolve_device(saved_driver, saved_serial, parent=None):
             f"currently attached. Falling back to the device picker.")
         # Fall through to picker/auto logic.
 
-    # Auto mode: 1 device = silent use; >1 = ask the user.
+    # When more than one type of radio is attached, the B210 (UHD) family
+    # wins. It's the primary supported device — Soapy support is a more
+    # recent addition with less coverage in testing. The user can still
+    # switch to a non-B210 device via the sidebar's Device button, which
+    # shows every attached radio regardless of driver.
+    b210s = [d for d in devices if d['driver'] == DRIVER_UHD_B200]
+    if b210s:
+        if len(b210s) == 1:
+            return b210s[0]
+        # Multiple B210s — disambiguate among them. Non-B210 devices stay
+        # accessible via the Device-button picker after launch.
+        dlg = DevicePickerDialog(
+            b210s, current_driver=saved_driver, current_serial=saved_serial,
+            parent=parent,
+            prompt=("Multiple USRP B210s detected — pick one. "
+                    "(Other attached SDRs are reachable via the Device "
+                    "button on the sidebar.)"))
+        if dlg.exec() == QtWidgets.QDialog.Accepted:
+            return dlg.selected_device()
+        return None
+
+    # No B210 attached: single device = silent use; multiple = ask.
     if len(devices) == 1:
         return devices[0]
 

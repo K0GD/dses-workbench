@@ -340,7 +340,11 @@ The program enumerates everything supported at launch — Ettus B210s via UHD, p
 - **No radio attached, no playback sample:** an error dialog says "No radio found" and explains how to enable playback (see below). The app exits.
 - **No radio attached, but `sample.sigmf-data` + `sample.sigmf-meta` are present next to the program:** the app falls back to **SigMF playback mode** (see below). An informational dialog announces the fallback.
 - **One radio attached:** the app opens it and remembers it in `settings.ini`.
-- **Multiple radios attached:** a picker dialog appears with each device's product name, serial, and driver (e.g. `RSPduo — 1234567 [sdrplay]` or `USRP B210 — 3273A91`). Pick one and the app remembers your choice. If the remembered device isn't attached on a later launch, the picker re-opens.
+- **One B210 attached alongside other types** (e.g. B210 + RSPduo, B210 + RTL-SDR): the app silently opens the B210. The B210 is the primary supported device; other types are still reachable through the **Device** button on the sidebar.
+- **Multiple B210s attached:** a picker shows the B210s; pick one. Other attached non-B210 radios are reachable through the **Device** button after launch.
+- **Multiple non-B210 radios attached (no B210)**: a picker shows them all (e.g. an RSPduo and an RTL-SDR); pick one. The app remembers your choice.
+
+If the remembered device isn't attached on a later launch, the picker re-opens.
 
 The **RX** sidebar group has a button labeled `Device: <product> <serial>` showing which radio the current session is using. Clicking it re-opens the picker; the new choice takes effect on the next launch.
 
