@@ -1,10 +1,10 @@
 {
   "global": {
     "core:datatype": "cf32_le",
-    "core:sample_rate": 20000000.0,
+    "core:sample_rate": 10000000.0,
     "core:version": "1.0.0",
     "core:hw": "Ettus USRP B210",
-    "core:author": "Rick",
+    "core:author": "Richard M Hambly (K0GD)",
     "core:description": "B210 capture, RX2 antenna"
   },
   "captures": [

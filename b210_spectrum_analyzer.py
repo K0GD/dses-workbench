@@ -8,79 +8,2016 @@
 # Title: B210 Spectrum Analyzer
 # Description: Simple spectrum analyzer for the Ettus USRP B210
 # GNU Radio version: 3.10.12.0
+#
+# Originally generated from b210_spectrum_analyzer.grc and then hand-polished.
+# Migrated off gnuradio.qtgui (PyQt5) to a native PySide6 + PyQtGraph display
+# so the whole app runs on one Qt binding (Qt6).
 
-from PyQt5 import Qt
-from gnuradio import qtgui
-from PyQt5 import QtCore
-from PyQt5.QtCore import QObject, pyqtSlot
-from gnuradio import blocks
+import os
+os.environ["PYQTGRAPH_QT_LIB"] = "PySide6"
+
+from PySide6 import QtCore, QtGui, QtWidgets
+from PySide6.QtCore import Qt, QObject, Signal, Slot, QTimer
+import pyqtgraph as pg
+pg.setConfigOption('imageAxisOrder', 'row-major')
+pg.setConfigOption('background', 'k')
+pg.setConfigOption('foreground', 'w')
+
 import numpy as np
+from scipy.signal import windows as scipy_windows
+
+from gnuradio import blocks
 from gnuradio import eng_notation
 from gnuradio import gr
-from gnuradio.filter import firdes
-from gnuradio.fft import window
-import sys
-import signal
-from PyQt5 import Qt
-from argparse import ArgumentParser
-from gnuradio.eng_arg import eng_float, intx
 from gnuradio import uhd
-import time
-import foo
-import sip
-import threading
-import os
+from gnuradio.eng_arg import eng_float, intx
+from gnuradio.filter import firdes
+
+from argparse import ArgumentParser
+from datetime import datetime
 from pathlib import Path
+import configparser
+import re
+import signal
+import sys
+import threading
+import time
 
 
+# === App metadata ===
+APP_NAME        = "B210 Spectrum Analyzer"
+APP_VERSION     = "1.0.0"
+APP_AUTHOR      = "Richard M Hambly (K0GD)"
+APP_AUTHOR_EMAIL = "rick@cnssys.com"
+APP_COPYRIGHT   = "Copyright © 2026 Richard M Hambly (K0GD)"
+APP_LICENSE     = "GPL-3.0-or-later"
+APP_DESCRIPTION = ("Simple spectrum analyzer for the Ettus USRP B210, designed "
+                   "for pulsar RFI investigation.")
 
-class b210_spectrum_analyzer(gr.top_block, Qt.QWidget):
+
+# === Window function table (drop-in for gnuradio.fft.window) ===
+WINDOWS = {
+    "rectangular":     lambda n: np.ones(n, dtype=np.float64),
+    "hamming":         scipy_windows.hamming,
+    "hann":            scipy_windows.hann,
+    "blackman":        scipy_windows.blackman,
+    "blackman-harris": scipy_windows.blackmanharris,
+    "flat-top":        scipy_windows.flattop,
+}
+FFT_SIZES = [256, 512, 1024, 2048, 4096, 8192]
+
+
+# === User-editable settings (INI-backed, persisted across runs) ===
+
+def _default_recording_dir():
+    return str(Path.home() / "Documents" / "B210_Recordings")
+
+
+DEFAULTS = {
+    'tuning': {
+        'preset_hz':       408e6,
+        'coarse_hz':       0.0,
+        'fine_hz':         0.0,
+        'manual_hz':       100e6,
+    },
+    'rx': {
+        'gain_db':         40.0,
+        'samp_rate_hz':    20e6,
+        # 'auto' = first B210 found on the bus. Set to a specific UHD serial
+        # (e.g. '3273A91') to pin the app to one device when several are
+        # attached. Updated by the device-picker dialog.
+        'device_serial':   'auto',
+    },
+    'recording': {
+        # Set at runtime from _default_recording_dir() if blank.
+        'directory':       '',
+    },
+    'spectrum': {
+        'fft_size':        1024,
+        'window':          'blackman-harris',
+        'normalize_window': False,
+        'avg_alpha':       1.0,
+        'max_hold':        False,
+        'min_hold':        False,
+        'y_min':           -140.0,
+        'y_max':           10.0,
+        'grid':            True,
+        'axis_labels':     True,
+        'dark_background': True,
+        # Trace styling is stored per-background so the user can dial it in
+        # independently for each — e.g. bright sky-blue on black vs. navy on
+        # white. The active set follows `dark_background`.
+        'trace_color_dark':  '#00bfff',  # deepskyblue
+        'trace_width_dark':  1,
+        'trace_alpha_dark':  1.0,
+        'trace_label_dark':  'Data 0',
+        'trace_color_light': '#003f7f',  # dark navy, legible on white
+        'trace_width_light': 1,
+        'trace_alpha_light': 1.0,
+        'trace_label_light': 'Data 0',
+    },
+    'waterfall': {
+        'intensity_min':   -140.0,
+        'intensity_max':   10.0,
+        # Per-background colormap (active follows `dark_background`).
+        'colormap_dark':   'viridis',
+        'colormap_light':  'inferno',
+        'axis_labels':     True,
+        'grid':            False,
+        'dark_background': True,
+        'rows':            256,
+    },
+    'ui': {
+        'control_panels_visible': True,
+    },
+    'updates': {
+        # Master switch — set to false to disable the auto-check entirely.
+        'auto_check':           True,
+        # URL of the manifest.json describing the latest release. See
+        # Installing.md "Release workflow" for the expected JSON format.
+        'manifest_url':         'https://gpstime.com/sw_distribution/b210_sa/manifest.json',
+        # ISO-8601 timestamp of the last successful check (set by the app).
+        # Used to debounce repeated launches.
+        'last_check_iso':       '',
+        # Don't open the notification dialog more often than this many
+        # hours regardless of how many times the app is relaunched.
+        'check_interval_hours': 24,
+        # If the user clicks "Skip this version" on the notification, the
+        # version they skipped is stored here so we don't nag them again
+        # until a newer one appears.
+        'dismissed_version':    '',
+    },
+}
+
+
+def _settings_path():
+    """Cross-platform config location. Matches launcher.ps1's
+    %APPDATA%\\B210Analyzer on Windows; main() sets QApplication app name
+    to 'B210Analyzer' with no org, so AppDataLocation resolves to:
+        Windows: %APPDATA%/B210Analyzer/
+        macOS:   ~/Library/Application Support/B210Analyzer/
+        Linux:   ~/.local/share/B210Analyzer/
+    """
+    base = QtCore.QStandardPaths.writableLocation(
+        QtCore.QStandardPaths.AppDataLocation)
+    if not base:
+        base = str(Path.home() / ".config" / "B210Analyzer")
+    cfg_dir = Path(base)
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    return cfg_dir / "settings.ini"
+
+
+class Settings:
+    """INI-backed settings store. Missing keys fall back to DEFAULTS, so the
+    file is always usable even if the user deletes individual lines. Save
+    rewrites the whole file with a header comment explaining what it is."""
+
+    def __init__(self, path=None):
+        self.path = Path(path) if path else _settings_path()
+        self._cp = configparser.ConfigParser()
+        # Preserve case of keys (configparser lowercases by default).
+        self._cp.optionxform = lambda optionstr: optionstr
+        if self.path.exists():
+            try:
+                # utf-8-sig transparently strips a UTF-8 BOM if present —
+                # Windows editors (Notepad, PowerShell Set-Content -Encoding
+                # UTF8) often add one, and configparser would otherwise die
+                # with "File contains no section headers" on the BOM'd line 1.
+                self._cp.read(self.path, encoding="utf-8-sig")
+            except (configparser.Error, OSError) as exc:
+                print(f"Settings: failed to read {self.path}: {exc}", file=sys.stderr)
+        self._migrate_legacy_keys()
+        self._fill_missing_with_defaults()
+        # Materialise defaults for the recording directory on first run.
+        if not self._cp.get('recording', 'directory'):
+            self._cp.set('recording', 'directory', _default_recording_dir())
+        # Write the file back so the user has a complete template to edit.
+        try:
+            self.save()
+        except OSError as exc:
+            print(f"Settings: failed to write {self.path}: {exc}", file=sys.stderr)
+
+    def _migrate_legacy_keys(self):
+        """Rename keys that changed meaning across versions. Runs before
+        _fill_missing_with_defaults so the user's existing value seeds the
+        new key instead of being replaced by the built-in default."""
+        # v1.0.0 → v1.1.0: trace styling and colormap became per-background.
+        # The pre-1.1.0 single value becomes the dark-background value.
+        legacy = [
+            ('spectrum',  'trace_color',  'trace_color_dark'),
+            ('spectrum',  'trace_width',  'trace_width_dark'),
+            ('spectrum',  'trace_alpha',  'trace_alpha_dark'),
+            ('spectrum',  'trace_label',  'trace_label_dark'),
+            ('waterfall', 'colormap',     'colormap_dark'),
+        ]
+        for section, old, new in legacy:
+            if (self._cp.has_section(section)
+                    and self._cp.has_option(section, old)
+                    and not self._cp.has_option(section, new)):
+                self._cp.set(section, new, self._cp.get(section, old))
+                self._cp.remove_option(section, old)
+
+    def _fill_missing_with_defaults(self):
+        for section, kvs in DEFAULTS.items():
+            if not self._cp.has_section(section):
+                self._cp.add_section(section)
+            for k, v in kvs.items():
+                if not self._cp.has_option(section, k):
+                    self._cp.set(section, k, self._stringify(v))
+
+    @staticmethod
+    def _stringify(v):
+        if isinstance(v, bool):
+            return 'true' if v else 'false'
+        return str(v)
+
+    def get_str(self, section, key):
+        return self._cp.get(section, key)
+
+    def get_int(self, section, key):
+        return int(float(self._cp.get(section, key)))
+
+    def get_float(self, section, key):
+        return float(self._cp.get(section, key))
+
+    def get_bool(self, section, key):
+        return self._cp.get(section, key).strip().lower() in ('true', 'yes', '1', 'on')
+
+    def set(self, section, key, value):
+        if not self._cp.has_section(section):
+            self._cp.add_section(section)
+        self._cp.set(section, key, self._stringify(value))
+
+    def save(self):
+        with open(self.path, 'w', encoding='utf-8') as f:
+            f.write(f"# {APP_NAME} v{APP_VERSION} settings\n")
+            f.write(f"# File: {self.path}\n")
+            f.write("#\n")
+            f.write("# This file is plain text and may be edited with any editor while the\n")
+            f.write("# program is closed. Comments begin with '#' or ';'. Missing keys are\n")
+            f.write("# filled in from built-in defaults on next launch. To wipe everything\n")
+            f.write("# back to defaults, use 'Restore Defaults' in Help → About.\n\n")
+            self._cp.write(f)
+
+    def reset_to_defaults(self):
+        self._cp = configparser.ConfigParser()
+        self._cp.optionxform = lambda optionstr: optionstr
+        self._fill_missing_with_defaults()
+        self._cp.set('recording', 'directory', _default_recording_dir())
+        self.save()
+
+
+CHUNK_SIZE = 8192  # Must be >= max FFT size in FFT_SIZES below.
+
+
+class SampleBufferSink(gr.sync_block):
+    """Stores the most-recent CHUNK_SIZE-sample complex-baseband vector.
+    Fed by stream_to_vector + keep_one_in_n upstream so this Python block
+    only sees a handful of vectors per second — pure-Python sync_blocks
+    can't keep up with 20 MS/s sample-by-sample input."""
+
+    def __init__(self, chunk_size=CHUNK_SIZE):
+        gr.sync_block.__init__(
+            self,
+            name="sample_buffer_sink",
+            in_sig=[(np.complex64, chunk_size)],
+            out_sig=None,
+        )
+        self._lock = threading.Lock()
+        self._chunk_size = int(chunk_size)
+        self._buf = np.zeros(self._chunk_size, dtype=np.complex64)
+        self._filled = False
+
+    @property
+    def chunk_size(self):
+        return self._chunk_size
+
+    def set_capacity(self, _n):
+        # Capacity is fixed at chunk_size (set at flowgraph construction).
+        # Kept as a no-op so SpectrumProcessor.set_fft_size still calls it
+        # without needing flowgraph relock.
+        return
+
+    def work(self, input_items, output_items):
+        chunks = input_items[0]
+        n = len(chunks)
+        if n > 0:
+            latest = chunks[-1]
+            with self._lock:
+                self._buf[:] = latest
+                self._filled = True
+        return n
+
+    def latest(self, n):
+        """Return the most recent n samples (chronological order), or None
+        if no chunk has arrived yet or n exceeds chunk_size."""
+        n = int(n)
+        with self._lock:
+            if not self._filled or n > self._chunk_size or n <= 0:
+                return None
+            return self._buf[-n:].copy()
+
+
+class SpectrumProcessor(QObject):
+    """Pulls samples from a SampleBufferSink on a QTimer, computes a windowed
+    FFT, applies exponential averaging plus optional max/min hold, and emits
+    `frame_ready(avg_db, max_db, min_db)` so plot widgets can update."""
+
+    frame_ready = Signal(object, object, object)  # avg_db, max_db|None, min_db|None
+
+    def __init__(self, sink, fft_size=1024, window_name="blackman-harris",
+                 update_hz=10.0, normalize=False, parent=None):
+        super().__init__(parent)
+        self._sink = sink
+        self._fft_size = int(fft_size)
+        self._window_name = window_name
+        self._window = WINDOWS[window_name](self._fft_size).astype(np.float64)
+        self._normalize = bool(normalize)
+        self._avg_alpha = 1.0
+        self._max_on = False
+        self._min_on = False
+        self._avg_db = None
+        self._max_db = None
+        self._min_db = None
+        self._sink.set_capacity(max(8192, self._fft_size * 2))
+
+        self._timer = QTimer(self)
+        self._timer.setInterval(max(20, int(1000.0 / update_hz)))
+        self._timer.timeout.connect(self._tick)
+        self._timer.start()
+
+    @Slot(int)
+    def set_fft_size(self, n):
+        self._fft_size = int(n)
+        self._window = WINDOWS[self._window_name](self._fft_size).astype(np.float64)
+        self._sink.set_capacity(max(8192, self._fft_size * 2))
+        self._avg_db = self._max_db = self._min_db = None
+
+    @Slot(str)
+    def set_window(self, name):
+        if name not in WINDOWS:
+            return
+        self._window_name = name
+        self._window = WINDOWS[name](self._fft_size).astype(np.float64)
+
+    @Slot(float)
+    def set_average_alpha(self, alpha):
+        """alpha in (0, 1]. 1.0 = no averaging, smaller = more smoothing."""
+        self._avg_alpha = float(np.clip(alpha, 1e-3, 1.0))
+
+    @Slot(bool)
+    def set_max_hold(self, on):
+        self._max_on = bool(on)
+        if not on:
+            self._max_db = None
+
+    @Slot(bool)
+    def set_min_hold(self, on):
+        self._min_on = bool(on)
+        if not on:
+            self._min_db = None
+
+    @Slot()
+    def reset_max_hold(self):
+        self._max_db = None
+
+    @Slot()
+    def reset_min_hold(self):
+        self._min_db = None
+
+    @Slot(bool)
+    def set_window_normalized(self, on):
+        self._normalize = bool(on)
+
+    def set_update_hz(self, hz):
+        self._timer.setInterval(max(20, int(1000.0 / float(hz))))
+
+    def _tick(self):
+        n = self._fft_size
+        samples = self._sink.latest(n)
+        if samples is None:
+            return
+        windowed = samples * self._window
+        spec = np.fft.fftshift(np.fft.fft(windowed))
+        if self._normalize:
+            wsum = np.sum(self._window) or 1.0
+            power = (np.abs(spec) ** 2) / (wsum * wsum)
+        else:
+            wpow = np.sum(self._window ** 2) or 1.0
+            power = (np.abs(spec) ** 2) / (n * wpow)
+        db = 10.0 * np.log10(power + 1e-20)
+
+        if self._avg_db is None or len(self._avg_db) != n:
+            self._avg_db = db.copy()
+        else:
+            a = self._avg_alpha
+            self._avg_db = a * db + (1.0 - a) * self._avg_db
+
+        if self._max_on:
+            if self._max_db is None or len(self._max_db) != n:
+                self._max_db = self._avg_db.copy()
+            else:
+                np.maximum(self._max_db, self._avg_db, out=self._max_db)
+        if self._min_on:
+            if self._min_db is None or len(self._min_db) != n:
+                self._min_db = self._avg_db.copy()
+            else:
+                np.minimum(self._min_db, self._avg_db, out=self._min_db)
+
+        self.frame_ready.emit(
+            self._avg_db,
+            self._max_db if self._max_on else None,
+            self._min_db if self._min_on else None,
+        )
+
+
+def _make_pen(color, width, alpha):
+    c = QtGui.QColor(color)
+    c.setAlphaF(float(alpha))
+    return pg.mkPen(c, width=width)
+
+
+def _apply_plot_theme(plot, title, dark):
+    """Switch a pg.PlotWidget between dark (black bg / white axes) and light
+    (white bg / black axes). pg.setConfigOption('foreground', ...) only
+    affects newly-created items, so we update axes and title per-plot."""
+    bg = 'k' if dark else 'w'
+    fg = 'w' if dark else 'k'
+    plot.setBackground(bg)
+    for name in ('left', 'bottom', 'right', 'top'):
+        ax = plot.getAxis(name)
+        if ax is None:
+            continue
+        ax.setPen(fg)
+        ax.setTextPen(fg)
+    plot.setTitle(title, color=fg)
+
+
+class FftPlotWidget(QtWidgets.QWidget):
+    """Spectrum (FFT) plot with a collapsible right-side control panel
+    reproducing the qtgui freq_sink controls: FFT size, window, averaging,
+    max/min hold, Y-axis (min/max/autoscale), grid, axis labels, trace
+    color / width / alpha / label."""
+
+    request_fft_size = Signal(int)
+    request_window = Signal(str)
+    request_average = Signal(float)
+    request_max_hold = Signal(bool)
+    request_min_hold = Signal(bool)
+    request_reset_max = Signal()
+    request_reset_min = Signal()
+    request_window_normalized = Signal(bool)
+    # Fires on every user-driven control change; args: (settings_key, value).
+    # The main window listens once and persists to the INI.
+    control_changed = Signal(str, object)
+
+    def __init__(self, center_freq, samp_rate, parent=None):
+        super().__init__(parent)
+        self._center_freq = float(center_freq)
+        self._samp_rate = float(samp_rate)
+        self._y_min = -140.0
+        self._y_max = 10.0
+        self._dark_bg = True
+        # Per-background trace styling. The Trace controls in the panel show
+        # whichever set matches `_dark_bg`. Edits write to the active set;
+        # toggling the background swaps them. apply_settings() will overwrite
+        # both from the INI on startup.
+        self._trace_dark = {
+            'color': QtGui.QColor("deepskyblue"),
+            'width': 1, 'alpha': 1.0, 'label': "Data 0",
+        }
+        self._trace_light = {
+            'color': QtGui.QColor("#003f7f"),
+            'width': 1, 'alpha': 1.0, 'label': "Data 0",
+        }
+        # Live values mirror the active slot; used by handlers + pen building.
+        self._line_color = self._trace_dark['color']
+        self._line_width = self._trace_dark['width']
+        self._line_alpha = self._trace_dark['alpha']
+        self._line_label = self._trace_dark['label']
+
+        layout = QtWidgets.QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+
+        self._plot = pg.PlotWidget()
+        self._plot.setLabel('left', 'Relative Gain', units='dB')
+        self._plot.setLabel('bottom', 'Frequency', units='Hz')
+        self._plot.showGrid(x=True, y=True, alpha=0.3)
+        self._plot.setYRange(self._y_min, self._y_max)
+        _apply_plot_theme(self._plot, "Spectrum", self._dark_bg)
+        self._curve = self._plot.plot(
+            pen=_make_pen(self._line_color, self._line_width, self._line_alpha),
+            name=self._line_label)
+        self._max_curve = self._plot.plot(
+            pen=_make_pen(QtGui.QColor(50, 220, 50), 1, 1.0), name="Max hold")
+        self._min_curve = self._plot.plot(
+            pen=_make_pen(QtGui.QColor(220, 50, 50), 1, 1.0), name="Min hold")
+        self._max_curve.hide()
+        self._min_curve.hide()
+        layout.addWidget(self._plot, 1)
+
+        self._toggle_btn = QtWidgets.QToolButton()
+        self._toggle_btn.setText("▸")
+        self._toggle_btn.setToolTip("Hide/show controls")
+        self._toggle_btn.setCheckable(True)
+        self._toggle_btn.setChecked(True)
+        self._toggle_btn.toggled.connect(self._on_toggle_panel)
+        toggle_col = QtWidgets.QVBoxLayout()
+        toggle_col.setContentsMargins(0, 0, 0, 0)
+        toggle_col.addWidget(self._toggle_btn)
+        toggle_col.addStretch(1)
+        toggle_wrap = QtWidgets.QWidget()
+        toggle_wrap.setLayout(toggle_col)
+        layout.addWidget(toggle_wrap)
+
+        self._panel = self._build_panel()
+        layout.addWidget(self._panel)
+
+    def _build_panel(self):
+        panel = QtWidgets.QGroupBox("Spectrum Controls")
+        # Fixed width (matched on the waterfall panel) so the spectrum and
+        # waterfall plot regions stay equal-width regardless of content.
+        panel.setFixedWidth(230)
+        v = QtWidgets.QVBoxLayout(panel)
+        v.setContentsMargins(6, 6, 6, 6)
+        v.setSpacing(4)
+
+        # FFT group
+        fft_group = QtWidgets.QGroupBox("FFT")
+        f = QtWidgets.QFormLayout(fft_group)
+        f.setContentsMargins(4, 4, 4, 4)
+        self._fft_size_combo = QtWidgets.QComboBox()
+        for n in FFT_SIZES:
+            self._fft_size_combo.addItem(str(n), n)
+        self._fft_size_combo.setCurrentText("1024")
+        self._fft_size_combo.currentIndexChanged.connect(
+            lambda _i: self.request_fft_size.emit(self._fft_size_combo.currentData()))
+        self._fft_size_combo.currentIndexChanged.connect(
+            lambda _i: self.control_changed.emit('fft_size', self._fft_size_combo.currentData()))
+        f.addRow("Size:", self._fft_size_combo)
+
+        self._window_combo = QtWidgets.QComboBox()
+        for name in WINDOWS.keys():
+            self._window_combo.addItem(name)
+        self._window_combo.setCurrentText("blackman-harris")
+        self._window_combo.currentTextChanged.connect(self.request_window.emit)
+        self._window_combo.currentTextChanged.connect(
+            lambda s: self.control_changed.emit('window', s))
+        f.addRow("Window:", self._window_combo)
+
+        self._norm_check = QtWidgets.QCheckBox("Normalize window")
+        self._norm_check.toggled.connect(self.request_window_normalized.emit)
+        self._norm_check.toggled.connect(
+            lambda on: self.control_changed.emit('normalize_window', on))
+        f.addRow(self._norm_check)
+
+        self._avg_slider = QtWidgets.QSlider(Qt.Horizontal)
+        self._avg_slider.setRange(1, 1000)
+        self._avg_slider.setValue(1000)
+        self._avg_slider.valueChanged.connect(lambda v: self.request_average.emit(v / 1000.0))
+        self._avg_slider.valueChanged.connect(
+            lambda v: self.control_changed.emit('avg_alpha', v / 1000.0))
+        self._avg_value_lbl = QtWidgets.QLabel("1.000")
+        self._avg_slider.valueChanged.connect(lambda v: self._avg_value_lbl.setText(f"{v/1000.0:.3f}"))
+        avg_row = QtWidgets.QHBoxLayout()
+        avg_row.addWidget(self._avg_slider, 1)
+        avg_row.addWidget(self._avg_value_lbl)
+        f.addRow("Avg α:", avg_row)
+        v.addWidget(fft_group)
+
+        # Hold group
+        hold_group = QtWidgets.QGroupBox("Hold")
+        g = QtWidgets.QGridLayout(hold_group)
+        g.setContentsMargins(4, 4, 4, 4)
+        self._max_check = QtWidgets.QCheckBox("Max hold")
+        self._max_check.toggled.connect(self._on_max_toggled)
+        self._max_check.toggled.connect(
+            lambda on: self.control_changed.emit('max_hold', on))
+        max_reset = QtWidgets.QPushButton("Reset")
+        max_reset.clicked.connect(self.request_reset_max.emit)
+        g.addWidget(self._max_check, 0, 0)
+        g.addWidget(max_reset, 0, 1)
+        self._min_check = QtWidgets.QCheckBox("Min hold")
+        self._min_check.toggled.connect(self._on_min_toggled)
+        self._min_check.toggled.connect(
+            lambda on: self.control_changed.emit('min_hold', on))
+        min_reset = QtWidgets.QPushButton("Reset")
+        min_reset.clicked.connect(self.request_reset_min.emit)
+        g.addWidget(self._min_check, 1, 0)
+        g.addWidget(min_reset, 1, 1)
+        v.addWidget(hold_group)
+
+        # Y-axis group
+        y_group = QtWidgets.QGroupBox("Y-Axis")
+        yf = QtWidgets.QFormLayout(y_group)
+        yf.setContentsMargins(4, 4, 4, 4)
+        self._ymin_spin = QtWidgets.QDoubleSpinBox()
+        self._ymin_spin.setRange(-300, 100); self._ymin_spin.setValue(self._y_min)
+        self._ymin_spin.valueChanged.connect(self._on_yrange_changed)
+        self._ymin_spin.valueChanged.connect(
+            lambda v: self.control_changed.emit('y_min', v))
+        yf.addRow("Min:", self._ymin_spin)
+        self._ymax_spin = QtWidgets.QDoubleSpinBox()
+        self._ymax_spin.setRange(-200, 200); self._ymax_spin.setValue(self._y_max)
+        self._ymax_spin.valueChanged.connect(self._on_yrange_changed)
+        self._ymax_spin.valueChanged.connect(
+            lambda v: self.control_changed.emit('y_max', v))
+        yf.addRow("Max:", self._ymax_spin)
+        autoscale_btn = QtWidgets.QPushButton("Autoscale")
+        autoscale_btn.clicked.connect(lambda: self._plot.enableAutoRange(axis='y'))
+        yf.addRow(autoscale_btn)
+        v.addWidget(y_group)
+
+        # Display group
+        disp_group = QtWidgets.QGroupBox("Display")
+        dv = QtWidgets.QVBoxLayout(disp_group)
+        dv.setContentsMargins(4, 4, 4, 4)
+        self._grid_check = QtWidgets.QCheckBox("Grid")
+        self._grid_check.setChecked(True)
+        self._grid_check.toggled.connect(lambda on: self._plot.showGrid(x=on, y=on, alpha=0.3))
+        self._grid_check.toggled.connect(
+            lambda on: self.control_changed.emit('grid', on))
+        dv.addWidget(self._grid_check)
+        self._labels_check = QtWidgets.QCheckBox("Axis labels")
+        self._labels_check.setChecked(True)
+        self._labels_check.toggled.connect(self._on_labels_toggled)
+        self._labels_check.toggled.connect(
+            lambda on: self.control_changed.emit('axis_labels', on))
+        dv.addWidget(self._labels_check)
+        self._dark_bg_check = QtWidgets.QCheckBox("Dark background")
+        self._dark_bg_check.setChecked(self._dark_bg)
+        self._dark_bg_check.toggled.connect(self._on_dark_bg_toggled)
+        self._dark_bg_check.toggled.connect(
+            lambda on: self.control_changed.emit('dark_background', on))
+        dv.addWidget(self._dark_bg_check)
+        v.addWidget(disp_group)
+
+        # Trace group
+        tr_group = QtWidgets.QGroupBox("Trace")
+        tf = QtWidgets.QFormLayout(tr_group)
+        tf.setContentsMargins(4, 4, 4, 4)
+        self._color_btn = QtWidgets.QPushButton()
+        self._color_btn.setStyleSheet(f"background-color: {self._line_color.name()};")
+        self._color_btn.clicked.connect(self._on_color_clicked)
+        tf.addRow("Color:", self._color_btn)
+        self._width_spin = QtWidgets.QSpinBox()
+        self._width_spin.setRange(1, 10); self._width_spin.setValue(self._line_width)
+        self._width_spin.valueChanged.connect(self._on_width_changed)
+        self._width_spin.valueChanged.connect(
+            lambda v: self.control_changed.emit(self._trace_key('trace_width'), int(v)))
+        tf.addRow("Width:", self._width_spin)
+        self._alpha_slider = QtWidgets.QSlider(Qt.Horizontal)
+        self._alpha_slider.setRange(10, 100); self._alpha_slider.setValue(int(self._line_alpha * 100))
+        self._alpha_slider.valueChanged.connect(self._on_alpha_changed)
+        self._alpha_slider.valueChanged.connect(
+            lambda v: self.control_changed.emit(self._trace_key('trace_alpha'), v / 100.0))
+        tf.addRow("Alpha:", self._alpha_slider)
+        self._label_edit = QtWidgets.QLineEdit(self._line_label)
+        self._label_edit.editingFinished.connect(self._on_label_changed)
+        self._label_edit.editingFinished.connect(
+            lambda: self.control_changed.emit(self._trace_key('trace_label'), self._label_edit.text()))
+        tf.addRow("Label:", self._label_edit)
+        v.addWidget(tr_group)
+
+        v.addStretch(1)
+        return panel
+
+    @Slot(object, object, object)
+    def on_frame(self, avg_db, max_db, min_db):
+        n = len(avg_db)
+        freqs = self._center_freq + np.fft.fftshift(np.fft.fftfreq(n, d=1.0 / self._samp_rate))
+        self._curve.setData(freqs, avg_db)
+        if max_db is not None:
+            self._max_curve.setData(freqs, max_db); self._max_curve.show()
+        else:
+            self._max_curve.hide()
+        if min_db is not None:
+            self._min_curve.setData(freqs, min_db); self._min_curve.show()
+        else:
+            self._min_curve.hide()
+
+    def set_frequency_range(self, center_freq, bandwidth):
+        self._center_freq = float(center_freq)
+        self._samp_rate = float(bandwidth)
+        self._plot.setXRange(center_freq - bandwidth / 2.0,
+                             center_freq + bandwidth / 2.0, padding=0)
+
+    def set_y_axis(self, y_min, y_max):
+        self._y_min = float(y_min); self._y_max = float(y_max)
+        self._plot.setYRange(y_min, y_max)
+        for spin, val in ((self._ymin_spin, y_min), (self._ymax_spin, y_max)):
+            spin.blockSignals(True); spin.setValue(val); spin.blockSignals(False)
+
+    def _on_toggle_panel(self, on):
+        self._panel.setVisible(on)
+        self._toggle_btn.setText("▸" if on else "◂")
+
+    def _on_yrange_changed(self, _v):
+        self._plot.setYRange(self._ymin_spin.value(), self._ymax_spin.value())
+
+    def _on_labels_toggled(self, on):
+        self._plot.setLabel('left', 'Relative Gain' if on else '', units='dB' if on else '')
+        self._plot.setLabel('bottom', 'Frequency' if on else '', units='Hz' if on else '')
+
+    def _on_dark_bg_toggled(self, on):
+        # Save the live trace styling into the OLD slot before switching.
+        self._snapshot_trace_to_slot(self._dark_bg)
+        self._dark_bg = bool(on)
+        _apply_plot_theme(self._plot, "Spectrum", self._dark_bg)
+        # Pull the NEW slot's trace styling back into the live fields and UI.
+        self._restore_trace_from_slot(self._dark_bg)
+
+    def _theme_suffix(self):
+        return "dark" if self._dark_bg else "light"
+
+    def _trace_key(self, base):
+        return f"{base}_{self._theme_suffix()}"
+
+    def _slot_for(self, dark):
+        return self._trace_dark if dark else self._trace_light
+
+    def _snapshot_trace_to_slot(self, dark):
+        slot = self._slot_for(dark)
+        slot['color'] = self._line_color
+        slot['width'] = self._line_width
+        slot['alpha'] = self._line_alpha
+        slot['label'] = self._line_label
+
+    def _restore_trace_from_slot(self, dark):
+        slot = self._slot_for(dark)
+        self._line_color = slot['color']
+        self._line_width = slot['width']
+        self._line_alpha = slot['alpha']
+        self._line_label = slot['label']
+        with _SignalBlocker(self._width_spin, self._alpha_slider, self._label_edit):
+            self._color_btn.setStyleSheet(f"background-color: {self._line_color.name()};")
+            self._width_spin.setValue(self._line_width)
+            self._alpha_slider.setValue(int(round(self._line_alpha * 100)))
+            self._label_edit.setText(self._line_label)
+        self._curve.setPen(_make_pen(self._line_color, self._line_width, self._line_alpha))
+
+    def _on_max_toggled(self, on):
+        self.request_max_hold.emit(on)
+        if not on:
+            self._max_curve.hide()
+
+    def _on_min_toggled(self, on):
+        self.request_min_hold.emit(on)
+        if not on:
+            self._min_curve.hide()
+
+    def _on_color_clicked(self):
+        c = QtWidgets.QColorDialog.getColor(self._line_color, self, "Trace color")
+        if c.isValid():
+            self._line_color = c
+            # Keep the active per-bg slot in lock-step with the live value so
+            # a later bg-toggle's snapshot is a no-op rather than the only
+            # thing keeping the slot fresh.
+            self._slot_for(self._dark_bg)['color'] = c
+            self._color_btn.setStyleSheet(f"background-color: {c.name()};")
+            self._curve.setPen(_make_pen(c, self._line_width, self._line_alpha))
+            self.control_changed.emit(self._trace_key('trace_color'), c.name())
+
+    def _on_width_changed(self, w):
+        self._line_width = int(w)
+        self._slot_for(self._dark_bg)['width'] = self._line_width
+        self._curve.setPen(_make_pen(self._line_color, self._line_width, self._line_alpha))
+
+    def _on_alpha_changed(self, v):
+        self._line_alpha = v / 100.0
+        self._slot_for(self._dark_bg)['alpha'] = self._line_alpha
+        self._curve.setPen(_make_pen(self._line_color, self._line_width, self._line_alpha))
+
+    def _on_label_changed(self):
+        self._line_label = self._label_edit.text()
+        self._slot_for(self._dark_bg)['label'] = self._line_label
+
+    # --- programmatic setters (used to push values from Settings into the UI) ---
+    # Each one blocks signals so applying a saved value doesn't re-trigger a save.
+    def apply_settings(self, settings):
+        """Push every value from the spectrum section of `settings` into the UI."""
+        section = 'spectrum'
+        # Load both per-background trace slots from disk so toggling is instant
+        # and doesn't need to re-read.
+        for which in ('dark', 'light'):
+            slot = self._slot_for(which == 'dark')
+            color = QtGui.QColor(settings.get_str(section, f'trace_color_{which}'))
+            if color.isValid():
+                slot['color'] = color
+            slot['width'] = settings.get_int(section, f'trace_width_{which}')
+            slot['alpha'] = settings.get_float(section, f'trace_alpha_{which}')
+            slot['label'] = settings.get_str(section, f'trace_label_{which}')
+
+        with _SignalBlocker(self._fft_size_combo, self._window_combo, self._norm_check,
+                            self._avg_slider, self._max_check, self._min_check,
+                            self._ymin_spin, self._ymax_spin, self._grid_check,
+                            self._labels_check, self._dark_bg_check, self._width_spin,
+                            self._alpha_slider, self._label_edit):
+            idx = self._fft_size_combo.findData(settings.get_int(section, 'fft_size'))
+            if idx >= 0:
+                self._fft_size_combo.setCurrentIndex(idx)
+            self._window_combo.setCurrentText(settings.get_str(section, 'window'))
+            self._norm_check.setChecked(settings.get_bool(section, 'normalize_window'))
+            a = settings.get_float(section, 'avg_alpha')
+            self._avg_slider.setValue(int(round(max(0.001, min(1.0, a)) * 1000)))
+            self._avg_value_lbl.setText(f"{a:.3f}")
+            self._max_check.setChecked(settings.get_bool(section, 'max_hold'))
+            self._min_check.setChecked(settings.get_bool(section, 'min_hold'))
+            self._ymin_spin.setValue(settings.get_float(section, 'y_min'))
+            self._ymax_spin.setValue(settings.get_float(section, 'y_max'))
+            self._grid_check.setChecked(settings.get_bool(section, 'grid'))
+            self._labels_check.setChecked(settings.get_bool(section, 'axis_labels'))
+            self._dark_bg_check.setChecked(settings.get_bool(section, 'dark_background'))
+            # Trace controls are filled from the active slot below via
+            # _restore_trace_from_slot; nothing to set here.
+        # Apply the effects that the blocked signals would normally have triggered.
+        self._dark_bg = self._dark_bg_check.isChecked()
+        self._plot.setYRange(self._ymin_spin.value(), self._ymax_spin.value())
+        self._plot.showGrid(x=self._grid_check.isChecked(), y=self._grid_check.isChecked(), alpha=0.3)
+        self._on_labels_toggled(self._labels_check.isChecked())
+        _apply_plot_theme(self._plot, "Spectrum", self._dark_bg)
+        # Populate the Trace controls + pen from whichever slot is active.
+        self._restore_trace_from_slot(self._dark_bg)
+
+    def emit_settings_to_processor(self):
+        """Re-emit request_* signals from current UI state. Used after
+        apply_settings (which blocked signals) so the processor catches up."""
+        self.request_fft_size.emit(self._fft_size_combo.currentData())
+        self.request_window.emit(self._window_combo.currentText())
+        self.request_window_normalized.emit(self._norm_check.isChecked())
+        self.request_average.emit(self._avg_slider.value() / 1000.0)
+        self.request_max_hold.emit(self._max_check.isChecked())
+        self.request_min_hold.emit(self._min_check.isChecked())
+
+
+class _SignalBlocker:
+    """Context manager that blocks signals on a set of QObjects."""
+    def __init__(self, *objs):
+        self._objs = objs
+        self._prev = []
+    def __enter__(self):
+        self._prev = [o.blockSignals(True) for o in self._objs]
+        return self
+    def __exit__(self, *_):
+        for o, prev in zip(self._objs, self._prev):
+            o.blockSignals(prev)
+
+
+class WaterfallPlotWidget(QtWidgets.QWidget):
+    """Scrolling waterfall (pg.ImageItem) with control panel: intensity
+    min/max, autoscale, colormap, grid/axis toggles, row count."""
+
+    # Fires on every user-driven control change; args: (settings_key, value).
+    control_changed = Signal(str, object)
+
+    def __init__(self, center_freq, samp_rate, rows=256, parent=None):
+        super().__init__(parent)
+        self._center_freq = float(center_freq)
+        self._samp_rate = float(samp_rate)
+        self._rows = int(rows)
+        self._intensity_min = -140.0
+        self._intensity_max = 10.0
+        self._dark_bg = True
+        # Per-background colormap. The Colormap combo shows the one matching
+        # `_dark_bg`; edits update the matching slot; toggling the background
+        # swaps them. apply_settings() overwrites both from the INI.
+        self._cmap_dark = "viridis"
+        self._cmap_light = "inferno"
+        self._colormap_name = self._cmap_dark
+        self._data = None
+
+        layout = QtWidgets.QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+
+        self._plot = pg.PlotWidget()
+        self._plot.setLabel('left', 'Time', units='rows')
+        self._plot.setLabel('bottom', 'Frequency', units='Hz')
+        self._plot.setMouseEnabled(x=False, y=False)
+        self._plot.invertY(True)
+        _apply_plot_theme(self._plot, "Waterfall", self._dark_bg)
+        self._img = pg.ImageItem()
+        self._plot.addItem(self._img)
+        self._img.setLevels((self._intensity_min, self._intensity_max))
+        self._apply_colormap()
+        layout.addWidget(self._plot, 1)
+
+        self._toggle_btn = QtWidgets.QToolButton()
+        self._toggle_btn.setText("▸")
+        self._toggle_btn.setCheckable(True); self._toggle_btn.setChecked(True)
+        self._toggle_btn.toggled.connect(self._on_toggle_panel)
+        toggle_col = QtWidgets.QVBoxLayout()
+        toggle_col.setContentsMargins(0, 0, 0, 0)
+        toggle_col.addWidget(self._toggle_btn); toggle_col.addStretch(1)
+        toggle_wrap = QtWidgets.QWidget(); toggle_wrap.setLayout(toggle_col)
+        layout.addWidget(toggle_wrap)
+
+        self._panel = self._build_panel()
+        layout.addWidget(self._panel)
+
+    def _build_panel(self):
+        panel = QtWidgets.QGroupBox("Waterfall Controls")
+        # Matched with the spectrum panel — see FftPlotWidget._build_panel.
+        panel.setFixedWidth(230)
+        v = QtWidgets.QVBoxLayout(panel)
+        v.setContentsMargins(6, 6, 6, 6)
+        v.setSpacing(4)
+
+        ig = QtWidgets.QGroupBox("Intensity")
+        igl = QtWidgets.QFormLayout(ig); igl.setContentsMargins(4, 4, 4, 4)
+        self._imin_spin = QtWidgets.QDoubleSpinBox(); self._imin_spin.setRange(-300, 100)
+        self._imin_spin.setValue(self._intensity_min)
+        self._imin_spin.valueChanged.connect(self._on_intensity_changed)
+        self._imin_spin.valueChanged.connect(
+            lambda v: self.control_changed.emit('intensity_min', v))
+        igl.addRow("Min:", self._imin_spin)
+        self._imax_spin = QtWidgets.QDoubleSpinBox(); self._imax_spin.setRange(-200, 200)
+        self._imax_spin.setValue(self._intensity_max)
+        self._imax_spin.valueChanged.connect(self._on_intensity_changed)
+        self._imax_spin.valueChanged.connect(
+            lambda v: self.control_changed.emit('intensity_max', v))
+        igl.addRow("Max:", self._imax_spin)
+        auto = QtWidgets.QPushButton("Autoscale intensity")
+        auto.clicked.connect(self._on_autoscale_clicked)
+        igl.addRow(auto)
+        v.addWidget(ig)
+
+        cg = QtWidgets.QGroupBox("Colormap")
+        cl = QtWidgets.QVBoxLayout(cg); cl.setContentsMargins(4, 4, 4, 4)
+        self._cmap_combo = QtWidgets.QComboBox()
+        for n in ["viridis", "plasma", "inferno", "magma", "turbo", "cividis", "gray"]:
+            self._cmap_combo.addItem(n)
+        self._cmap_combo.setCurrentText(self._colormap_name)
+        self._cmap_combo.currentTextChanged.connect(self._on_cmap_changed)
+        self._cmap_combo.currentTextChanged.connect(
+            lambda s: self.control_changed.emit(f'colormap_{"dark" if self._dark_bg else "light"}', s))
+        cl.addWidget(self._cmap_combo)
+        v.addWidget(cg)
+
+        dg = QtWidgets.QGroupBox("Display")
+        dv = QtWidgets.QVBoxLayout(dg); dv.setContentsMargins(4, 4, 4, 4)
+        self._labels_check = QtWidgets.QCheckBox("Axis labels"); self._labels_check.setChecked(True)
+        self._labels_check.toggled.connect(self._on_labels_toggled)
+        self._labels_check.toggled.connect(
+            lambda on: self.control_changed.emit('axis_labels', on))
+        dv.addWidget(self._labels_check)
+        self._grid_check = QtWidgets.QCheckBox("Grid")
+        self._grid_check.toggled.connect(lambda on: self._plot.showGrid(x=on, y=False, alpha=0.3))
+        self._grid_check.toggled.connect(
+            lambda on: self.control_changed.emit('grid', on))
+        dv.addWidget(self._grid_check)
+        self._dark_bg_check = QtWidgets.QCheckBox("Dark background")
+        self._dark_bg_check.setChecked(self._dark_bg)
+        self._dark_bg_check.toggled.connect(self._on_dark_bg_toggled)
+        self._dark_bg_check.toggled.connect(
+            lambda on: self.control_changed.emit('dark_background', on))
+        dv.addWidget(self._dark_bg_check)
+        rows_form = QtWidgets.QFormLayout()
+        self._rows_spin = QtWidgets.QSpinBox(); self._rows_spin.setRange(32, 4096)
+        self._rows_spin.setSingleStep(32); self._rows_spin.setValue(self._rows)
+        self._rows_spin.valueChanged.connect(self._on_rows_changed)
+        self._rows_spin.valueChanged.connect(
+            lambda v: self.control_changed.emit('rows', int(v)))
+        rows_form.addRow("Rows:", self._rows_spin)
+        dv.addLayout(rows_form)
+        v.addWidget(dg)
+
+        v.addStretch(1)
+        return panel
+
+    def _apply_colormap(self):
+        cm = None
+        for source in ('matplotlib', None):
+            try:
+                cm = pg.colormap.get(self._colormap_name, source=source) if source \
+                    else pg.colormap.get(self._colormap_name)
+                if cm is not None:
+                    break
+            except Exception:
+                cm = None
+        if cm is None:
+            try:
+                cm = pg.colormap.get('viridis', source='matplotlib')
+            except Exception:
+                cm = pg.colormap.get('CET-L17')
+        lut = cm.getLookupTable(0.0, 1.0, 256)
+        self._img.setLookupTable(lut)
+
+    @Slot(object, object, object)
+    def on_frame(self, avg_db, _max_db, _min_db):
+        n = len(avg_db)
+        first_frame = (self._data is None
+                       or self._data.shape[1] != n
+                       or self._data.shape[0] != self._rows)
+        if first_frame:
+            self._data = np.full((self._rows, n), self._intensity_min, dtype=np.float32)
+        self._data = np.roll(self._data, -1, axis=0)
+        self._data[-1, :] = avg_db
+        self._img.setImage(self._data, autoLevels=False,
+                           levels=(self._intensity_min, self._intensity_max))
+        # setRect must run AFTER setImage — pyqtgraph divides by the current
+        # image dimensions to derive the affine transform.
+        if first_frame:
+            self._update_rect()
+
+    def _update_rect(self):
+        x0 = self._center_freq - self._samp_rate / 2.0
+        x1 = self._center_freq + self._samp_rate / 2.0
+        self._img.setRect(QtCore.QRectF(x0, 0.0, x1 - x0, float(self._rows)))
+
+    def set_frequency_range(self, center_freq, bandwidth):
+        self._center_freq = float(center_freq)
+        self._samp_rate = float(bandwidth)
+        if self._data is not None:
+            self._update_rect()
+
+    def set_intensity_range(self, lo, hi):
+        self._intensity_min = float(lo); self._intensity_max = float(hi)
+        self._img.setLevels((lo, hi))
+        for spin, val in ((self._imin_spin, lo), (self._imax_spin, hi)):
+            spin.blockSignals(True); spin.setValue(val); spin.blockSignals(False)
+
+    def _on_toggle_panel(self, on):
+        self._panel.setVisible(on)
+        self._toggle_btn.setText("▸" if on else "◂")
+
+    def _on_intensity_changed(self, _v):
+        self._intensity_min = self._imin_spin.value()
+        self._intensity_max = self._imax_spin.value()
+        self._img.setLevels((self._intensity_min, self._intensity_max))
+
+    def _on_autoscale_clicked(self):
+        if self._data is not None:
+            lo = float(np.percentile(self._data, 5))
+            hi = float(np.percentile(self._data, 99))
+            self.set_intensity_range(lo, hi)
+
+    def _on_cmap_changed(self, name):
+        self._colormap_name = name
+        # Keep the in-memory slot for the current background in sync so a
+        # later bg-toggle snapshots correct values.
+        if self._dark_bg:
+            self._cmap_dark = name
+        else:
+            self._cmap_light = name
+        self._apply_colormap()
+
+    def _on_labels_toggled(self, on):
+        self._plot.setLabel('left', 'Time' if on else '', units='rows' if on else '')
+        self._plot.setLabel('bottom', 'Frequency' if on else '', units='Hz' if on else '')
+
+    def _on_dark_bg_toggled(self, on):
+        # Snapshot the live colormap to the OLD slot, then switch.
+        if self._dark_bg:
+            self._cmap_dark = self._colormap_name
+        else:
+            self._cmap_light = self._colormap_name
+        self._dark_bg = bool(on)
+        _apply_plot_theme(self._plot, "Waterfall", self._dark_bg)
+        # Restore the NEW slot's colormap into the live field + UI.
+        self._colormap_name = self._cmap_dark if self._dark_bg else self._cmap_light
+        with _SignalBlocker(self._cmap_combo):
+            self._cmap_combo.setCurrentText(self._colormap_name)
+        self._apply_colormap()
+
+    def _on_rows_changed(self, n):
+        self._rows = int(n)
+        self._data = None
+
+    def apply_settings(self, settings):
+        """Push every value from the waterfall section of `settings` into the UI."""
+        section = 'waterfall'
+        # Load both per-background colormap slots so toggling is instant.
+        self._cmap_dark = settings.get_str(section, 'colormap_dark')
+        self._cmap_light = settings.get_str(section, 'colormap_light')
+
+        with _SignalBlocker(self._imin_spin, self._imax_spin, self._cmap_combo,
+                            self._labels_check, self._grid_check, self._dark_bg_check,
+                            self._rows_spin):
+            self._imin_spin.setValue(settings.get_float(section, 'intensity_min'))
+            self._imax_spin.setValue(settings.get_float(section, 'intensity_max'))
+            self._labels_check.setChecked(settings.get_bool(section, 'axis_labels'))
+            self._grid_check.setChecked(settings.get_bool(section, 'grid'))
+            self._dark_bg_check.setChecked(settings.get_bool(section, 'dark_background'))
+            self._rows_spin.setValue(settings.get_int(section, 'rows'))
+            # Colormap combo follows the active slot.
+            self._dark_bg = self._dark_bg_check.isChecked()
+            self._colormap_name = self._cmap_dark if self._dark_bg else self._cmap_light
+            self._cmap_combo.setCurrentText(self._colormap_name)
+        # Apply effects normally triggered by the blocked signals.
+        self._intensity_min = self._imin_spin.value()
+        self._intensity_max = self._imax_spin.value()
+        self._img.setLevels((self._intensity_min, self._intensity_max))
+        self._apply_colormap()
+        self._on_labels_toggled(self._labels_check.isChecked())
+        self._plot.showGrid(x=self._grid_check.isChecked(), y=False, alpha=0.3)
+        _apply_plot_theme(self._plot, "Waterfall", self._dark_bg)
+        self._rows = self._rows_spin.value()
+        self._data = None  # force waterfall to re-init at the new row count
+
+
+class Range:
+    """Tiny replacement for qtgui.Range — just a record."""
+    def __init__(self, rmin, rmax, step, default, nsteps):
+        self.min = rmin; self.max = rmax
+        self.step = step; self.default = default; self.nsteps = nsteps
+
+
+class RangeWidget(QtWidgets.QWidget):
+    """Drop-in replacement for qtgui.RangeWidget. Signature matches:
+        RangeWidget(range_obj, callback, label, style, value_type, orientation)
+    where range_obj exposes .min/.max/.step/.default/.nsteps. Calls
+    callback(value_type(v)) when the user edits the value."""
+
+    def __init__(self, range_obj, callback, label, style="counter_slider",
+                 value_type=float, orientation=Qt.Horizontal, parent=None):
+        super().__init__(parent)
+        rmin, rmax, rstep, rdefault, _ = (range_obj.min, range_obj.max,
+                                          range_obj.step, range_obj.default,
+                                          range_obj.nsteps)
+        self._callback = callback
+        self._type = value_type
+        self._rmin = float(rmin); self._rmax = float(rmax)
+        self._rstep = float(rstep) if rstep > 0 else (self._rmax - self._rmin) / 100.0
+
+        layout = QtWidgets.QGridLayout(self)
+        layout.setContentsMargins(2, 2, 2, 2); layout.setHorizontalSpacing(6)
+        layout.addWidget(QtWidgets.QLabel(label + ":"), 0, 0)
+
+        if value_type is int:
+            self._spin = QtWidgets.QSpinBox()
+            self._spin.setRange(int(rmin), int(rmax))
+            self._spin.setSingleStep(max(1, int(self._rstep)))
+            self._spin.setValue(int(rdefault))
+        else:
+            self._spin = QtWidgets.QDoubleSpinBox()
+            self._spin.setRange(self._rmin, self._rmax)
+            self._spin.setSingleStep(self._rstep)
+            self._spin.setDecimals(self._decimals_for(self._rstep))
+            self._spin.setValue(float(rdefault))
+        layout.addWidget(self._spin, 0, 1)
+
+        self._steps = max(100, int((self._rmax - self._rmin) / self._rstep))
+        self._slider = QtWidgets.QSlider(orientation)
+        self._slider.setRange(0, self._steps)
+        self._slider.setValue(self._v_to_s(float(rdefault)))
+        layout.addWidget(self._slider, 1, 0, 1, 2)
+
+        self._updating = False
+        self._slider.valueChanged.connect(self._on_slider)
+        self._spin.valueChanged.connect(self._on_spin)
+
+    @staticmethod
+    def _decimals_for(step):
+        if step >= 1:
+            return 0
+        s = f"{step:.10f}".rstrip('0').rstrip('.')
+        return min(6, len(s.split('.')[1])) if '.' in s else 0
+
+    def _v_to_s(self, v):
+        if self._rmax == self._rmin:
+            return 0
+        frac = (v - self._rmin) / (self._rmax - self._rmin)
+        return int(round(frac * self._steps))
+
+    def _s_to_v(self, s):
+        frac = s / self._steps if self._steps else 0
+        return self._rmin + frac * (self._rmax - self._rmin)
+
+    def _on_slider(self, s):
+        if self._updating: return
+        self._updating = True
+        v = self._s_to_v(s)
+        if self._type is int:
+            v = int(round(v))
+        self._spin.setValue(v)
+        self._updating = False
+        self._emit(v)
+
+    def _on_spin(self, v):
+        if self._updating: return
+        self._updating = True
+        self._slider.setValue(self._v_to_s(float(v)))
+        self._updating = False
+        self._emit(v)
+
+    def _emit(self, v):
+        try:
+            self._callback(self._type(v))
+        except Exception as exc:
+            print(f"RangeWidget callback failed: {exc}", file=sys.stderr)
+
+    def set_value(self, v):
+        self._updating = True
+        if self._type is int:
+            self._spin.setValue(int(v))
+        else:
+            self._spin.setValue(float(v))
+        self._slider.setValue(self._v_to_s(float(v)))
+        self._updating = False
+
+
+# === Device discovery + picker ===
+
+# When resolve_device_serial returns this sentinel, the main class builds a
+# SigMF-playback flowgraph instead of opening a USRP. The sample files
+# (sample.sigmf-data, sample.sigmf-meta) ship in the release bundle and live
+# next to b210_spectrum_analyzer.py.
+PLAYBACK_SENTINEL = "__PLAYBACK__"
+SIGMF_SAMPLE_BASENAME = "sample"
+
+
+def find_default_sample_path():
+    """Locate the bundled SigMF sample. Returns the basename path (no
+    extension) if both .sigmf-data and .sigmf-meta exist next to this
+    source file, otherwise None."""
+    here = Path(__file__).resolve().parent
+    base = here / SIGMF_SAMPLE_BASENAME
+    if base.with_suffix('.sigmf-data').is_file() and \
+       base.with_suffix('.sigmf-meta').is_file():
+        return str(base)
+    return None
+
+
+def load_sigmf_meta(base_path):
+    """Read .sigmf-meta JSON next to base_path. Returns (sample_rate_hz,
+    center_freq_hz, datatype) or raises on malformed metadata."""
+    import json
+    with open(base_path + '.sigmf-meta', encoding='utf-8') as f:
+        meta = json.load(f)
+    g = meta.get('global', {})
+    sr = float(g['core:sample_rate'])
+    dtype = g.get('core:datatype', 'cf32_le')
+    caps = meta.get('captures', [])
+    cf = float(caps[0].get('core:frequency', 0)) if caps else 0.0
+    return sr, cf, dtype
+
+
+def _addr_to_dict(a):
+    """Pull serial/product/name out of a uhd device_addr object. to_dict()
+    has been observed to return {} in some Python contexts even when the
+    string form has full info, so we fall back to parsing str(a)."""
+    # Try to_dict / dict first.
+    for fn in ((lambda: a.to_dict()),
+               (lambda: {k: a.get(k) for k in a.keys()}),
+               (lambda: dict(a))):
+        try:
+            d = fn()
+            if d:
+                return d
+        except Exception:
+            continue
+    # Last resort: parse the "Device Address:\n    key: value\n..." string.
+    d = {}
+    for line in str(a).splitlines():
+        if ':' in line:
+            k, _, v = line.partition(':')
+            d[k.strip()] = v.strip()
+    return d
+
+
+def find_b210s():
+    """Enumerate attached USRPs and return a list of dicts with keys
+    'serial', 'product', 'name'. Filters to B200-family (B200/B210) since
+    that's all this app supports. Returns [] on any UHD failure."""
+    try:
+        addrs = uhd.find('type=b200')
+    except Exception as exc:
+        print(f"USRP discovery failed: {exc}", file=sys.stderr)
+        return []
+    out = []
+    for a in addrs:
+        d = _addr_to_dict(a)
+        out.append({
+            'serial':  d.get('serial', ''),
+            'product': d.get('product', d.get('type', '')),
+            'name':    d.get('name', ''),
+        })
+    return out
+
+
+class DevicePickerDialog(QtWidgets.QDialog):
+    """Modal dialog listing the attached B210s. OK returns the selected
+    serial; Cancel returns None. Used both at startup (when multiple
+    devices are attached and no saved serial matches) and from the
+    'Device' button in the RX sidebar."""
+
+    def __init__(self, devices, current_serial=None, parent=None,
+                 prompt="Pick a USRP to use:"):
+        super().__init__(parent)
+        self.setWindowTitle("Choose USRP")
+        self.setMinimumWidth(420)
+        layout = QtWidgets.QVBoxLayout(self)
+
+        layout.addWidget(QtWidgets.QLabel(prompt))
+
+        self._list = QtWidgets.QListWidget()
+        font = QtGui.QFont("Courier New", 10)
+        font.setStyleHint(QtGui.QFont.Monospace)
+        self._list.setFont(font)
+        for dev in devices:
+            label = self._format(dev)
+            item = QtWidgets.QListWidgetItem(label)
+            item.setData(Qt.UserRole, dev['serial'])
+            self._list.addItem(item)
+            if dev['serial'] and dev['serial'] == current_serial:
+                self._list.setCurrentItem(item)
+        if self._list.currentItem() is None and self._list.count() > 0:
+            self._list.setCurrentRow(0)
+        self._list.itemDoubleClicked.connect(lambda _i: self.accept())
+        layout.addWidget(self._list)
+
+        btns = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
+        btns.accepted.connect(self.accept)
+        btns.rejected.connect(self.reject)
+        layout.addWidget(btns)
+
+    @staticmethod
+    def _format(dev):
+        serial = dev.get('serial') or '(no serial)'
+        product = dev.get('product') or '?'
+        name = dev.get('name')
+        suffix = f"  [{name}]" if name else ''
+        return f"{serial}  —  {product}{suffix}"
+
+    def selected_serial(self):
+        item = self._list.currentItem()
+        return item.data(Qt.UserRole) if item else None
+
+
+def resolve_device_serial(saved_serial, parent=None):
+    """Decide which B210 to open. Returns the serial to pass to
+    uhd.usrp_source, the PLAYBACK_SENTINEL if no device is attached but a
+    bundled SigMF sample is present, or None if the user canceled and
+    there's nothing to fall back on. `saved_serial` is from settings (may
+    be 'auto' or a specific serial)."""
+    devices = find_b210s()
+
+    if not devices:
+        sample = find_default_sample_path()
+        if sample is None:
+            QtWidgets.QMessageBox.critical(
+                parent, "No USRP found",
+                "No B210 was detected on the USB bus, and no bundled SigMF "
+                "sample file was found next to the program.\n\n"
+                "Plug a B210 into a USB 3 port and relaunch, or place "
+                f"'{SIGMF_SAMPLE_BASENAME}.sigmf-data' and "
+                f"'{SIGMF_SAMPLE_BASENAME}.sigmf-meta' alongside "
+                "b210_spectrum_analyzer.py to enable demo playback.")
+            return None
+        # Fall back to playback. Inform the user so this isn't silent.
+        QtWidgets.QMessageBox.information(
+            parent, "Playback mode",
+            "No B210 detected — starting in SigMF playback mode.\n\n"
+            f"File: {Path(sample).name}.sigmf-data\n\n"
+            "The sample loops continuously. Sample rate, gain, and recording "
+            "are disabled (no hardware). Tuning is enabled and digitally "
+            "shifts the spectrum within the recording's bandwidth — tune "
+            "outside it and you'll just see noise.")
+        return PLAYBACK_SENTINEL
+
+    saved = (saved_serial or '').strip()
+    serials = [d['serial'] for d in devices]
+
+    # Pinned to a specific serial: use it if present, otherwise fall back
+    # to picker/auto with a note.
+    if saved and saved.lower() != 'auto':
+        if saved in serials:
+            return saved
+        QtWidgets.QMessageBox.warning(
+            parent, "Saved USRP not attached",
+            f"The saved USRP serial '{saved}' is not currently attached.\n\n"
+            f"Falling back to device picker.")
+        # Fall through to picker/auto logic.
+
+    # Auto-mode: 1 device = silent use; >1 = ask the user.
+    if len(devices) == 1:
+        return devices[0]['serial']
+
+    dlg = DevicePickerDialog(devices, current_serial=saved or None,
+                             parent=parent)
+    if dlg.exec() == QtWidgets.QDialog.Accepted:
+        return dlg.selected_serial()
+    return None
+
+
+# === About + Help dialogs ===
+
+class AboutDialog(QtWidgets.QDialog):
+    """Version, author, license, dependencies, plus the Restore Defaults
+    button. Defaults wipes the settings file back to built-ins and emits
+    `defaults_requested` so the main window can re-apply across all widgets."""
+
+    defaults_requested = Signal()
+
+    def __init__(self, settings, parent=None):
+        super().__init__(parent)
+        self._settings = settings
+        self.setWindowTitle(f"About {APP_NAME}")
+        self.setMinimumWidth(480)
+
+        layout = QtWidgets.QVBoxLayout(self)
+
+        # Header
+        title = QtWidgets.QLabel(f"<h2>{APP_NAME}</h2>"
+                                 f"<p>Version <b>{APP_VERSION}</b></p>")
+        title.setTextFormat(Qt.RichText)
+        layout.addWidget(title)
+
+        info = QtWidgets.QLabel(
+            f"<p>{APP_DESCRIPTION}</p>"
+            f"<p><b>Author:</b> {APP_AUTHOR} &lt;{APP_AUTHOR_EMAIL}&gt;<br>"
+            f"<b>{APP_COPYRIGHT}</b><br>"
+            f"<b>License:</b> {APP_LICENSE}</p>"
+            f"<p>This program is free software: you can redistribute it and/or "
+            f"modify it under the terms of the GNU General Public License as "
+            f"published by the Free Software Foundation, either version 3 of "
+            f"the License, or (at your option) any later version. See the "
+            f"LICENSE file for the full text.</p>"
+            f"<p><b>Built on:</b> GNU Radio · UHD · PySide6 · PyQtGraph · "
+            f"NumPy · SciPy</p>"
+            f"<p><b>Settings file:</b><br><code>{settings.path}</code></p>"
+        )
+        info.setTextFormat(Qt.RichText)
+        info.setWordWrap(True)
+        info.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        layout.addWidget(info)
+
+        # Buttons
+        btn_row = QtWidgets.QHBoxLayout()
+        defaults_btn = QtWidgets.QPushButton("Restore Defaults…")
+        defaults_btn.setToolTip("Reset every setting to its built-in default. "
+                                "The settings file is overwritten.")
+        defaults_btn.clicked.connect(self._on_defaults_clicked)
+        btn_row.addWidget(defaults_btn)
+        open_btn = QtWidgets.QPushButton("Open Settings Folder")
+        open_btn.clicked.connect(self._on_open_settings_folder)
+        btn_row.addWidget(open_btn)
+        btn_row.addStretch(1)
+        close_btn = QtWidgets.QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+        close_btn.setDefault(True)
+        btn_row.addWidget(close_btn)
+        layout.addLayout(btn_row)
+
+    def _on_defaults_clicked(self):
+        ans = QtWidgets.QMessageBox.question(
+            self, "Restore Defaults",
+            "This will reset every setting to its built-in default and "
+            "overwrite the settings file. Continue?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No,
+        )
+        if ans == QtWidgets.QMessageBox.Yes:
+            self._settings.reset_to_defaults()
+            self.defaults_requested.emit()
+            QtWidgets.QMessageBox.information(
+                self, "Defaults restored",
+                "Settings have been reset to their built-in values.")
+
+    def _on_open_settings_folder(self):
+        folder = str(self._settings.path.parent)
+        QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(folder))
+
+
+HELP_TEXT_HTML = f"""
+<h2>{APP_NAME} — User Guide</h2>
+
+<p>This is a live spectrum analyzer and waterfall display for the Ettus USRP
+B210, designed for pulsar RFI investigation but useful for general-purpose
+spectrum monitoring.</p>
+
+<h3>Starting up — device selection</h3>
+<p>At launch the program enumerates attached USRPs and decides what to use:</p>
+<ul>
+<li><b>One B210 attached</b>: opens it silently and remembers the serial in
+the settings file.</li>
+<li><b>Multiple B210s attached</b>: a picker dialog appears with serial +
+product name. Your choice is remembered for next launch. If the remembered
+device isn't attached on a later launch, the picker re-opens.</li>
+<li><b>No B210 attached, but a bundled SigMF sample is present</b>: the
+program falls back to <b>playback mode</b> — see below.</li>
+<li><b>No B210 and no sample</b>: an error dialog explains how to fix it
+and the program exits.</li>
+</ul>
+<p>The <b>RX</b> group has a <code>Device: &lt;serial&gt;</code> button
+showing which USRP this session is using. Clicking it re-opens the picker;
+the new choice takes effect on the next launch.</p>
+
+<h3>Playback mode</h3>
+<p>If no B210 is attached, the program looks next to the application file
+for <code>sample.sigmf-data</code> + <code>sample.sigmf-meta</code> and, if
+both are found, plays the file back in a continuous loop. The window title
+shows <b>[Playback]</b>. The data source is the file, paced to the original
+capture's sample rate.</p>
+<ul>
+<li><b>Sample Rate</b>, <b>RX Gain</b>, and <b>Recording</b> controls are
+disabled — they have no meaning for a recorded file. Sample rate comes
+from the file's metadata.</li>
+<li><b>Tuning is enabled</b> and works as a digital frequency shift
+(<code>blocks.rotator_cc</code>) on the file's baseband. Tuning to the
+file's actual center frequency (read from the .sigmf-meta) shows the
+recording's true content; tuning to other frequencies within
+±(sample_rate/2) of the file's center lets you "look around" inside the
+recorded bandwidth. Tune well outside that window and you'll just see
+noise / wrap-around — exactly what you'd expect, since the recording
+doesn't contain data at those frequencies.</li>
+<li>All visualization controls (Spectrum panel, Waterfall panel) work
+normally.</li>
+<li>To replace the sample with your own, save a SigMF recording, rename the
+two files to <code>sample.sigmf-data</code> and <code>sample.sigmf-meta</code>,
+and drop them next to the program. (You don't need to change any code.)</li>
+</ul>
+
+<h3>Sidebar controls (right side)</h3>
+<h4>Tuning</h4>
+<ul>
+<li><b>Pulsar Band</b>: preset frequencies for common pulsar observation
+bands. Choose <i>Manual</i> to use the Manual Frequency field instead.</li>
+<li><b>Coarse Tune</b>: ±100 MHz offset from the selected preset (or from
+the manual frequency).</li>
+<li><b>Fine Tune</b>: ±10 MHz offset, layered on top of Coarse Tune.</li>
+<li><b>Manual Frequency</b>: used when the <i>Manual</i> preset is selected.
+Accepts engineering notation, e.g. <code>1.42G</code> or <code>408M</code>.</li>
+</ul>
+
+<h4>RX</h4>
+<ul>
+<li><b>Sample Rate</b>: 1–25 MHz. Higher rate = wider spectrum but more
+disk usage when recording.</li>
+<li><b>RX Gain</b>: 0–76 dB. The B210 maps this onto the AD9361's
+RX1/RX2 gain table.</li>
+</ul>
+
+<h4>Recording</h4>
+<ul>
+<li><b>Folder</b>: where SigMF capture pairs (.sigmf-meta / .sigmf-data)
+land. Defaults to <code>~/Documents/B210_Recordings</code>.</li>
+<li><b>Record</b>: <i>Stopped</i> / <i>Recording</i>. Recording always
+starts <i>Stopped</i> on launch.</li>
+</ul>
+
+<h3>Spectrum (top plot)</h3>
+<p>Live FFT magnitude in dB. Use the control panel on the right side to
+adjust:</p>
+<ul>
+<li><b>FFT Size</b>: 256–8192. Larger = finer frequency resolution but
+slower response and more averaging-window flicker.</li>
+<li><b>Window</b>: Blackman-Harris is the default — low sidelobes, good
+for RFI hunting. Hann/Hamming have narrower main lobes; Rectangular has
+the sharpest peak but the worst sidelobes.</li>
+<li><b>Avg α</b>: exponential averaging. 1.0 = no smoothing (every frame
+is a fresh measurement). Smaller = more smoothing.</li>
+<li><b>Max / Min hold</b>: overlay traces showing the highest/lowest value
+ever seen at each bin. Use <b>Reset</b> to clear.</li>
+<li><b>Y-Axis</b>: dB min/max, or click <b>Autoscale</b> to fit the
+current data.</li>
+<li><b>Trace</b>: color, line width, alpha, label.</li>
+</ul>
+
+<h3>Waterfall (bottom plot)</h3>
+<p>Scrolling 2-D image of FFT vs. time. Newest row at the bottom.</p>
+<ul>
+<li><b>Intensity Min/Max</b>: dB range that maps to the colormap.
+<b>Autoscale intensity</b> picks the 5%–99% percentile of the current
+data.</li>
+<li><b>Colormap</b>: viridis (default), plasma, inferno, magma, turbo,
+cividis, gray.</li>
+<li><b>Rows</b>: how many history rows to display (default 256).</li>
+</ul>
+
+<h3>Persistence</h3>
+<p>All selections are saved to a plain-text INI file and restored on next
+launch. The file location is shown in <b>Help → About</b>; you can open
+the folder directly with the <b>Open Settings Folder</b> button.</p>
+<p>To revert everything to factory defaults, use <b>Restore Defaults</b>
+in the About dialog.</p>
+
+<h3>Update checks</h3>
+<p>If the developer has configured a manifest URL, the program checks for
+a newer release in the background at launch (no more than once every 24
+hours). When a newer version is found, a non-modal dialog opens with the
+release notes and a button that opens the download page in your browser —
+you can ignore it and keep using the app, or click <b>Skip this version</b>
+to not be reminded about that particular version again.</p>
+<p>The check is read-only and never auto-downloads or auto-installs. To
+trigger a check manually, use <b>Help → Check for Updates…</b>. To disable
+auto-checks, set <code>auto_check = false</code> under <code>[updates]</code>
+in the settings file. If the manifest URL has not been configured yet, the
+auto-check is silently skipped.</p>
+
+<h3>Tips for pulsar work</h3>
+<ul>
+<li>1422 MHz preset is centered on the neutral-hydrogen line (HI).</li>
+<li>1666 MHz preset covers the OH maser band.</li>
+<li>Use <b>Avg α</b> ≈ 0.05 and <b>Max hold</b> to find intermittent
+RFI sources.</li>
+<li>The waterfall reveals time-structured interference (e.g. radar sweeps,
+ADS-B bursts) that the live spectrum smears out.</li>
+</ul>
+"""
+
+
+class HelpDialog(QtWidgets.QDialog):
+    """Scrollable user guide. Read-only HTML."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"{APP_NAME} — User Guide")
+        self.resize(700, 600)
+
+        layout = QtWidgets.QVBoxLayout(self)
+
+        text = QtWidgets.QTextBrowser()
+        text.setOpenExternalLinks(True)
+        text.setHtml(HELP_TEXT_HTML)
+        layout.addWidget(text, 1)
+
+        btn_row = QtWidgets.QHBoxLayout()
+        btn_row.addStretch(1)
+        close_btn = QtWidgets.QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+        close_btn.setDefault(True)
+        btn_row.addWidget(close_btn)
+        layout.addLayout(btn_row)
+
+
+# === Overflow capture (UHD/GR write 'O' to FD-level stderr on RX overflow) ===
+
+# Match runs of bare 'O' characters that aren't part of a word (so "OOO"
+# scrolls past, but normal stderr text like "Operating" or "Boost_108600"
+# is ignored).
+_OVERFLOW_RE = re.compile(r'\bO+\b')
+
+
+class OverflowMonitor(QtCore.QObject):
+    """Redirects FD 2 (C-level stderr) into a pipe, scans the byte stream
+    for UHD overflow indicators ('O' characters), and emits them via a Qt
+    signal. All stderr output is passed through to the original console
+    unchanged, so info logs and tracebacks still appear there."""
+
+    chars_received = Signal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._stopped = False
+        self._saved_stderr_fd = -1
+        self._read_fd = -1
+        self._write_fd = -1
+        self._reader_thread = None
+
+    def start(self):
+        try:
+            sys.stderr.flush()
+        except Exception:
+            pass
+        self._read_fd, self._write_fd = os.pipe()
+        self._saved_stderr_fd = os.dup(2)
+        os.dup2(self._write_fd, 2)
+        self._reader_thread = threading.Thread(
+            target=self._reader_loop, name="stderr-overflow-monitor", daemon=True)
+        self._reader_thread.start()
+
+    def stop(self):
+        self._stopped = True
+        # Restore the real stderr so any shutdown messages go to the console,
+        # then close the pipe so the reader thread can exit.
+        if self._saved_stderr_fd >= 0:
+            try:
+                os.dup2(self._saved_stderr_fd, 2)
+            except OSError:
+                pass
+        if self._write_fd >= 0:
+            try:
+                os.close(self._write_fd)
+            except OSError:
+                pass
+            self._write_fd = -1
+
+    def _reader_loop(self):
+        try:
+            while not self._stopped:
+                try:
+                    data = os.read(self._read_fd, 4096)
+                except OSError:
+                    break
+                if not data:
+                    break
+                # Pass-through to the real console.
+                if self._saved_stderr_fd >= 0:
+                    try:
+                        os.write(self._saved_stderr_fd, data)
+                    except OSError:
+                        pass
+                # Extract standalone 'O' runs.
+                text = data.decode('utf-8', errors='replace')
+                matches = _OVERFLOW_RE.findall(text)
+                if matches:
+                    # AutoConnection → QueuedConnection across threads, so the
+                    # slot runs on the GUI thread safely.
+                    self.chars_received.emit(''.join(matches))
+        except Exception:
+            # Never let the reader thread propagate exceptions to nothing.
+            pass
+
+
+class OverflowDisplayWidget(QtWidgets.QGroupBox):
+    """Sidebar group that streams UHD overflow 'O' characters into a fixed
+    4-line text view. Older lines are auto-dropped by Qt itself via
+    `setMaximumBlockCount`, so the widget never grows past 4 lines and
+    there's nothing to scroll."""
+
+    MAX_LINES = 4
+    LINE_WIDTH = 40  # chars per logical line — fits the narrowest sidebar
+    IDLE_CLEAR_MS = 15000  # auto-clear if no new overflow chars for this long
+
+    def __init__(self, parent=None):
+        super().__init__("Overflow ('O' = USRP RX overflow)", parent)
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(4)
+
+        self._text = QtWidgets.QPlainTextEdit()
+        self._text.setReadOnly(True)
+        # NoWrap + explicit '\n' every LINE_WIDTH chars → each block is one
+        # visual line. setMaximumBlockCount then caps history at MAX_LINES;
+        # Qt drops the oldest block when we add a 5th, no scroll needed.
+        self._text.setLineWrapMode(QtWidgets.QPlainTextEdit.NoWrap)
+        self._text.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._text.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._text.setMaximumBlockCount(self.MAX_LINES)
+        self._text.setFixedHeight(64)
+        font = QtGui.QFont("Courier New", 10)
+        font.setStyleHint(QtGui.QFont.Monospace)
+        self._text.setFont(font)
+        self._text.setPlaceholderText("(no overflows)")
+        layout.addWidget(self._text)
+
+        clear_btn = QtWidgets.QPushButton("Clear")
+        clear_btn.clicked.connect(self.clear)
+        layout.addWidget(clear_btn)
+
+        # Chars currently on the bottom line; reset to 0 each time we wrap.
+        self._line_chars = 0
+
+        # Single-shot timer restarted on every emit. When it fires, no new
+        # overflow chars have arrived for IDLE_CLEAR_MS — wipe the display.
+        self._idle_timer = QTimer(self)
+        self._idle_timer.setSingleShot(True)
+        self._idle_timer.setInterval(self.IDLE_CLEAR_MS)
+        self._idle_timer.timeout.connect(self.clear)
+
+    @Slot(str)
+    def append_chars(self, s):
+        if not s:
+            return
+        # Cursor-based incremental insert — much cheaper than setPlainText,
+        # which would re-lay out the whole document on every emit and caused
+        # the freeze/jitter at high overflow rates.
+        cursor = self._text.textCursor()
+        cursor.movePosition(QtGui.QTextCursor.End)
+        remaining = s
+        while remaining:
+            free = self.LINE_WIDTH - self._line_chars
+            if free <= 0:
+                cursor.insertText('\n')
+                self._line_chars = 0
+                free = self.LINE_WIDTH
+            chunk = remaining[:free]
+            cursor.insertText(chunk)
+            self._line_chars += len(chunk)
+            remaining = remaining[free:]
+        # Keep the view pinned to the newest line.
+        self._text.moveCursor(QtGui.QTextCursor.End)
+        # Restart the idle-clear countdown.
+        self._idle_timer.start()
+
+    @Slot()
+    def clear(self):
+        self._text.clear()
+        self._line_chars = 0
+        self._idle_timer.stop()
+
+
+# === Auto-update check ===
+
+def _parse_version(v):
+    """Parse a dotted version string into a tuple of ints. Returns () on
+    parse failure (which compares as 'lower than anything')."""
+    try:
+        return tuple(int(p) for p in str(v).split('.'))
+    except (ValueError, TypeError):
+        return ()
+
+
+class UpdateChecker(QtCore.QObject):
+    """Fetches a small manifest.json from a configured URL on a background
+    thread and, if it advertises a newer version than what's running, emits
+    `update_available(latest_version, download_url, release_notes)`. Errors
+    are reported via `check_failed(message)` — auto-launches ignore them,
+    manual 'Check now' surfaces them."""
+
+    update_available = Signal(str, str, str)  # version, url, notes
+    no_update = Signal(str)                   # latest_version
+    check_failed = Signal(str)                # human-readable message
+
+    USER_AGENT = f"{APP_NAME}/{APP_VERSION}"
+
+    def __init__(self, settings, parent=None):
+        super().__init__(parent)
+        self._settings = settings
+
+    @Slot()
+    def check_now(self):
+        threading.Thread(target=self._do_check, name="update-checker",
+                         daemon=True).start()
+
+    def _do_check(self):
+        url = self._settings.get_str('updates', 'manifest_url').strip()
+        if not url:
+            # Not configured — silently skip. Manual 'Check for Updates'
+            # menu handler should also check this and tell the user.
+            return
+        try:
+            import urllib.request
+            req = urllib.request.Request(url, headers={'User-Agent': self.USER_AGENT})
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                raw = resp.read()
+            import json
+            data = json.loads(raw.decode('utf-8'))
+        except Exception as exc:
+            self.check_failed.emit(f"{type(exc).__name__}: {exc}")
+            return
+        latest = str(data.get('latest_version', '')).strip()
+        download_url = str(data.get('download_url', '')).strip()
+        notes = str(data.get('release_notes', '')).strip()
+        if not latest:
+            self.check_failed.emit("Manifest has no 'latest_version' field.")
+            return
+        # Remember the last successful check so we can debounce repeats.
+        self._settings.set('updates', 'last_check_iso',
+                           datetime.now().isoformat(timespec='seconds'))
+        try:
+            self._settings.save()
+        except OSError:
+            pass
+        if _parse_version(latest) > _parse_version(APP_VERSION):
+            self.update_available.emit(latest, download_url, notes)
+        else:
+            self.no_update.emit(latest)
+
+
+class UpdateNotificationDialog(QtWidgets.QDialog):
+    """Non-modal: tells the user a new version is available and offers to
+    open the download page, skip this version, or just close. Emits
+    `dismissed_for_version(version)` if the user clicks Skip."""
+
+    dismissed_for_version = Signal(str)
+
+    def __init__(self, latest_version, download_url, release_notes,
+                 current_version, parent=None):
+        super().__init__(parent)
+        # Non-modal so the user can keep using the app.
+        self.setModal(False)
+        self.setWindowTitle("Update Available")
+        self.setMinimumWidth(480)
+
+        self._latest = latest_version
+        self._url = download_url
+
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.addWidget(QtWidgets.QLabel(
+            f"<h3>Version {latest_version} is available.</h3>"
+            f"<p>You're running version {current_version}.</p>"))
+
+        if release_notes:
+            notes = QtWidgets.QTextEdit()
+            notes.setReadOnly(True)
+            notes.setPlainText(release_notes)
+            notes.setFixedHeight(140)
+            layout.addWidget(QtWidgets.QLabel("<b>Release notes:</b>"))
+            layout.addWidget(notes)
+
+        if download_url:
+            url_lbl = QtWidgets.QLabel(f"Download: <code>{download_url}</code>")
+            url_lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            url_lbl.setWordWrap(True)
+            layout.addWidget(url_lbl)
+
+        btns = QtWidgets.QHBoxLayout()
+        open_btn = QtWidgets.QPushButton("Open Download Page")
+        open_btn.setEnabled(bool(download_url))
+        open_btn.clicked.connect(self._on_open)
+        btns.addWidget(open_btn)
+
+        skip_btn = QtWidgets.QPushButton("Skip This Version")
+        skip_btn.clicked.connect(self._on_skip)
+        btns.addWidget(skip_btn)
+
+        btns.addStretch(1)
+
+        remind_btn = QtWidgets.QPushButton("Remind Me Later")
+        remind_btn.clicked.connect(self.close)
+        btns.addWidget(remind_btn)
+        layout.addLayout(btns)
+
+    def _on_open(self):
+        if self._url:
+            QtGui.QDesktopServices.openUrl(QtCore.QUrl(self._url))
+
+    def _on_skip(self):
+        self.dismissed_for_version.emit(self._latest)
+        self.close()
+
+
+class b210_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
+
+    # Both bases define `connect` and `disconnect`. PySide6's QObject.connect/
+    # disconnect win MRO, so `self.(dis)connect((blk, 0), (blk2, 0))` ends up
+    # at QObject and dies with "called with wrong argument types (tuple, tuple)".
+    # Route through gr.top_block explicitly. Without the disconnect override,
+    # _stop_recording would silently fail to remove the SigMF sink and the
+    # file would keep growing until the program exits.
+    def connect(self, *args, **kwargs):
+        return gr.top_block.connect(self, *args, **kwargs)
+
+    def disconnect(self, *args, **kwargs):
+        return gr.top_block.disconnect(self, *args, **kwargs)
 
     def __init__(self):
-        gr.top_block.__init__(self, "B210 Spectrum Analyzer", catch_exceptions=True)
-        Qt.QWidget.__init__(self)
-        self.setWindowTitle("B210 Spectrum Analyzer")
-        qtgui.util.check_set_qss()
+        gr.top_block.__init__(self, f"{APP_NAME} v{APP_VERSION}", catch_exceptions=True)
+        QtWidgets.QWidget.__init__(self)
+        self.setWindowTitle(f"{APP_NAME}  —  v{APP_VERSION}")
         try:
-            self.setWindowIcon(Qt.QIcon.fromTheme('gnuradio-grc'))
+            self.setWindowIcon(QtGui.QIcon.fromTheme('gnuradio-grc'))
         except BaseException as exc:
             print(f"Qt GUI: Could not set Icon: {str(exc)}", file=sys.stderr)
-        self.main_layout = Qt.QHBoxLayout(self)
+
+        # Start stderr capture BEFORE the USRP source is built so we catch
+        # any overflow indicators emitted during stream startup.
+        self._overflow_monitor = OverflowMonitor(self)
+        self._overflow_monitor.start()
+
+        # INI-backed settings (created early so initial variable values can
+        # come from it). Window geometry continues to use QSettings (binary
+        # blob — not appropriate for hand-editable INI).
+        self._app_settings = Settings()
+        # While True, control_changed handlers skip writes — used when
+        # programmatically applying saved values back into the UI.
+        self._applying_settings = False
+
+        # Top-level vertical layout: menu bar above, plot+sidebar content below.
+        top = QtWidgets.QVBoxLayout(self)
+        top.setContentsMargins(0, 0, 0, 0)
+        top.setSpacing(0)
+        top.setMenuBar(self._build_menu_bar())
+
+        content = QtWidgets.QWidget()
+        self.main_layout = QtWidgets.QHBoxLayout(content)
         self.main_layout.setContentsMargins(4, 4, 4, 4)
         self.main_layout.setSpacing(4)
+        top.addWidget(content, 1)
 
-        self.plots_splitter = Qt.QSplitter(QtCore.Qt.Vertical)
+        self.plots_splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
         self.plots_splitter.setChildrenCollapsible(False)
         self.main_layout.addWidget(self.plots_splitter, 1)
 
-        self.sidebar = Qt.QWidget()
+        self.sidebar = QtWidgets.QWidget()
         self.sidebar.setMinimumWidth(280)
         self.sidebar.setMaximumWidth(360)
-        self.sidebar_layout = Qt.QVBoxLayout(self.sidebar)
+        self.sidebar_layout = QtWidgets.QVBoxLayout(self.sidebar)
         self.sidebar_layout.setContentsMargins(0, 0, 0, 0)
         self.main_layout.addWidget(self.sidebar, 0)
 
-        self._tuning_group = Qt.QGroupBox("Tuning")
-        self._tuning_group_layout = Qt.QVBoxLayout(self._tuning_group)
+        self._tuning_group = QtWidgets.QGroupBox("Tuning")
+        self._tuning_group_layout = QtWidgets.QVBoxLayout(self._tuning_group)
         self.sidebar_layout.addWidget(self._tuning_group)
 
-        self._rx_group = Qt.QGroupBox("RX")
-        self._rx_group_layout = Qt.QVBoxLayout(self._rx_group)
+        self._rx_group = QtWidgets.QGroupBox("RX")
+        self._rx_group_layout = QtWidgets.QVBoxLayout(self._rx_group)
         self.sidebar_layout.addWidget(self._rx_group)
 
-        self._record_group = Qt.QGroupBox("Recording")
-        self._record_group_layout = Qt.QVBoxLayout(self._record_group)
+        self._record_group = QtWidgets.QGroupBox("Recording")
+        self._record_group_layout = QtWidgets.QVBoxLayout(self._record_group)
         self.sidebar_layout.addWidget(self._record_group)
+
+        self._overflow_widget = OverflowDisplayWidget()
+        self.sidebar_layout.addWidget(self._overflow_widget)
+        self._overflow_monitor.chars_received.connect(self._overflow_widget.append_chars)
 
         self.sidebar_layout.addStretch(1)
 
-        self.settings = Qt.QSettings("gnuradio/flowgraphs", "b210_spectrum_analyzer")
+        # QSettings is kept for window geometry only (Qt-native binary blob).
+        self.settings = QtCore.QSettings("gnuradio/flowgraphs", "b210_spectrum_analyzer")
 
-        default_recording_dir = str(Path.home() / "Documents" / "B210_Recordings")
-        self.recording_dir = self.settings.value("recording_dir", default_recording_dir, type=str)
+        self.recording_dir = self._app_settings.get_str('recording', 'directory')
+        if not self.recording_dir:
+            self.recording_dir = str(Path.home() / "Documents" / "B210_Recordings")
         os.makedirs(self.recording_dir, exist_ok=True)
 
-        self._recording_dir_button = Qt.QPushButton("Folder: " + self._elided_dir())
+        self._recording_dir_button = QtWidgets.QPushButton("Folder: " + self._elided_dir())
         self._recording_dir_button.setToolTip(self.recording_dir)
         self._recording_dir_button.clicked.connect(self._on_change_recording_dir)
         self._record_group_layout.addWidget(self._recording_dir_button)
@@ -95,215 +2032,478 @@ class b210_spectrum_analyzer(gr.top_block, Qt.QWidget):
         self.flowgraph_started = threading.Event()
 
         ##################################################
-        # Variables
+        # Variables (loaded from settings, fall back to DEFAULTS)
         ##################################################
-        self.freq_preset = freq_preset = 408e6
-        self.freq_offset_0 = freq_offset_0 = 0
-        self.freq_offset = freq_offset = 0
-        self.freq_manual = freq_manual = 100e6
-        self.samp_rate = samp_rate = 20e6
-        self.record = record = 0
-        self.gain = gain = 40
-        self.center_freq = center_freq = (freq_manual if freq_preset == 0 else freq_preset) + freq_offset + freq_offset_0
+        s = self._app_settings
+        self.freq_preset    = freq_preset    = s.get_float('tuning', 'preset_hz')
+        self.freq_offset_0  = freq_offset_0  = s.get_float('tuning', 'coarse_hz')
+        self.freq_offset    = freq_offset    = s.get_float('tuning', 'fine_hz')
+        self.freq_manual    = freq_manual    = s.get_float('tuning', 'manual_hz')
+        self.samp_rate      = samp_rate      = s.get_float('rx', 'samp_rate_hz')
+        self.gain           = gain           = s.get_float('rx', 'gain_db')
+        # `record` is intentionally NOT persisted — always start stopped.
+        self.record         = 0
+        self.center_freq    = center_freq    = ((freq_manual if freq_preset == 0 else freq_preset)
+                                                + freq_offset + freq_offset_0)
 
         ##################################################
         # Blocks
         ##################################################
 
-        # Create the options list
-        self._samp_rate_options = [1000000.0, 2000000.0, 4000000.0, 5000000.0, 8000000.0, 10000000.0, 16000000.0, 20000000.0, 25000000.0]
-        # Create the labels list
-        self._samp_rate_labels = ['1 MHz', '2 MHz', '4 MHz', '5 MHz', '8 MHz', '10 MHz', '16 MHz', '20 MHz', '25 MHz']
-        # Create the combo box
-        self._samp_rate_tool_bar = Qt.QToolBar(self)
-        self._samp_rate_tool_bar.addWidget(Qt.QLabel("Sample Rate" + ": "))
-        self._samp_rate_combo_box = Qt.QComboBox()
+        # --- Sample-rate selector ---
+        self._samp_rate_options = [1000000.0, 2000000.0, 4000000.0, 5000000.0, 8000000.0,
+                                   10000000.0, 16000000.0, 20000000.0, 25000000.0]
+        self._samp_rate_labels = ['1 MHz', '2 MHz', '4 MHz', '5 MHz', '8 MHz',
+                                  '10 MHz', '16 MHz', '20 MHz', '25 MHz']
+        self._samp_rate_tool_bar = QtWidgets.QToolBar(self)
+        self._samp_rate_tool_bar.addWidget(QtWidgets.QLabel("Sample Rate: "))
+        self._samp_rate_combo_box = QtWidgets.QComboBox()
         self._samp_rate_tool_bar.addWidget(self._samp_rate_combo_box)
-        for _label in self._samp_rate_labels: self._samp_rate_combo_box.addItem(_label)
-        self._samp_rate_callback = lambda i: Qt.QMetaObject.invokeMethod(self._samp_rate_combo_box, "setCurrentIndex", Qt.Q_ARG("int", self._samp_rate_options.index(i)))
+        for _label in self._samp_rate_labels:
+            self._samp_rate_combo_box.addItem(_label)
+        self._samp_rate_callback = lambda i: QtCore.QMetaObject.invokeMethod(
+            self._samp_rate_combo_box, "setCurrentIndex",
+            QtCore.Q_ARG("int", self._samp_rate_options.index(i)))
         self._samp_rate_callback(self.samp_rate)
         self._samp_rate_combo_box.currentIndexChanged.connect(
             lambda i: self.set_samp_rate(self._samp_rate_options[i]))
-        # Create the radio buttons
         self._rx_group_layout.addWidget(self._samp_rate_tool_bar)
-        # Create the options list
+
+        # --- Record selector ---
         self._record_options = [0, 1]
-        # Create the labels list
         self._record_labels = ['Stopped', 'Recording']
-        # Create the combo box
-        self._record_tool_bar = Qt.QToolBar(self)
-        self._record_tool_bar.addWidget(Qt.QLabel("Record" + ": "))
-        self._record_combo_box = Qt.QComboBox()
+        self._record_tool_bar = QtWidgets.QToolBar(self)
+        self._record_tool_bar.addWidget(QtWidgets.QLabel("Record: "))
+        self._record_combo_box = QtWidgets.QComboBox()
         self._record_tool_bar.addWidget(self._record_combo_box)
-        for _label in self._record_labels: self._record_combo_box.addItem(_label)
-        self._record_callback = lambda i: Qt.QMetaObject.invokeMethod(self._record_combo_box, "setCurrentIndex", Qt.Q_ARG("int", self._record_options.index(i)))
+        for _label in self._record_labels:
+            self._record_combo_box.addItem(_label)
+        self._record_callback = lambda i: QtCore.QMetaObject.invokeMethod(
+            self._record_combo_box, "setCurrentIndex",
+            QtCore.Q_ARG("int", self._record_options.index(i)))
         self._record_callback(self.record)
         self._record_combo_box.currentIndexChanged.connect(
             lambda i: self.set_record(self._record_options[i]))
-        # Create the radio buttons
         self._record_group_layout.addWidget(self._record_tool_bar)
-        self._gain_range = qtgui.Range(0, 76, 1, 40, 200)
-        self._gain_win = qtgui.RangeWidget(self._gain_range, self.set_gain, "RX Gain (dB)", "counter_slider", float, QtCore.Qt.Horizontal)
+
+        # Status label below the Record combo, updated by _start/_stop_recording.
+        self._recording_status = QtWidgets.QLabel("Idle")
+        self._recording_status.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self._recording_status.setWordWrap(True)
+        self._record_group_layout.addWidget(self._recording_status)
+
+        # --- Gain slider ---
+        self._gain_range = Range(0, 76, 1, self.gain, 200)
+        self._gain_win = RangeWidget(self._gain_range, self.set_gain, "RX Gain (dB)",
+                                      "counter_slider", float, Qt.Horizontal)
         self._rx_group_layout.addWidget(self._gain_win)
-        self.uhd_usrp_source_0 = uhd.usrp_source(
-            ",".join(('serial=3273A91', '')),
-            uhd.stream_args(
-                cpu_format="fc32",
-                args='recv_frame_size=8192,num_recv_frames=1024',
-                channels=list(range(0,1)),
-            ),
-        )
-        self.uhd_usrp_source_0.set_samp_rate(samp_rate)
-        self.uhd_usrp_source_0.set_time_unknown_pps(uhd.time_spec(0))
 
-        self.uhd_usrp_source_0.set_center_freq(center_freq, 0)
-        self.uhd_usrp_source_0.set_antenna("RX2", 0)
-        self.uhd_usrp_source_0.set_gain(gain, 0)
-        self.qtgui_waterfall_sink_x_0 = qtgui.waterfall_sink_c(
-            1024, #size
-            window.WIN_BLACKMAN_hARRIS, #wintype
-            center_freq, #fc
-            samp_rate, #bw
-            "Waterfall", #name
-            1, #number of inputs
-            None # parent
-        )
-        self.qtgui_waterfall_sink_x_0.set_update_time(0.10)
-        self.qtgui_waterfall_sink_x_0.enable_grid(False)
-        self.qtgui_waterfall_sink_x_0.enable_axis_labels(True)
+        # --- Device picker button (shows the currently-selected serial) ---
+        self._device_button = QtWidgets.QPushButton()  # text set below
+        self._device_button.setToolTip(
+            "Click to pick which USRP to use (when more than one is attached).")
+        self._device_button.clicked.connect(self._on_change_device_clicked)
+        self._rx_group_layout.addWidget(self._device_button)
 
+        # --- Resolve data source: live USRP, SigMF playback, or quit ---
+        chosen_serial = resolve_device_serial(
+            self._app_settings.get_str('rx', 'device_serial'), parent=self)
+        if not chosen_serial:
+            raise SystemExit(0)
+        self._playback_mode = (chosen_serial == PLAYBACK_SENTINEL)
+        self._playback_path = None
+        self.uhd_usrp_source_0 = None  # only set in live mode
 
+        if self._playback_mode:
+            # Sample rate and center frequency come from the file's metadata,
+            # not from the saved settings. Override the locals + self vars
+            # before any widget construction that uses them. We preserve the
+            # file's *actual* center frequency separately because tuning
+            # in playback mode is a digital frequency shift relative to it.
+            self._playback_path = find_default_sample_path()
+            assert self._playback_path is not None, \
+                "PLAYBACK_SENTINEL implies the sample file exists"
+            pb_sr, pb_cf, _dtype = load_sigmf_meta(self._playback_path)
+            self._playback_center_freq = pb_cf
+            self.samp_rate = samp_rate = pb_sr
+            self.center_freq = center_freq = pb_cf
+            self._device_serial = None
+            self._device_button.setText(
+                f"Playback: {Path(self._playback_path).name}.sigmf-data")
+            self._device_button.setEnabled(False)
+        else:
+            self._device_serial = chosen_serial
+            self._save_setting('rx', 'device_serial', chosen_serial)
+            self._device_button.setText(f"Device: {chosen_serial}")
 
-        labels = ['', '', '', '', '',
-                  '', '', '', '', '']
-        colors = [0, 0, 0, 0, 0,
-                  0, 0, 0, 0, 0]
-        alphas = [1.0, 1.0, 1.0, 1.0, 1.0,
-                  1.0, 1.0, 1.0, 1.0, 1.0]
+        # --- Data source block ---
+        if self._playback_mode:
+            self._file_source = blocks.file_source(
+                gr.sizeof_gr_complex,
+                self._playback_path + '.sigmf-data',
+                repeat=True)
+            # Throttle paces file_source to the original capture rate; without
+            # it the file is read as fast as Python can stream it.
+            self._throttle = blocks.throttle(gr.sizeof_gr_complex, samp_rate, True)
+            # Digital frequency shift so the user can virtually retune within
+            # the recording's bandwidth. phase_inc=0 keeps the file's original
+            # center frequency; set_center_freq updates this.
+            self._rotator = blocks.rotator_cc(0.0)
+        else:
+            self.uhd_usrp_source_0 = uhd.usrp_source(
+                ",".join((f'serial={chosen_serial}', '')),
+                uhd.stream_args(
+                    cpu_format="fc32",
+                    args='recv_frame_size=8192,num_recv_frames=1024',
+                    channels=list(range(0, 1)),
+                ),
+            )
+            self.uhd_usrp_source_0.set_samp_rate(samp_rate)
+            self.uhd_usrp_source_0.set_time_unknown_pps(uhd.time_spec(0))
+            self.uhd_usrp_source_0.set_center_freq(center_freq, 0)
+            self.uhd_usrp_source_0.set_antenna("RX2", 0)
+            self.uhd_usrp_source_0.set_gain(gain, 0)
 
-        for i in range(1):
-            if len(labels[i]) == 0:
-                self.qtgui_waterfall_sink_x_0.set_line_label(i, "Data {0}".format(i))
-            else:
-                self.qtgui_waterfall_sink_x_0.set_line_label(i, labels[i])
-            self.qtgui_waterfall_sink_x_0.set_color_map(i, colors[i])
-            self.qtgui_waterfall_sink_x_0.set_line_alpha(i, alphas[i])
+        # --- Spectrum display (replaces qtgui freq_sink + waterfall_sink) ---
+        # Decimate aggressively before the Python sink: at 20 MS/s a pure-Python
+        # sync_block can't keep up sample-by-sample. stream_to_vector groups
+        # samples into CHUNK_SIZE-sized vectors and keep_one_in_n drops most
+        # of them, so the sink sees ~20 vectors/sec.
+        self._sample_sink = SampleBufferSink(chunk_size=CHUNK_SIZE)
+        self._stream_to_vec = blocks.stream_to_vector(gr.sizeof_gr_complex, CHUNK_SIZE)
+        self._keep_one_in_n = blocks.keep_one_in_n(
+            gr.sizeof_gr_complex * CHUNK_SIZE,
+            self._decim_for(samp_rate))
+        self._fft_plot = FftPlotWidget(center_freq, samp_rate)
+        self._fft_plot.set_y_axis(-140, 10)
+        self._fft_plot.set_frequency_range(center_freq, samp_rate)
+        self._waterfall_plot = WaterfallPlotWidget(center_freq, samp_rate, rows=256)
+        self._waterfall_plot.set_intensity_range(-140, 10)
 
-        self.qtgui_waterfall_sink_x_0.set_intensity_range(-140, 10)
+        self._processor = SpectrumProcessor(
+            self._sample_sink, fft_size=1024, window_name="blackman-harris",
+            update_hz=10.0, parent=self)
+        self._processor.frame_ready.connect(self._fft_plot.on_frame)
+        self._processor.frame_ready.connect(self._waterfall_plot.on_frame)
+        self._fft_plot.request_fft_size.connect(self._processor.set_fft_size)
+        self._fft_plot.request_window.connect(self._processor.set_window)
+        self._fft_plot.request_average.connect(self._processor.set_average_alpha)
+        self._fft_plot.request_max_hold.connect(self._processor.set_max_hold)
+        self._fft_plot.request_min_hold.connect(self._processor.set_min_hold)
+        self._fft_plot.request_reset_max.connect(self._processor.reset_max_hold)
+        self._fft_plot.request_reset_min.connect(self._processor.reset_min_hold)
+        self._fft_plot.request_window_normalized.connect(self._processor.set_window_normalized)
 
-        self._qtgui_waterfall_sink_x_0_win = sip.wrapinstance(self.qtgui_waterfall_sink_x_0.qwidget(), Qt.QWidget)
+        # Keep the two control panels' visibility in lock-step so the spectrum
+        # and waterfall plot regions stay equal-width. setChecked is a no-op
+        # when the state already matches, so this can't recurse.
+        self._fft_plot._toggle_btn.toggled.connect(self._waterfall_plot._toggle_btn.setChecked)
+        self._waterfall_plot._toggle_btn.toggled.connect(self._fft_plot._toggle_btn.setChecked)
+        # Persist panel visibility (single shared value since they're linked).
+        self._fft_plot._toggle_btn.toggled.connect(
+            lambda on: self._save_setting('ui', 'control_panels_visible', on))
 
-        self.plots_splitter.addWidget(self._qtgui_waterfall_sink_x_0_win)
-        self.qtgui_freq_sink_x_0 = qtgui.freq_sink_c(
-            1024, #size
-            window.WIN_BLACKMAN_hARRIS, #wintype
-            center_freq, #fc
-            samp_rate, #bw
-            "Spectrum", #name
-            1,
-            None # parent
-        )
-        self.qtgui_freq_sink_x_0.set_update_time(0.10)
-        self.qtgui_freq_sink_x_0.set_y_axis((-140), 10)
-        self.qtgui_freq_sink_x_0.set_y_label('Relative Gain', 'dB')
-        self.qtgui_freq_sink_x_0.set_trigger_mode(qtgui.TRIG_MODE_FREE, 0.0, 0, "")
-        self.qtgui_freq_sink_x_0.enable_autoscale(False)
-        self.qtgui_freq_sink_x_0.enable_grid(True)
-        self.qtgui_freq_sink_x_0.set_fft_average(1.0)
-        self.qtgui_freq_sink_x_0.enable_axis_labels(True)
-        self.qtgui_freq_sink_x_0.enable_control_panel(True)
-        self.qtgui_freq_sink_x_0.set_fft_window_normalized(False)
+        # Per-plot setting persistence. Each widget emits control_changed
+        # (settings_key, value); we route to the appropriate INI section.
+        self._fft_plot.control_changed.connect(
+            lambda k, v: self._save_setting('spectrum', k, v))
+        self._waterfall_plot.control_changed.connect(
+            lambda k, v: self._save_setting('waterfall', k, v))
 
-
-
-        labels = ['', '', '', '', '',
-            '', '', '', '', '']
-        widths = [1, 1, 1, 1, 1,
-            1, 1, 1, 1, 1]
-        colors = ["blue", "red", "green", "black", "cyan",
-            "magenta", "yellow", "dark red", "dark green", "dark blue"]
-        alphas = [1.0, 1.0, 1.0, 1.0, 1.0,
-            1.0, 1.0, 1.0, 1.0, 1.0]
-
-        for i in range(1):
-            if len(labels[i]) == 0:
-                self.qtgui_freq_sink_x_0.set_line_label(i, "Data {0}".format(i))
-            else:
-                self.qtgui_freq_sink_x_0.set_line_label(i, labels[i])
-            self.qtgui_freq_sink_x_0.set_line_width(i, widths[i])
-            self.qtgui_freq_sink_x_0.set_line_color(i, colors[i])
-            self.qtgui_freq_sink_x_0.set_line_alpha(i, alphas[i])
-
-        self._qtgui_freq_sink_x_0_win = sip.wrapinstance(self.qtgui_freq_sink_x_0.qwidget(), Qt.QWidget)
-        self.plots_splitter.insertWidget(0, self._qtgui_freq_sink_x_0_win)
+        self.plots_splitter.addWidget(self._fft_plot)
+        self.plots_splitter.addWidget(self._waterfall_plot)
         self.plots_splitter.setStretchFactor(0, 1)
         self.plots_splitter.setStretchFactor(1, 1)
         self.plots_splitter.setSizes([400, 400])
-        # Create the options list
-        self._freq_preset_options = [408000000.0, 680500000.0, 1299500000.0, 1422000000.0, 1666000000.0, 2304000000.0, 0]
-        # Create the labels list
-        self._freq_preset_labels = ['408 MHz', '680.5 MHz', '1299.5 MHz', '1422 MHz (HI)', '1666 MHz (OH)', '2304 MHz', 'Manual']
-        # Create the combo box
-        # Create the radio buttons
-        self._freq_preset_group_box = Qt.QGroupBox("Pulsar Band" + ": ")
-        self._freq_preset_box = Qt.QVBoxLayout()
-        class variable_chooser_button_group(Qt.QButtonGroup):
+
+        # --- Frequency preset radio group ---
+        self._freq_preset_options = [408000000.0, 680500000.0, 1299500000.0,
+                                     1422000000.0, 1666000000.0, 2304000000.0, 0]
+        self._freq_preset_labels = ['408 MHz', '680.5 MHz', '1299.5 MHz',
+                                    '1422 MHz (HI)', '1666 MHz (OH)', '2304 MHz', 'Manual']
+        self._freq_preset_group_box = QtWidgets.QGroupBox("Pulsar Band: ")
+        self._freq_preset_box = QtWidgets.QVBoxLayout()
+        class variable_chooser_button_group(QtWidgets.QButtonGroup):
             def __init__(self, parent=None):
-                Qt.QButtonGroup.__init__(self, parent)
-            @pyqtSlot(int)
+                QtWidgets.QButtonGroup.__init__(self, parent)
+            @Slot(int)
             def updateButtonChecked(self, button_id):
                 self.button(button_id).setChecked(True)
         self._freq_preset_button_group = variable_chooser_button_group()
         self._freq_preset_group_box.setLayout(self._freq_preset_box)
         for i, _label in enumerate(self._freq_preset_labels):
-            radio_button = Qt.QRadioButton(_label)
+            radio_button = QtWidgets.QRadioButton(_label)
             self._freq_preset_box.addWidget(radio_button)
             self._freq_preset_button_group.addButton(radio_button, i)
-        self._freq_preset_callback = lambda i: Qt.QMetaObject.invokeMethod(self._freq_preset_button_group, "updateButtonChecked", Qt.Q_ARG("int", self._freq_preset_options.index(i)))
+        self._freq_preset_callback = lambda i: QtCore.QMetaObject.invokeMethod(
+            self._freq_preset_button_group, "updateButtonChecked",
+            QtCore.Q_ARG("int", self._freq_preset_options.index(i)))
         self._freq_preset_callback(self.freq_preset)
-        self._freq_preset_button_group.buttonClicked[int].connect(
+        # PySide6 / Qt6: use idClicked instead of PyQt5's buttonClicked[int]
+        self._freq_preset_button_group.idClicked.connect(
             lambda i: self.set_freq_preset(self._freq_preset_options[i]))
         self._tuning_group_layout.addWidget(self._freq_preset_group_box)
-        self._freq_offset_0_range = qtgui.Range(-100e6, 100e6, 100e3, 0, 200)
-        self._freq_offset_0_win = qtgui.RangeWidget(self._freq_offset_0_range, self.set_freq_offset_0, "Coarse Tune (Hz)", "counter_slider", float, QtCore.Qt.Horizontal)
+
+        self._freq_offset_0_range = Range(-100e6, 100e6, 100e3, self.freq_offset_0, 200)
+        self._freq_offset_0_win = RangeWidget(self._freq_offset_0_range, self.set_freq_offset_0,
+                                               "Coarse Tune (Hz)", "counter_slider",
+                                               float, Qt.Horizontal)
         self._tuning_group_layout.addWidget(self._freq_offset_0_win)
-        self._freq_offset_range = qtgui.Range(-10e6, 10e6, 100e3, 0, 200)
-        self._freq_offset_win = qtgui.RangeWidget(self._freq_offset_range, self.set_freq_offset, "Fine Tune (Hz)", "counter_slider", float, QtCore.Qt.Horizontal)
+
+        self._freq_offset_range = Range(-10e6, 10e6, 100e3, self.freq_offset, 200)
+        self._freq_offset_win = RangeWidget(self._freq_offset_range, self.set_freq_offset,
+                                             "Fine Tune (Hz)", "counter_slider",
+                                             float, Qt.Horizontal)
         self._tuning_group_layout.addWidget(self._freq_offset_win)
-        self._freq_manual_tool_bar = Qt.QToolBar(self)
-        self._freq_manual_tool_bar.addWidget(Qt.QLabel("Manual Frequency (Hz)" + ": "))
-        self._freq_manual_line_edit = Qt.QLineEdit(str(self.freq_manual))
+
+        self._freq_manual_tool_bar = QtWidgets.QToolBar(self)
+        self._freq_manual_tool_bar.addWidget(QtWidgets.QLabel("Manual Frequency (Hz): "))
+        self._freq_manual_line_edit = QtWidgets.QLineEdit(str(self.freq_manual))
         self._freq_manual_tool_bar.addWidget(self._freq_manual_line_edit)
         self._freq_manual_line_edit.editingFinished.connect(
             lambda: self.set_freq_manual(eng_notation.str_to_num(str(self._freq_manual_line_edit.text()))))
         self._tuning_group_layout.addWidget(self._freq_manual_tool_bar)
-        self.foo_valve_0 = foo.valve(item_size=gr.sizeof_gr_complex*1, open=bool(not record))
-        self.blocks_sigmf_sink_minimal_0 = blocks.sigmf_sink_minimal(
-            item_size=gr.sizeof_gr_complex,
-            filename=os.path.join(self.recording_dir, 'DSES_Spectrum_Analyzer'),
-            sample_rate=samp_rate,
-            center_freq=center_freq,
-            author='Rick',
-            description='B210 capture, RX2 antenna',
-            hw_info='Ettus USRP B210',
-            is_complex=True)
 
+        # --- Recording: SigMF sink is built on demand in _start_recording()
+        # and torn down in _stop_recording() via top_block.lock()/unlock().
+        # The previous always-on valve+sink combo wrote to disk from launch
+        # and the valve toggle didn't actually gate in real time — that was
+        # the source of the freeze when Record was clicked at high sample
+        # rates (the valve toggle contended with the always-busy sink). ---
+        self._sigmf_sink = None  # current sink, or None when not recording
 
         ##################################################
         # Connections
         ##################################################
-        self.connect((self.foo_valve_0, 0), (self.blocks_sigmf_sink_minimal_0, 0))
-        self.connect((self.uhd_usrp_source_0, 0), (self.foo_valve_0, 0))
-        self.connect((self.uhd_usrp_source_0, 0), (self.qtgui_freq_sink_x_0, 0))
-        self.connect((self.uhd_usrp_source_0, 0), (self.qtgui_waterfall_sink_x_0, 0))
+        # Display branch: source -> chunk -> decimate -> Python sink. The
+        # source differs between live (USRP) and playback (file → throttle →
+        # rotator for digital retuning).
+        if self._playback_mode:
+            self.connect((self._file_source, 0), (self._throttle, 0))
+            self.connect((self._throttle, 0), (self._rotator, 0))
+            self.connect((self._rotator, 0), (self._stream_to_vec, 0))
+        else:
+            self.connect((self.uhd_usrp_source_0, 0), (self._stream_to_vec, 0))
+        self.connect((self._stream_to_vec, 0), (self._keep_one_in_n, 0))
+        self.connect((self._keep_one_in_n, 0), (self._sample_sink, 0))
 
+        # Push the saved spectrum + waterfall + UI settings into the widgets
+        # now that everything exists. Top-level values (tuning, gain, samp,
+        # recording dir) were applied above via the variable initialisation.
+        self._apply_widget_settings()
+
+        # In playback mode, disable everything that depends on a real USRP.
+        if self._playback_mode:
+            self._apply_playback_ui()
+
+        # Set up the auto-update checker (background thread, fires the
+        # update-available signal if the configured manifest URL advertises
+        # a newer version). Configured URL = no traffic until the developer
+        # publishes one.
+        self._setup_update_checker()
+
+    @staticmethod
+    def _decim_for(samp_rate, target_vec_per_sec=20):
+        """Pick keep_one_in_n's N so the Python sink sees ~target vectors/sec."""
+        return max(1, int(round(samp_rate / CHUNK_SIZE / float(target_vec_per_sec))))
+
+    def _apply_playback_ui(self):
+        """Disable the controls that have no meaning for a recorded file
+        (sample rate, gain, recording) and label the recording status. The
+        Tuning group stays enabled — it drives a digital frequency shift
+        within the recording's bandwidth via blocks.rotator_cc."""
+        self.setWindowTitle(f"{APP_NAME}  —  v{APP_VERSION}  [Playback]")
+        self._tuning_group.setToolTip(
+            "Virtual tuning: shifts the spectrum digitally within the "
+            "recording's bandwidth. Outside ±(samp_rate/2) of the file's "
+            "original center frequency you'll just see noise / wrap-around.")
+        self._samp_rate_tool_bar.setEnabled(False)
+        self._samp_rate_tool_bar.setToolTip("Disabled in playback mode "
+                                             "(sample rate comes from the file).")
+        self._gain_win.setEnabled(False)
+        self._gain_win.setToolTip("Disabled in playback mode.")
+        self._record_tool_bar.setEnabled(False)
+        self._record_tool_bar.setToolTip("Recording is disabled in playback mode.")
+        self._recording_dir_button.setEnabled(False)
+        if self._playback_path:
+            self._recording_status.setText(
+                f"Playback (looping): {Path(self._playback_path).name}.sigmf-data")
+            self._recording_status.setToolTip(self._playback_path + '.sigmf-data')
+
+    def _build_menu_bar(self):
+        bar = QtWidgets.QMenuBar(self)
+        help_menu = bar.addMenu("&Help")
+        guide_act = QtGui.QAction("&User Guide", self)
+        guide_act.setShortcut(QtGui.QKeySequence.HelpContents)
+        guide_act.triggered.connect(self._show_help_dialog)
+        help_menu.addAction(guide_act)
+        update_act = QtGui.QAction("Check for &Updates…", self)
+        update_act.triggered.connect(self._check_for_updates_manual)
+        help_menu.addAction(update_act)
+        about_act = QtGui.QAction("&About…", self)
+        about_act.triggered.connect(self._show_about_dialog)
+        help_menu.addAction(about_act)
+        return bar
+
+    def _show_help_dialog(self):
+        HelpDialog(self).exec()
+
+    def _show_about_dialog(self):
+        dlg = AboutDialog(self._app_settings, self)
+        dlg.defaults_requested.connect(self._on_defaults_requested)
+        dlg.exec()
+
+    # --- auto-update plumbing ---
+
+    def _setup_update_checker(self):
+        """Create the checker, wire its signals to the notification dialog,
+        and kick off a background check if auto-check is on AND we haven't
+        checked recently AND a manifest URL is configured."""
+        s = self._app_settings
+        self._update_checker = UpdateChecker(s, parent=self)
+        self._update_checker.update_available.connect(self._show_update_dialog)
+        # Don't bother the user with no_update / check_failed on the auto path —
+        # those are connected only for the manual menu trigger via _check_for_updates_manual.
+        if not s.get_bool('updates', 'auto_check'):
+            return
+        if not s.get_str('updates', 'manifest_url').strip():
+            return  # no URL configured yet
+        # Debounce
+        last_iso = s.get_str('updates', 'last_check_iso')
+        try:
+            interval_h = max(1, s.get_int('updates', 'check_interval_hours'))
+        except Exception:
+            interval_h = 24
+        if last_iso:
+            try:
+                last = datetime.fromisoformat(last_iso)
+                if (datetime.now() - last).total_seconds() < interval_h * 3600:
+                    return  # checked recently, skip
+            except ValueError:
+                pass
+        # Trigger after the GUI has painted at least once so the dialog
+        # doesn't appear before the main window.
+        QTimer.singleShot(2000, self._update_checker.check_now)
+
+    @Slot(str, str, str)
+    def _show_update_dialog(self, latest, url, notes):
+        # Respect a previously-clicked "Skip this version" — don't re-show
+        # the dialog unless the manifest now advertises a strictly newer one.
+        dismissed = self._app_settings.get_str('updates', 'dismissed_version').strip()
+        if dismissed and _parse_version(latest) <= _parse_version(dismissed):
+            return
+        dlg = UpdateNotificationDialog(latest, url, notes, APP_VERSION, parent=self)
+        dlg.dismissed_for_version.connect(self._on_update_dismissed)
+        dlg.show()  # non-modal
+        # Keep a reference so it isn't garbage-collected when this slot returns.
+        self._update_dialog = dlg
+
+    @Slot(str)
+    def _on_update_dismissed(self, version):
+        self._app_settings.set('updates', 'dismissed_version', version)
+        try:
+            self._app_settings.save()
+        except OSError:
+            pass
+
+    def _check_for_updates_manual(self):
+        """Help → Check for Updates… handler. Wires the no_update /
+        check_failed signals to a one-shot dialog for this invocation."""
+        s = self._app_settings
+        url = s.get_str('updates', 'manifest_url').strip()
+        if not url:
+            QtWidgets.QMessageBox.information(
+                self, "Updates",
+                "Auto-update is not configured: the '[updates] manifest_url' "
+                "setting is empty.\n\nAsk the program's distributor for the "
+                "manifest URL and add it to your settings.ini, or use "
+                "Help → About → Open Settings Folder to find the file.")
+            return
+        # Make a one-off checker so its signals don't accumulate handlers.
+        ck = UpdateChecker(s, parent=self)
+        ck.update_available.connect(self._show_update_dialog)
+        ck.no_update.connect(lambda v: QtWidgets.QMessageBox.information(
+            self, "Updates",
+            f"You're running the latest version ({APP_VERSION}).\n\n"
+            f"Manifest reports latest = {v}."))
+        ck.check_failed.connect(lambda msg: QtWidgets.QMessageBox.warning(
+            self, "Update check failed",
+            f"Could not reach the update server.\n\n{msg}"))
+        ck.check_now()
+
+    def _on_defaults_requested(self):
+        """After 'Restore Defaults' rewrites the INI, push every saved value
+        back through the widgets and the flowgraph."""
+        s = self._app_settings
+        # Tuning + RX + recording dir
+        self.recording_dir = s.get_str('recording', 'directory')
+        os.makedirs(self.recording_dir, exist_ok=True)
+        self._recording_dir_button.setText("Folder: " + self._elided_dir())
+        self._recording_dir_button.setToolTip(self.recording_dir)
+        # set_* methods drive the flowgraph and re-save to settings, so guard
+        # with _applying_settings to avoid redundant writes.
+        self._applying_settings = True
+        try:
+            self.set_samp_rate(s.get_float('rx', 'samp_rate_hz'))
+            self.set_gain(s.get_float('rx', 'gain_db'))
+            self.set_freq_preset(s.get_float('tuning', 'preset_hz'))
+            self.set_freq_offset_0(s.get_float('tuning', 'coarse_hz'))
+            self.set_freq_offset(s.get_float('tuning', 'fine_hz'))
+            self.set_freq_manual(s.get_float('tuning', 'manual_hz'))
+        finally:
+            self._applying_settings = False
+        self._apply_widget_settings()
+
+    def _apply_widget_settings(self):
+        """Push spectrum/waterfall/UI settings into the plot widgets and
+        propagate to the processor."""
+        self._applying_settings = True
+        try:
+            self._fft_plot.apply_settings(self._app_settings)
+            self._waterfall_plot.apply_settings(self._app_settings)
+            panels_on = self._app_settings.get_bool('ui', 'control_panels_visible')
+            self._fft_plot._toggle_btn.setChecked(panels_on)
+            self._waterfall_plot._toggle_btn.setChecked(panels_on)
+        finally:
+            self._applying_settings = False
+        # Push the values into the processor explicitly (signals were blocked
+        # while we set the UI to avoid the save round-trip).
+        self._fft_plot.emit_settings_to_processor()
+
+    def _save_setting(self, section, key, value):
+        if self._applying_settings:
+            return
+        self._app_settings.set(section, key, value)
+        try:
+            self._app_settings.save()
+        except OSError as exc:
+            print(f"Settings save failed: {exc}", file=sys.stderr)
 
     def closeEvent(self, event):
-        self.settings = Qt.QSettings("gnuradio/flowgraphs", "b210_spectrum_analyzer")
+        # Keep QSettings purely for window geometry (binary blob, not
+        # appropriate for the hand-editable INI).
+        self.settings = QtCore.QSettings("gnuradio/flowgraphs", "b210_spectrum_analyzer")
         self.settings.setValue("geometry", self.saveGeometry())
+        # Persist app settings to INI one more time on close to flush any
+        # tail-end edits that didn't auto-save.
+        try:
+            self._app_settings.save()
+        except OSError as exc:
+            print(f"Settings save on close failed: {exc}", file=sys.stderr)
+        # Stop recording first (gracefully flush the SigMF file) before
+        # tearing down the flowgraph.
+        try:
+            self._stop_recording()
+        except Exception:
+            pass
+        # Restore the real stderr before GR shuts down so any shutdown logs
+        # land on the console rather than a closed pipe.
+        try:
+            self._overflow_monitor.stop()
+        except Exception:
+            pass
         self.stop()
         self.wait()
-
         event.accept()
 
     def _elided_dir(self):
@@ -313,7 +2513,7 @@ class b210_spectrum_analyzer(gr.top_block, Qt.QWidget):
         return d
 
     def _on_change_recording_dir(self):
-        new_dir = Qt.QFileDialog.getExistingDirectory(
+        new_dir = QtWidgets.QFileDialog.getExistingDirectory(
             self,
             "Choose recording folder",
             self.recording_dir,
@@ -321,14 +2521,39 @@ class b210_spectrum_analyzer(gr.top_block, Qt.QWidget):
         if not new_dir:
             return
         self.recording_dir = new_dir
-        self.settings.setValue("recording_dir", new_dir)
+        self._save_setting('recording', 'directory', new_dir)
         self._recording_dir_button.setText("Folder: " + self._elided_dir())
         self._recording_dir_button.setToolTip(new_dir)
-        Qt.QMessageBox.information(
+        QtWidgets.QMessageBox.information(
             self,
             "Recording folder changed",
             "New folder will be used the next time the program is launched."
         )
+
+    def _on_change_device_clicked(self):
+        """Re-open the device picker. Switching to a different USRP needs a
+        full flowgraph rebuild, so for now we just save the choice and tell
+        the user it'll take effect next launch."""
+        devices = find_b210s()
+        if not devices:
+            QtWidgets.QMessageBox.warning(
+                self, "No USRP found",
+                "No B210 is currently attached. Plug one in and try again.")
+            return
+        dlg = DevicePickerDialog(
+            devices, current_serial=self._device_serial, parent=self,
+            prompt="Pick a USRP for the next launch:")
+        if dlg.exec() != QtWidgets.QDialog.Accepted:
+            return
+        new_serial = dlg.selected_serial()
+        if not new_serial or new_serial == self._device_serial:
+            return
+        self._save_setting('rx', 'device_serial', new_serial)
+        QtWidgets.QMessageBox.information(
+            self, "USRP changed",
+            f"Will use serial '{new_serial}' on next launch.\n\n"
+            f"(Hot-swap of the USRP source is not supported yet — "
+            f"close and re-open the program to apply.)")
 
     def get_freq_preset(self):
         return self.freq_preset
@@ -337,6 +2562,7 @@ class b210_spectrum_analyzer(gr.top_block, Qt.QWidget):
         self.freq_preset = freq_preset
         self.set_center_freq((self.freq_manual if self.freq_preset == 0 else self.freq_preset) + self.freq_offset + self.freq_offset_0)
         self._freq_preset_callback(self.freq_preset)
+        self._save_setting('tuning', 'preset_hz', float(freq_preset))
 
     def get_freq_offset_0(self):
         return self.freq_offset_0
@@ -344,6 +2570,7 @@ class b210_spectrum_analyzer(gr.top_block, Qt.QWidget):
     def set_freq_offset_0(self, freq_offset_0):
         self.freq_offset_0 = freq_offset_0
         self.set_center_freq((self.freq_manual if self.freq_preset == 0 else self.freq_preset) + self.freq_offset + self.freq_offset_0)
+        self._save_setting('tuning', 'coarse_hz', float(freq_offset_0))
 
     def get_freq_offset(self):
         return self.freq_offset
@@ -351,6 +2578,7 @@ class b210_spectrum_analyzer(gr.top_block, Qt.QWidget):
     def set_freq_offset(self, freq_offset):
         self.freq_offset = freq_offset
         self.set_center_freq((self.freq_manual if self.freq_preset == 0 else self.freq_preset) + self.freq_offset + self.freq_offset_0)
+        self._save_setting('tuning', 'fine_hz', float(freq_offset))
 
     def get_freq_manual(self):
         return self.freq_manual
@@ -358,48 +2586,158 @@ class b210_spectrum_analyzer(gr.top_block, Qt.QWidget):
     def set_freq_manual(self, freq_manual):
         self.freq_manual = freq_manual
         self.set_center_freq((self.freq_manual if self.freq_preset == 0 else self.freq_preset) + self.freq_offset + self.freq_offset_0)
-        Qt.QMetaObject.invokeMethod(self._freq_manual_line_edit, "setText", Qt.Q_ARG("QString", eng_notation.num_to_str(self.freq_manual)))
+        QtCore.QMetaObject.invokeMethod(self._freq_manual_line_edit, "setText",
+                                        QtCore.Q_ARG("QString", eng_notation.num_to_str(self.freq_manual)))
+        self._save_setting('tuning', 'manual_hz', float(freq_manual))
 
     def get_samp_rate(self):
         return self.samp_rate
 
     def set_samp_rate(self, samp_rate):
+        if self._playback_mode or self.uhd_usrp_source_0 is None:
+            return  # rate is fixed by the playback file
         self.samp_rate = samp_rate
         self._samp_rate_callback(self.samp_rate)
-        self.qtgui_freq_sink_x_0.set_frequency_range(self.center_freq, self.samp_rate)
-        self.qtgui_waterfall_sink_x_0.set_frequency_range(self.center_freq, self.samp_rate)
+        self._fft_plot.set_frequency_range(self.center_freq, self.samp_rate)
+        self._waterfall_plot.set_frequency_range(self.center_freq, self.samp_rate)
+        self._keep_one_in_n.set_n(self._decim_for(self.samp_rate))
         self.uhd_usrp_source_0.set_samp_rate(self.samp_rate)
+        self._save_setting('rx', 'samp_rate_hz', float(samp_rate))
+        # Stale overflow indicators from the old rate aren't meaningful any
+        # more, and there's usually a small burst during retuning.
+        self._overflow_widget.clear()
 
     def get_record(self):
         return self.record
 
     def set_record(self, record):
-        self.record = record
+        # Intentionally NOT persisted — always launch with recording stopped.
+        new = int(record)
+        if new == self.record:
+            return
+        self.record = new
         self._record_callback(self.record)
-        self.foo_valve_0.set_open(bool(not self.record))
+        if self.record:
+            self._start_recording()
+        else:
+            self._stop_recording()
+
+    def _start_recording(self):
+        """Construct a fresh SigMF sink with a timestamped filename and
+        splice it into the running flowgraph via top_block.lock()/unlock()."""
+        if self._playback_mode or self.uhd_usrp_source_0 is None:
+            return  # nothing real to record from
+        if self._sigmf_sink is not None:
+            return  # already recording
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        base = os.path.join(self.recording_dir,
+                            f"DSES_Spectrum_Analyzer_{ts}")
+        try:
+            sink = blocks.sigmf_sink_minimal(
+                item_size=gr.sizeof_gr_complex,
+                filename=base,
+                sample_rate=self.samp_rate,
+                center_freq=self.center_freq,
+                author=APP_AUTHOR,
+                description='B210 capture, RX2 antenna',
+                hw_info='Ettus USRP B210',
+                is_complex=True)
+        except Exception as exc:
+            QtWidgets.QMessageBox.critical(
+                self, "Recording failed to start",
+                f"Could not create SigMF sink:\n\n{exc}")
+            # Roll the combo back to Stopped so the UI stays truthful.
+            self.record = 0
+            self._record_callback(0)
+            return
+        try:
+            self.lock()
+            try:
+                self.connect((self.uhd_usrp_source_0, 0), (sink, 0))
+            finally:
+                self.unlock()
+        except Exception as exc:
+            QtWidgets.QMessageBox.critical(
+                self, "Recording failed to start",
+                f"Could not splice SigMF sink into flowgraph:\n\n{exc}")
+            self.record = 0
+            self._record_callback(0)
+            return
+        self._sigmf_sink = sink
+        self._sigmf_sink_path = base
+        self._recording_status.setText(
+            f"Recording → {os.path.basename(base)}.sigmf-data")
+        self._recording_status.setToolTip(f"{base}.sigmf-data")
+
+    def _stop_recording(self):
+        """Pull the SigMF sink out of the flowgraph and drop the Python
+        reference so its destructor finalizes the data file."""
+        sink = self._sigmf_sink
+        if sink is None:
+            return
+        self._sigmf_sink = None
+        try:
+            self.lock()
+            try:
+                self.disconnect((self.uhd_usrp_source_0, 0), (sink, 0))
+            finally:
+                self.unlock()
+        except Exception as exc:
+            print(f"Recording disconnect failed: {exc}", file=sys.stderr)
+        del sink  # let GC run the destructor and flush the file
+        path = getattr(self, '_sigmf_sink_path', '')
+        if path:
+            self._recording_status.setText(
+                f"Saved → {os.path.basename(path)}.sigmf-data")
+            self._recording_status.setToolTip(f"{path}.sigmf-data")
+        else:
+            self._recording_status.setText("Idle")
+            self._recording_status.setToolTip("")
 
     def get_gain(self):
         return self.gain
 
     def set_gain(self, gain):
+        if self._playback_mode or self.uhd_usrp_source_0 is None:
+            return  # no gain knob in playback mode
         self.gain = gain
         self.uhd_usrp_source_0.set_gain(self.gain, 0)
+        self._save_setting('rx', 'gain_db', float(gain))
 
     def get_center_freq(self):
         return self.center_freq
 
     def set_center_freq(self, center_freq):
         self.center_freq = center_freq
-        self.qtgui_freq_sink_x_0.set_frequency_range(self.center_freq, self.samp_rate)
-        self.qtgui_waterfall_sink_x_0.set_frequency_range(self.center_freq, self.samp_rate)
-        self.uhd_usrp_source_0.set_center_freq(self.center_freq, 0)
+        self._fft_plot.set_frequency_range(self.center_freq, self.samp_rate)
+        self._waterfall_plot.set_frequency_range(self.center_freq, self.samp_rate)
+        if self._playback_mode:
+            # Virtual retune: shift the file's baseband by the offset between
+            # the requested center frequency and the file's original center.
+            # rotator_cc multiplies samples by exp(j*phase_inc*n), so a
+            # negative phase_inc shifts the spectrum down by the desired
+            # offset. Outside the file's bandwidth the user just sees the
+            # wrap-around / noise floor.
+            import math
+            offset_hz = self.center_freq - self._playback_center_freq
+            phase_inc = -2.0 * math.pi * offset_hz / self.samp_rate
+            self._rotator.set_phase_inc(phase_inc)
+            return
+        if self.uhd_usrp_source_0 is not None:
+            self.uhd_usrp_source_0.set_center_freq(self.center_freq, 0)
 
 
 
 
 def main(top_block_cls=b210_spectrum_analyzer, options=None):
 
-    qapp = Qt.QApplication(sys.argv)
+    qapp = QtWidgets.QApplication(sys.argv)
+    # Drive QStandardPaths.AppDataLocation to %APPDATA%/B210Analyzer (Windows)
+    # / ~/Library/Application Support/B210Analyzer (mac) / ~/.local/share/...
+    # Must be set BEFORE constructing the top block (which builds Settings).
+    QtWidgets.QApplication.setApplicationName("B210Analyzer")
+    QtWidgets.QApplication.setApplicationDisplayName(APP_NAME)
+    QtWidgets.QApplication.setApplicationVersion(APP_VERSION)
 
     tb = top_block_cls()
 
@@ -412,16 +2750,16 @@ def main(top_block_cls=b210_spectrum_analyzer, options=None):
         tb.stop()
         tb.wait()
 
-        Qt.QApplication.quit()
+        QtWidgets.QApplication.quit()
 
     signal.signal(signal.SIGINT, sig_handler)
     signal.signal(signal.SIGTERM, sig_handler)
 
-    timer = Qt.QTimer()
+    timer = QtCore.QTimer()
     timer.start(500)
     timer.timeout.connect(lambda: None)
 
-    qapp.exec_()
+    qapp.exec()
 
 if __name__ == '__main__':
     main()
