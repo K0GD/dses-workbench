@@ -1,0 +1,627 @@
+"""Convert Installing.md → DSES-styled DOCX + PDF.
+
+Produces both:
+    DSES_RFI_Spectrum_Analyzer_Installation.docx   (editable source)
+    DSES_RFI_Spectrum_Analyzer_Installation.pdf    (the deliverable)
+
+The DOCX is built with python-docx and styled to match the DSES house
+template (margins, title color, Heading 1 white-on-teal banner, Heading 3
+dark-teal, page header with "DSES" + subtitle, footer with date + page
+number). The PDF is produced by docx2pdf, which drives Microsoft Word via
+COM — this gives a faithful conversion of the styled .docx.
+
+Handles the Markdown subset used in Installing.md:
+    # / ## / ###       — headings
+    paragraphs         — regular text with inline **bold**, *italic*, `code`
+    - / *              — bulleted lists
+    1.                 — numbered lists
+    ```                — fenced code blocks (monospace, light-gray background)
+    | a | b |          — tables (with --- alignment separator)
+    [text](url)        — hyperlinks (rendered as text with the URL after, since
+                         full hyperlink XML in python-docx is verbose)
+
+Run from the project root with the project's conda env:
+    .conda\\python.exe build_install_docx.py
+"""
+
+from __future__ import annotations
+
+import html
+import re
+import sys
+from datetime import date
+from pathlib import Path
+
+from docx import Document
+from docx.shared import Pt, Inches, RGBColor, Cm
+from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_BREAK
+from docx.oxml.ns import qn
+from docx.oxml import OxmlElement
+
+
+# ---------------------------------------------------------------------------
+# Smart-quote pre-pass: convert ASCII apostrophes and double quotes in body
+# text to typographer equivalents, leaving fenced code blocks and inline
+# `code` spans untouched. Matches DSES house style (Word's AutoCorrect would
+# do the same thing for hand-typed text, but python-docx writes text
+# verbatim and Word's autocorrect doesn't run on programmatic content).
+# ---------------------------------------------------------------------------
+
+LEFT_DOUBLE  = '“'   # "
+RIGHT_DOUBLE = '”'   # "
+APOSTROPHE   = '’'   # ’ (also doubles as right single quote)
+
+
+def smartify_quotes(text: str) -> str:
+    out = []
+    in_fence = False
+    dq_state = {'open': True}  # next " is opening
+    for line in text.split('\n'):
+        if line.lstrip().startswith('```'):
+            in_fence = not in_fence
+            out.append(line)
+            continue
+        if in_fence:
+            out.append(line)
+            continue
+        # Reset double-quote state on paragraph breaks so an unmatched quote
+        # in one paragraph doesn't flip the polarity for the next.
+        if line.strip() == '':
+            dq_state['open'] = True
+        out.append(_smartify_line(line, dq_state))
+    return '\n'.join(out)
+
+
+def _smartify_line(line: str, dq_state: dict) -> str:
+    result = []
+    i = 0
+    n = len(line)
+    while i < n:
+        c = line[i]
+        if c == '`':
+            # Inline code span — emit verbatim through the closing backtick.
+            j = line.find('`', i + 1)
+            if j == -1:
+                result.append(c)
+                i += 1
+                continue
+            result.append(line[i:j + 1])
+            i = j + 1
+            continue
+        if c == "'":
+            # Apostrophe only if it's after a letter (contraction / possessive).
+            # Leave others straight — they might be opening single quotes,
+            # feet markers, or other punctuation.
+            prev = line[i - 1] if i > 0 else ''
+            if prev.isalpha():
+                result.append(APOSTROPHE)
+            else:
+                result.append(c)
+            i += 1
+            continue
+        if c == '"':
+            result.append(LEFT_DOUBLE if dq_state['open'] else RIGHT_DOUBLE)
+            dq_state['open'] = not dq_state['open']
+            i += 1
+            continue
+        result.append(c)
+        i += 1
+    return ''.join(result)
+
+
+# Defaults for the install guide; CLI options can override. Used as module-
+# level constants because the cover-page / header builders read them.
+SRC = Path("Installing.md")
+DST_DOCX = Path("DSES_RFI_Spectrum_Analyzer_Installation.docx")
+DST_PDF  = Path("DSES_RFI_Spectrum_Analyzer_Installation.pdf")
+DOC_TITLE    = "B210 Spectrum Analyzer"
+DOC_SUBTITLE = "Installation Guide"
+DOC_VERSION  = "v1.0.0"
+DOC_AUTHOR   = "Richard M Hambly (K0GD)"
+DOC_ORG      = "DSES"
+
+# DSES house style (pulled from EVE-26 + Pulsar installation reference docs)
+TITLE_COLOR_RGB     = RGBColor(0x15, 0x60, 0x82)  # teal/blue
+H1_BG_HEX           = "156082"                    # same teal as banner fill
+H1_TEXT_RGB         = RGBColor(0xFF, 0xFF, 0xFF)  # white on the banner
+H3_COLOR_RGB        = RGBColor(0x0A, 0x2F, 0x40)  # dark teal
+SUBTITLE_COLOR_RGB  = RGBColor(0x59, 0x59, 0x59)  # mid-gray
+CODE_FILL_HEX       = "F2F2F2"                    # very light gray
+PAGE_MARGINS = dict(  # inches; matches both DSES reference documents
+    left=1.00, right=0.81, top=1.36, bottom=1.00,
+)
+
+
+# ---------------------------------------------------------------------------
+# Inline run handling — split "...some **bold** and `code` text..." into a
+# list of (text, style_dict) tuples.
+# ---------------------------------------------------------------------------
+
+INLINE_RE = re.compile(
+    r'(\*\*[^*]+\*\*|`[^`]+`|\*[^*]+\*|\[[^\]]+\]\([^)]+\))'
+)
+LINK_RE = re.compile(r'\[([^\]]+)\]\(([^)]+)\)')
+
+
+def parse_inline(text: str):
+    pos = 0
+    for m in INLINE_RE.finditer(text):
+        if m.start() > pos:
+            yield text[pos:m.start()], {}
+        token = m.group(0)
+        if token.startswith('**'):
+            yield token[2:-2], {'bold': True}
+        elif token.startswith('`'):
+            yield token[1:-1], {'code': True}
+        elif token.startswith('['):
+            lm = LINK_RE.match(token)
+            if lm:
+                label, url = lm.group(1), lm.group(2)
+                if label.strip() == url.strip():
+                    yield label, {'code': True}
+                else:
+                    yield label, {}
+                    yield f" ({url})", {'code': True}
+        elif token.startswith('*'):
+            yield token[1:-1], {'italic': True}
+        pos = m.end()
+    if pos < len(text):
+        yield text[pos:], {}
+
+
+def add_runs(paragraph, text: str):
+    for chunk, style in parse_inline(text):
+        if not chunk:
+            continue
+        chunk = html.unescape(chunk)
+        run = paragraph.add_run(chunk)
+        if style.get('bold'):
+            run.bold = True
+        if style.get('italic'):
+            run.italic = True
+        if style.get('code'):
+            run.font.name = 'Consolas'
+            run.font.size = Pt(10)
+
+
+# ---------------------------------------------------------------------------
+# DSES style primitives — small wrappers around the raw OOXML so the body
+# of the document builder stays readable.
+# ---------------------------------------------------------------------------
+
+def set_cell_shading(cell, color_hex):
+    tc_pr = cell._tc.get_or_add_tcPr()
+    shd = OxmlElement('w:shd')
+    shd.set(qn('w:fill'), color_hex)
+    shd.set(qn('w:val'), 'clear')
+    tc_pr.append(shd)
+
+
+def set_paragraph_shading(paragraph, color_hex):
+    """Paint a solid fill behind a paragraph (used for the DSES H1 banner)."""
+    pPr = paragraph._element.get_or_add_pPr()
+    shd = OxmlElement('w:shd')
+    shd.set(qn('w:val'), 'clear')
+    shd.set(qn('w:color'), 'auto')
+    shd.set(qn('w:fill'), color_hex)
+    pPr.append(shd)
+
+
+def add_page_number_field(paragraph):
+    """Insert a PAGE field code so Word numbers pages live."""
+    run = paragraph.add_run()
+    for tag in ('begin', None, 'end'):
+        if tag is None:
+            instr = OxmlElement('w:instrText')
+            instr.text = 'PAGE'
+            run._r.append(instr)
+        else:
+            ch = OxmlElement('w:fldChar')
+            ch.set(qn('w:fldCharType'), tag)
+            run._r.append(ch)
+
+
+def add_page_break(doc):
+    p = doc.add_paragraph()
+    p.add_run().add_break(WD_BREAK.PAGE)
+
+
+# ---------------------------------------------------------------------------
+# Cover page + section header/footer (DSES house style)
+# ---------------------------------------------------------------------------
+
+def configure_section(section):
+    section.left_margin   = Inches(PAGE_MARGINS['left'])
+    section.right_margin  = Inches(PAGE_MARGINS['right'])
+    section.top_margin    = Inches(PAGE_MARGINS['top'])
+    section.bottom_margin = Inches(PAGE_MARGINS['bottom'])
+
+    # Header: "DSES" on line 1, document subtitle on line 2.
+    hdr = section.header
+    # Reuse existing first paragraph; we control its content fully.
+    p1 = hdr.paragraphs[0]
+    p1.text = ''
+    r = p1.add_run(DOC_ORG)
+    r.bold = True
+    r.font.size = Pt(11)
+    r.font.color.rgb = TITLE_COLOR_RGB
+    p2 = hdr.add_paragraph()
+    r2 = p2.add_run(DOC_SUBTITLE)
+    r2.italic = True
+    r2.font.size = Pt(9)
+    r2.font.color.rgb = SUBTITLE_COLOR_RGB
+
+    # Footer: date <tab> page number — matches the reference DSES docs.
+    fp = section.footer.paragraphs[0]
+    fp.text = ''
+    today = date.today().strftime("%d-%b-%y")  # e.g. "16-May-26"
+    fr = fp.add_run(today)
+    fr.font.size = Pt(9)
+    fr.font.color.rgb = SUBTITLE_COLOR_RGB
+    fp.add_run('\t')
+    add_page_number_field(fp)
+    for run in fp.runs:
+        run.font.size = Pt(9)
+        run.font.color.rgb = SUBTITLE_COLOR_RGB
+
+
+def add_table_of_contents(doc):
+    """Insert a Word TOC field that auto-populates from Heading 1-3 styles.
+    The field shows placeholder text until Word evaluates it — our
+    convert_docx_to_pdf() opens the doc, calls Fields.Update(), and only
+    then saves to PDF so the printed TOC is fully populated."""
+    # "Contents" heading — same banner style as other Heading 1s.
+    p = doc.add_heading("Contents", level=1)
+    set_paragraph_shading(p, H1_BG_HEX)
+
+    # The TOC field itself.
+    para = doc.add_paragraph()
+    run = para.add_run()
+    r = run._r
+    # <w:fldChar w:fldCharType="begin"/>
+    begin = OxmlElement('w:fldChar')
+    begin.set(qn('w:fldCharType'), 'begin')
+    r.append(begin)
+    # <w:instrText xml:space="preserve">TOC \o "1-3" \h \z \u</w:instrText>
+    instr = OxmlElement('w:instrText')
+    instr.set(qn('xml:space'), 'preserve')
+    instr.text = r'TOC \o "1-3" \h \z \u'  # H1-H3, hyperlinks, hide tab leader, use outline
+    r.append(instr)
+    # <w:fldChar w:fldCharType="separate"/>
+    sep = OxmlElement('w:fldChar')
+    sep.set(qn('w:fldCharType'), 'separate')
+    r.append(sep)
+    # Placeholder text shown until Word updates the field.
+    placeholder = OxmlElement('w:t')
+    placeholder.text = "(Right-click → Update Field, or run the build script to regenerate the PDF.)"
+    r.append(placeholder)
+    # <w:fldChar w:fldCharType="end"/>
+    end = OxmlElement('w:fldChar')
+    end.set(qn('w:fldCharType'), 'end')
+    r.append(end)
+
+    add_page_break(doc)
+
+
+def add_cover_page(doc):
+    # Two empty paragraphs at the top push the title down a few cm
+    for _ in range(2):
+        doc.add_paragraph()
+
+    title = doc.add_paragraph()
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    tr = title.add_run(DOC_TITLE)
+    tr.font.size = Pt(26)
+    tr.font.color.rgb = TITLE_COLOR_RGB
+    tr.bold = True
+
+    subtitle = doc.add_paragraph()
+    subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    sr = subtitle.add_run(DOC_SUBTITLE)
+    sr.font.size = Pt(16)
+    sr.font.color.rgb = SUBTITLE_COLOR_RGB
+    sr.italic = True
+
+    for _ in range(2):
+        doc.add_paragraph()
+
+    # If the project ships a PNG icon, drop it on the cover as a small mark.
+    icon_path = Path('icons/b210.png')
+    if icon_path.exists():
+        p = doc.add_paragraph()
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        p.add_run().add_picture(str(icon_path), width=Inches(1.5))
+
+    for _ in range(3):
+        doc.add_paragraph()
+
+    # Version / author / org / date stacked at the bottom of the cover.
+    for text in (
+        f"Version {DOC_VERSION.lstrip('v')}",
+        DOC_AUTHOR,
+        DOC_ORG,
+        date.today().strftime("%B %Y"),
+    ):
+        p = doc.add_paragraph()
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        r = p.add_run(text)
+        r.font.size = Pt(12)
+        r.font.color.rgb = SUBTITLE_COLOR_RGB
+    add_page_break(doc)
+
+
+def apply_heading_styles(doc):
+    """Tweak the built-in heading styles to match DSES (after the doc is
+    created, since python-docx populates styles from the default template)."""
+    h1 = doc.styles['Heading 1']
+    h1.font.color.rgb = H1_TEXT_RGB
+    h1.font.size = Pt(11)
+    h1.font.bold = True
+    # Heading-2 stays default (slate); Heading 3 → dark teal
+    h3 = doc.styles['Heading 3']
+    h3.font.color.rgb = H3_COLOR_RGB
+    h3.font.bold = True
+
+    normal = doc.styles['Normal']
+    normal.font.name = 'Calibri'
+    normal.font.size = Pt(11)
+
+
+# ---------------------------------------------------------------------------
+# Code blocks + tables (unchanged from previous version)
+# ---------------------------------------------------------------------------
+
+def add_code_block(doc, lines):
+    table = doc.add_table(rows=1, cols=1)
+    table.autofit = True
+    cell = table.cell(0, 0)
+    set_cell_shading(cell, CODE_FILL_HEX)
+    cell.text = ''
+    first = True
+    for line in lines:
+        p = cell.paragraphs[0] if first else cell.add_paragraph()
+        first = False
+        run = p.add_run(line)
+        run.font.name = 'Consolas'
+        run.font.size = Pt(9)
+
+
+def add_table(doc, header_row, body_rows):
+    cols = len(header_row)
+    table = doc.add_table(rows=1 + len(body_rows), cols=cols)
+    table.style = 'Light Grid Accent 1'
+    for j, cell_text in enumerate(header_row):
+        cell = table.rows[0].cells[j]
+        cell.text = ''
+        add_runs(cell.paragraphs[0], cell_text)
+        for run in cell.paragraphs[0].runs:
+            run.bold = True
+    for i, row in enumerate(body_rows):
+        for j in range(cols):
+            cell_text = row[j] if j < len(row) else ''
+            cell = table.rows[1 + i].cells[j]
+            cell.text = ''
+            add_runs(cell.paragraphs[0], cell_text)
+
+
+def parse_table_block(lines, start):
+    def split_row(s):
+        s = s.strip()
+        if s.startswith('|'):
+            s = s[1:]
+        if s.endswith('|'):
+            s = s[:-1]
+        return [c.strip() for c in s.split('|')]
+    i = start
+    header = split_row(lines[i]); i += 1
+    i += 1  # alignment row
+    body = []
+    while i < len(lines) and lines[i].strip().startswith('|'):
+        body.append(split_row(lines[i]))
+        i += 1
+    return header, body, i
+
+
+# ---------------------------------------------------------------------------
+# Main parser
+# ---------------------------------------------------------------------------
+
+def md_to_docx(src_path: Path, dst_path: Path):
+    text = src_path.read_text(encoding='utf-8')
+    text = smartify_quotes(text)
+    lines = text.split('\n')
+
+    doc = Document()
+    configure_section(doc.sections[0])
+    apply_heading_styles(doc)
+    add_cover_page(doc)
+    add_table_of_contents(doc)
+
+    # Style a Heading-1 paragraph so it gets the teal banner. We do this by
+    # post-processing each Heading-1 paragraph after add_heading() rather
+    # than wiring it into the global style (which would also paint the TOC,
+    # the cover page, etc., with shading).
+    def add_h1_banner(text):
+        p = doc.add_heading(text, level=1)
+        set_paragraph_shading(p, H1_BG_HEX)
+
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+
+        if stripped.startswith('```'):
+            code_lines = []
+            i += 1
+            while i < len(lines) and not lines[i].strip().startswith('```'):
+                code_lines.append(lines[i])
+                i += 1
+            i += 1
+            add_code_block(doc, code_lines)
+            continue
+
+        if stripped.startswith('|') and i + 1 < len(lines) \
+                and re.match(r'^\s*\|[\s\-:|]+\|\s*$', lines[i + 1]):
+            header, body, i = parse_table_block(lines, i)
+            add_table(doc, header, body)
+            continue
+
+        if stripped.startswith('### '):
+            doc.add_heading(stripped[4:], level=3)
+            i += 1; continue
+        if stripped.startswith('## '):
+            doc.add_heading(stripped[3:], level=2)
+            i += 1; continue
+        if stripped.startswith('# '):
+            add_h1_banner(stripped[2:])
+            i += 1; continue
+
+        if re.match(r'^\s*[-*]\s+', line):
+            while i < len(lines) and re.match(r'^\s*[-*]\s+', lines[i]):
+                content = re.sub(r'^\s*[-*]\s+', '', lines[i])
+                p = doc.add_paragraph(style='List Bullet')
+                add_runs(p, content)
+                i += 1
+            continue
+
+        if re.match(r'^\s*\d+\.\s+', line):
+            while i < len(lines) and re.match(r'^\s*\d+\.\s+', lines[i]):
+                content = re.sub(r'^\s*\d+\.\s+', '', lines[i])
+                p = doc.add_paragraph(style='List Number')
+                add_runs(p, content)
+                while (i + 1 < len(lines) and lines[i + 1].startswith('   ')
+                       and not re.match(r'^\s*\d+\.\s+', lines[i + 1])
+                       and not re.match(r'^\s*[-*]\s+', lines[i + 1])
+                       and lines[i + 1].strip() != ''):
+                    i += 1
+                    cont = lines[i].strip()
+                    if cont.startswith('```'):
+                        code_lines = []
+                        i += 1
+                        while i < len(lines) and not lines[i].strip().startswith('```'):
+                            code_lines.append(lines[i].lstrip())
+                            i += 1
+                        add_code_block(doc, code_lines)
+                    elif cont:
+                        cp = doc.add_paragraph()
+                        cp.paragraph_format.left_indent = Inches(0.5)
+                        add_runs(cp, cont)
+                i += 1
+            continue
+
+        if stripped == '':
+            i += 1; continue
+
+        # Paragraph: coalesce wrapped lines
+        para_lines = [line]
+        i += 1
+        while i < len(lines):
+            nxt = lines[i]
+            ns = nxt.strip()
+            if ns == '' or ns.startswith(('#', '-', '*', '|', '```')) \
+                    or re.match(r'^\s*\d+\.\s+', nxt):
+                break
+            para_lines.append(nxt)
+            i += 1
+        p = doc.add_paragraph()
+        add_runs(p, ' '.join(s.strip() for s in para_lines))
+
+    doc.save(dst_path)
+    print(f"Wrote {dst_path} ({dst_path.stat().st_size // 1024} KB)")
+
+
+def _kill_stale_invisible_word():
+    """Kill any orphaned background Word processes left over from a
+    previous run that crashed between Documents.Open and word.Quit.
+    Skipped silently if psutil isn't available."""
+    try:
+        import psutil
+    except ImportError:
+        return
+    for p in psutil.process_iter(['name']):
+        if (p.info.get('name') or '').lower() == 'winword.exe':
+            try:
+                p.kill()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+
+
+def convert_docx_to_pdf(docx_path: Path, pdf_path: Path):
+    """Open the DOCX in Word, update every field (TOC + PAGE), then save
+    as PDF. Direct pywin32 instead of docx2pdf so we control the field-
+    update step — without it the TOC stays as the placeholder text.
+    Requires Microsoft Word on Windows.
+
+    Note: kills any leftover background winword.exe before starting. If
+    you have Word open with a document you care about, save first."""
+    _kill_stale_invisible_word()
+    import win32com.client
+    word = win32com.client.Dispatch('Word.Application')
+    word.Visible = False
+    try:
+        doc = word.Documents.Open(str(docx_path.resolve()))
+        try:
+            # Update headers/footers + body fields. Run twice: the first
+            # pass renders the TOC entries which can change page counts,
+            # the second pass corrects the TOC's page numbers in light of
+            # the new layout.
+            for _ in range(2):
+                doc.Fields.Update()
+                # TablesOfContents may also need its own Update call on some
+                # Word builds.
+                try:
+                    if doc.TablesOfContents.Count > 0:
+                        doc.TablesOfContents(1).Update()
+                except Exception:
+                    pass
+            # wdFormatPDF = 17
+            doc.SaveAs(str(pdf_path.resolve()), FileFormat=17)
+            # Save the .docx too so the populated TOC persists for future
+            # opens in Word (otherwise the TOC reverts to the placeholder).
+            doc.Save()
+        finally:
+            doc.Close(SaveChanges=False)
+    finally:
+        word.Quit()
+    print(f"Wrote {pdf_path} ({pdf_path.stat().st_size // 1024} KB)")
+
+
+def main():
+    global DOC_TITLE, DOC_SUBTITLE  # cover-page/header read these as globals
+    import argparse
+    ap = argparse.ArgumentParser(
+        description="Build a DSES-styled DOCX + PDF from a Markdown source.")
+    ap.add_argument('src', nargs='?', default=str(SRC),
+                    help=f"Markdown source (default: {SRC})")
+    ap.add_argument('--docx', default=str(DST_DOCX),
+                    help=f"DOCX output path (default: {DST_DOCX})")
+    ap.add_argument('--pdf', default=str(DST_PDF),
+                    help=f"PDF output path (default: {DST_PDF})")
+    ap.add_argument('--title', default=DOC_TITLE,
+                    help=f"Cover-page title (default: {DOC_TITLE!r})")
+    ap.add_argument('--subtitle', default=DOC_SUBTITLE,
+                    help=f"Cover-page + header subtitle "
+                         f"(default: {DOC_SUBTITLE!r})")
+    args = ap.parse_args()
+    DOC_TITLE = args.title
+    DOC_SUBTITLE = args.subtitle
+
+    src = Path(args.src)
+    docx_out = Path(args.docx)
+    pdf_out = Path(args.pdf)
+    if not src.exists():
+        print(f"Source not found: {src}", file=sys.stderr)
+        sys.exit(1)
+    md_to_docx(src, docx_out)
+    try:
+        convert_docx_to_pdf(docx_out, pdf_out)
+    except Exception as exc:
+        print(f"PDF conversion failed: {type(exc).__name__}: {exc}",
+              file=sys.stderr)
+        print("The .docx was still produced; you can open it in Word and "
+              "use File → Save As → PDF manually.", file=sys.stderr)
+        sys.exit(2)
+
+
+if __name__ == '__main__':
+    main()
