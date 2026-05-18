@@ -2067,6 +2067,139 @@ class UhdB200Source(RadioSource):
         self.block.set_gain(db, 0)
 
 
+# Per-Soapy-driver default sample-rate lists and gain ranges. SDRPlay
+# devices share the same set; RTL-SDR is fixed at 2.4 MHz or 2.048 MHz
+# in practice; HackRF can do up to 20 MHz; Airspy two rates; etc.
+# These are used as the sidebar combo's options when the running source
+# is the matching driver. If the device reports a different range via
+# get_sample_rate_range(), the actual values are clamped at use time.
+SOAPY_DEFAULTS = {
+    # SDRPlay RSPx supports a set of discrete rates up to ~10 MHz.
+    'sdrplay':  {
+        'samp_rates': [2e6, 3e6, 4e6, 5e6, 6e6, 7e6, 8e6, 9e6, 10e6],
+        'gain':      (0.0, 59.0, 1.0),   # overall gain (dB) range
+        'product':   "SDRPlay",
+    },
+    'rtlsdr':   {
+        'samp_rates': [0.25e6, 1.024e6, 1.4e6, 1.8e6, 1.92e6,
+                       2.048e6, 2.4e6, 2.56e6, 2.8e6, 3.2e6],
+        'gain':      (0.0, 49.6, 1.0),
+        'product':   "RTL-SDR",
+    },
+    'hackrf':   {
+        'samp_rates': [2e6, 4e6, 8e6, 10e6, 12.5e6, 16e6, 20e6],
+        'gain':      (0.0, 47.0, 1.0),   # combined LNA + VGA approximation
+        'product':   "HackRF",
+    },
+    'airspy':   {
+        'samp_rates': [2.5e6, 10e6],
+        'gain':      (0.0, 21.0, 1.0),
+        'product':   "Airspy",
+    },
+    'airspyhf': {
+        'samp_rates': [0.192e6, 0.256e6, 0.384e6, 0.768e6, 0.912e6],
+        'gain':      (0.0, 48.0, 1.0),
+        'product':   "Airspy HF+",
+    },
+    'bladerf':  {
+        'samp_rates': [1e6, 2e6, 4e6, 8e6, 10e6, 16e6, 20e6, 25e6, 30e6, 40e6],
+        'gain':      (0.0, 60.0, 1.0),
+        'product':   "BladeRF",
+    },
+    'lime':     {
+        'samp_rates': [2e6, 4e6, 5e6, 10e6, 15e6, 20e6, 30e6, 40e6],
+        'gain':      (0.0, 70.0, 1.0),
+        'product':   "LimeSDR",
+    },
+    'plutosdr': {
+        'samp_rates': [0.6e6, 1e6, 2e6, 4e6, 5e6, 8e6, 10e6, 20e6, 30.72e6, 61.44e6],
+        'gain':      (0.0, 73.0, 1.0),
+        'product':   "PlutoSDR",
+    },
+}
+
+
+class SoapyGenericSource(RadioSource):
+    """Wraps gr-soapy's source block for any SoapySDR-recognised radio.
+    Sample rate options and gain range come from SOAPY_DEFAULTS when the
+    driver is known; otherwise we leave the defaults from the base class.
+    The constructor signature mirrors UhdB200Source so the dispatch site
+    in b210_spectrum_analyzer.__init__ stays uniform."""
+
+    def __init__(self, driver: str, serial: str, samp_rate: float,
+                 center_freq: float, gain: float, product: str = ""):
+        from gnuradio import soapy
+        self._driver = driver
+        self._serial = serial
+        defaults = SOAPY_DEFAULTS.get(driver, {})
+        self.samp_rate_options = list(defaults.get(
+            'samp_rates', RadioSource.samp_rate_options))
+        self.gain_range = defaults.get('gain', RadioSource.gain_range)
+        # Build the SoapySDR device-address string. driver= is required;
+        # serial= disambiguates when multiple devices of the same driver
+        # are attached.
+        dev_args = f"driver={driver}"
+        if serial:
+            dev_args += f",serial={serial}"
+        # gr-soapy source signature is positional:
+        #   soapy.source(device, type, nchan, dev_args='', stream_args='',
+        #                tune_args=[''], other_settings=[''])
+        # We pass device-init args twice (once as device string, once in
+        # dev_args) — the block accepts the redundancy.
+        self.block = soapy.source(
+            dev_args,                # SoapySDR device address
+            "fc32",                  # complex64 output
+            1,                       # 1 channel
+            '',                      # dev_args (already in device string)
+            '',                      # stream_args
+            [''],                    # tune_args per channel
+            [''],                    # other_settings per channel
+        )
+        # Clamp samp_rate to what the driver supports if known.
+        if self.samp_rate_options and samp_rate not in self.samp_rate_options:
+            # Pick the closest supported rate ≤ requested.
+            below = [r for r in self.samp_rate_options if r <= samp_rate]
+            samp_rate = max(below) if below else min(self.samp_rate_options)
+        # Clamp gain to the driver's range.
+        lo, hi, _ = self.gain_range
+        gain = max(lo, min(hi, gain))
+        self.block.set_sample_rate(0, samp_rate)
+        self.block.set_frequency(0, center_freq)
+        # gr-soapy's set_gain(channel, value) takes overall gain in dB.
+        # Some drivers (notably SDRPlay) expose multiple gain stages; the
+        # overall setter applies the SoapySDR generic distribution.
+        try:
+            self.block.set_gain(0, float(gain))
+        except Exception as exc:
+            # Some Soapy drivers fail on overall set_gain when only named
+            # stages exist; don't kill the whole flow on a non-critical
+            # setter failure.
+            print(f"Soapy set_gain warning ({driver}): {exc}",
+                  file=sys.stderr)
+
+        nice_name = product or defaults.get('product') or driver
+        self.display_label = f"{nice_name} — {serial or '(no serial)'}"
+
+    def set_samp_rate(self, hz: float) -> None:
+        # Round to the nearest supported rate when we have a list.
+        if self.samp_rate_options:
+            hz = min(self.samp_rate_options,
+                     key=lambda r: abs(r - float(hz)))
+        self.block.set_sample_rate(0, hz)
+
+    def set_center_freq(self, hz: float) -> None:
+        self.block.set_frequency(0, hz)
+
+    def set_gain(self, db: float) -> None:
+        lo, hi, _ = self.gain_range
+        db = max(lo, min(hi, float(db)))
+        try:
+            self.block.set_gain(0, db)
+        except Exception as exc:
+            print(f"Soapy set_gain warning ({self._driver}): {exc}",
+                  file=sys.stderr)
+
+
 class b210_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
 
     # Both bases define `connect` and `disconnect`. PySide6's QObject.connect/
@@ -2302,28 +2435,44 @@ class b210_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
             # center frequency; set_center_freq updates this.
             self._rotator = blocks.rotator_cc(0.0)
         else:
-            # Build the source through the RadioSource interface. Phase 3
-            # adds a SoapyGenericSource branch here for SDRPlay / RTL-SDR /
-            # HackRF / etc.; until then any non-UHD device routes through
-            # the picker's "saved device not attached" warning when its
-            # driver doesn't match.
+            # Build the source through the RadioSource interface. UHD
+            # drives B200/B210; everything else (SDRPlay / RTL-SDR / HackRF
+            # / Airspy / BladeRF / Lime / PlutoSDR) goes through gr-soapy.
             assert isinstance(chosen, dict)  # re-narrow for the type checker
-            if self._device_driver == DRIVER_UHD_B200:
-                self._source = UhdB200Source(
-                    serial=chosen['serial'], samp_rate=samp_rate,
-                    center_freq=center_freq, gain=gain)
-            else:
+            driver = chosen['driver']
+            try:
+                src: RadioSource
+                if driver == DRIVER_UHD_B200:
+                    src = UhdB200Source(
+                        serial=chosen['serial'], samp_rate=samp_rate,
+                        center_freq=center_freq, gain=gain)
+                else:
+                    src = SoapyGenericSource(
+                        driver=driver,
+                        serial=chosen['serial'],
+                        samp_rate=samp_rate,
+                        center_freq=center_freq,
+                        gain=gain,
+                        product=chosen.get('product', ''))
+                    # If the Soapy driver only supports a discrete rate
+                    # list, pick the closest supported rate ≤ what we
+                    # asked for and update self.samp_rate to match.
+                    if src.samp_rate_options:
+                        samp_rate = min(
+                            src.samp_rate_options,
+                            key=lambda r: abs(r - samp_rate))
+                        self.samp_rate = samp_rate
+            except Exception as exc:
                 QtWidgets.QMessageBox.critical(
-                    self, "Driver not yet supported",
-                    f"The selected radio uses the '{self._device_driver}' "
-                    f"driver, which isn't wired up yet in this build. "
-                    f"Pick a UHD B210 from the device picker, or attach one "
-                    f"and relaunch.")
+                    self, "Radio failed to open",
+                    f"Could not open {chosen['label']}:\n\n"
+                    f"{type(exc).__name__}: {exc}")
                 raise SystemExit(0)
+            self._source = src
             # Keep the legacy attribute pointing at the raw GR block so the
             # recording-chain connect/disconnect and the live-mode setter
             # guards don't need to change yet.
-            self.uhd_usrp_source_0 = self._source.block
+            self.uhd_usrp_source_0 = src.block
 
         # --- Spectrum display (replaces qtgui freq_sink + waterfall_sink) ---
         # Decimate aggressively before the Python sink: at 20 MS/s a pure-Python
