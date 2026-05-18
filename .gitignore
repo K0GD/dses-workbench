@@ -40,3 +40,6 @@ desktop.ini
 
 # Logs
 *.log
+
+# Microsoft Word lock files (created while a .docx is open in Word)
+~$*
