@@ -1932,6 +1932,79 @@ class UpdateNotificationDialog(QtWidgets.QDialog):
         self.close()
 
 
+# === Radio source abstraction ===
+
+class RadioSource:
+    """Common interface for whatever produces baseband I/Q samples for the
+    flowgraph — currently UHD's USRP source; SoapySDR-backed devices land
+    in a sibling subclass. The main class doesn't talk to UHD directly any
+    more; it talks through this interface so the wiring is swappable.
+
+    Subclasses set `self.block` to the GR block emitting complex64 samples
+    and implement the three set_* methods. `samp_rate_options` and
+    `gain_range` let the UI adapt to the device's capabilities (subclasses
+    override when the defaults — B210's range — aren't right)."""
+
+    # The GR source block. Connected to the display chain at
+    # b210_spectrum_analyzer.__init__'s "Connections" section.
+    block = None
+
+    # Discrete sample-rate choices the sidebar combo offers. Defaults to
+    # FFT_SIZES-friendly rates that the B210 supports up to 25 MHz; Soapy
+    # sources override with the device's actually-supported set.
+    samp_rate_options = list(FFT_SIZES)  # placeholder; B210 overrides
+
+    # (min_db, max_db, step_db) for the RX-gain slider in the sidebar.
+    gain_range = (0.0, 76.0, 1.0)
+
+    # Short label for the sidebar Device button.
+    display_label = "(unknown radio)"
+
+    def set_samp_rate(self, hz: float) -> None:
+        raise NotImplementedError
+
+    def set_center_freq(self, hz: float) -> None:
+        raise NotImplementedError
+
+    def set_gain(self, db: float) -> None:
+        raise NotImplementedError
+
+
+class UhdB200Source(RadioSource):
+    """Wraps `uhd.usrp_source` for B200-family devices (B200 / B210)."""
+
+    samp_rate_options = [1e6, 2e6, 4e6, 5e6, 8e6, 10e6, 16e6, 20e6, 25e6]
+    gain_range = (0.0, 76.0, 1.0)
+
+    def __init__(self, serial: str, samp_rate: float, center_freq: float,
+                 gain: float, antenna: str = "RX2"):
+        self._serial = serial
+        self._antenna = antenna
+        self.block = uhd.usrp_source(
+            ",".join((f'serial={serial}', '')),
+            uhd.stream_args(
+                cpu_format="fc32",
+                args='recv_frame_size=8192,num_recv_frames=1024',
+                channels=list(range(0, 1)),
+            ),
+        )
+        self.block.set_samp_rate(samp_rate)
+        self.block.set_time_unknown_pps(uhd.time_spec(0))
+        self.block.set_center_freq(center_freq, 0)
+        self.block.set_antenna(antenna, 0)
+        self.block.set_gain(gain, 0)
+        self.display_label = f"USRP B210 — {serial}"
+
+    def set_samp_rate(self, hz: float) -> None:
+        self.block.set_samp_rate(hz)
+
+    def set_center_freq(self, hz: float) -> None:
+        self.block.set_center_freq(hz, 0)
+
+    def set_gain(self, db: float) -> None:
+        self.block.set_gain(db, 0)
+
+
 class b210_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
 
     # Both bases define `connect` and `disconnect`. PySide6's QObject.connect/
@@ -2112,7 +2185,13 @@ class b210_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
             raise SystemExit(0)
         self._playback_mode = (chosen_serial == PLAYBACK_SENTINEL)
         self._playback_path = None
-        self.uhd_usrp_source_0 = None  # only set in live mode
+        # In live mode: RadioSource wrapper around the actual radio block.
+        # In playback mode: None (the file_source + throttle live in their
+        # own attributes).
+        self._source: 'RadioSource | None' = None
+        # Backwards-compat alias used by _start_recording / _stop_recording
+        # and the live-only setter guards. Kept as None in playback mode.
+        self.uhd_usrp_source_0 = None
 
         if self._playback_mode:
             # Sample rate and center frequency come from the file's metadata,
@@ -2150,19 +2229,16 @@ class b210_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
             # center frequency; set_center_freq updates this.
             self._rotator = blocks.rotator_cc(0.0)
         else:
-            self.uhd_usrp_source_0 = uhd.usrp_source(
-                ",".join((f'serial={chosen_serial}', '')),
-                uhd.stream_args(
-                    cpu_format="fc32",
-                    args='recv_frame_size=8192,num_recv_frames=1024',
-                    channels=list(range(0, 1)),
-                ),
-            )
-            self.uhd_usrp_source_0.set_samp_rate(samp_rate)
-            self.uhd_usrp_source_0.set_time_unknown_pps(uhd.time_spec(0))
-            self.uhd_usrp_source_0.set_center_freq(center_freq, 0)
-            self.uhd_usrp_source_0.set_antenna("RX2", 0)
-            self.uhd_usrp_source_0.set_gain(gain, 0)
+            # Build the source through the RadioSource interface so future
+            # backends (SoapySDR for SDRPlay / RTL-SDR / HackRF) drop in
+            # at this single site without touching the rest of __init__.
+            self._source = UhdB200Source(
+                serial=chosen_serial, samp_rate=samp_rate,
+                center_freq=center_freq, gain=gain)
+            # Keep the legacy attribute pointing at the raw GR block so the
+            # recording-chain connect/disconnect and the live-mode setter
+            # guards don't need to change yet.
+            self.uhd_usrp_source_0 = self._source.block
 
         # --- Spectrum display (replaces qtgui freq_sink + waterfall_sink) ---
         # Decimate aggressively before the Python sink: at 20 MS/s a pure-Python
@@ -2594,14 +2670,14 @@ class b210_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         return self.samp_rate
 
     def set_samp_rate(self, samp_rate):
-        if self._playback_mode or self.uhd_usrp_source_0 is None:
+        if self._playback_mode or self._source is None:
             return  # rate is fixed by the playback file
         self.samp_rate = samp_rate
         self._samp_rate_callback(self.samp_rate)
         self._fft_plot.set_frequency_range(self.center_freq, self.samp_rate)
         self._waterfall_plot.set_frequency_range(self.center_freq, self.samp_rate)
         self._keep_one_in_n.set_n(self._decim_for(self.samp_rate))
-        self.uhd_usrp_source_0.set_samp_rate(self.samp_rate)
+        self._source.set_samp_rate(self.samp_rate)
         self._save_setting('rx', 'samp_rate_hz', float(samp_rate))
         # Stale overflow indicators from the old rate aren't meaningful any
         # more, and there's usually a small burst during retuning.
@@ -2698,10 +2774,10 @@ class b210_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         return self.gain
 
     def set_gain(self, gain):
-        if self._playback_mode or self.uhd_usrp_source_0 is None:
+        if self._playback_mode or self._source is None:
             return  # no gain knob in playback mode
         self.gain = gain
-        self.uhd_usrp_source_0.set_gain(self.gain, 0)
+        self._source.set_gain(self.gain)
         self._save_setting('rx', 'gain_db', float(gain))
 
     def get_center_freq(self):
@@ -2723,8 +2799,8 @@ class b210_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
             phase_inc = -2.0 * math.pi * offset_hz / self.samp_rate
             self._rotator.set_phase_inc(phase_inc)
             return
-        if self.uhd_usrp_source_0 is not None:
-            self.uhd_usrp_source_0.set_center_freq(self.center_freq, 0)
+        if self._source is not None:
+            self._source.set_center_freq(self.center_freq)
 
 
 
