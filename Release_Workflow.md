@@ -75,7 +75,7 @@ That single directory holds:
 - `manifest.json` — the version manifest the running app polls.
 - `dses-spectrum-analyzer-<version>.zip` — one zip per published release. Keep at least the current + previous version online.
 - `dses-spectrum-analyzer-<version>.sha256` — optional SHA-256 next to each zip so recipients can verify their download.
-- (Optional) `DSES_RFI_Spectrum_Analyzer_Installation.pdf` — latest install guide, separate from the zips, for users who want to read before downloading the bundle.
+- `DSES_RFI_Spectrum_Analyzer_Installation.pdf` — latest install guide, separate from the zips, for users who want to read before downloading the bundle. (Also bundled inside each zip; the standalone copy is the "read first" link — see §4.6.)
 
 There is no per-OS variant — one zip works on Windows, Linux (any current distro), macOS Intel, and macOS Apple Silicon. The OS-specific launchers ride along inside the bundle.
 
@@ -141,10 +141,23 @@ sha256sum dses-spectrum-analyzer-<version>.zip > dses-spectrum-analyzer-<version
 chmod 644 dses-spectrum-analyzer-<version>.{zip,sha256}
 ```
 
-Verify the URL is reachable from outside:
+Also upload the install guide PDF as a standalone file (it's bundled inside the zip too, but a standalone copy gives users a "read before you download the 200+ MB bundle" link):
+
+```text
+scp DSES_RFI_Spectrum_Analyzer_Installation.pdf you@gpstime.com:/var/www/html/sw_distribution/b210_sa/
+```
+
+```bash
+chmod 644 /var/www/html/sw_distribution/b210_sa/DSES_RFI_Spectrum_Analyzer_Installation.pdf
+```
+
+→ served at `https://gpstime.com/sw_distribution/b210_sa/DSES_RFI_Spectrum_Analyzer_Installation.pdf`. Overwrite it on every release so the public guide stays in sync with the shipped bundle.
+
+Verify the URLs are reachable from outside:
 
 ```bash
 curl -sI https://gpstime.com/sw_distribution/b210_sa/dses-spectrum-analyzer-<version>.zip | head -1
+curl -sI https://gpstime.com/sw_distribution/b210_sa/DSES_RFI_Spectrum_Analyzer_Installation.pdf | head -1
 # expect "HTTP/2 200" or "HTTP/1.1 200 OK"
 ```
 
