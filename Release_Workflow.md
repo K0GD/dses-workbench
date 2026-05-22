@@ -146,10 +146,10 @@ Upload **into the directory** `/var/www/html/sw_distribution/b210_sa/` on gpstim
 ```text
 scp dist/dses-spectrum-analyzer-<version>.zip ^
     DSES_RFI_Spectrum_Analyzer_Installation.pdf ^
-    you@gpstime.com:/var/www/html/sw_distribution/b210_sa/
+    rick@gpstime.com:/var/www/html/sw_distribution/b210_sa/
 ```
 
-Common scp gotchas: use your **SSH username** (`whoami` on the server) not an email, e.g. `rick@gpstime.com`; the path after the colon is absolute (leading `/`); if it says *permission denied*, the account can't write `/var/www/html` — scp into `~` then `sudo mv` into place. On Windows, run scp from PowerShell (OpenSSH client) or Git Bash, not the conda prompt.
+The SSH username is `rick` (so `rick@gpstime.com`), not an email. Common scp gotchas: the path after the colon is absolute (leading `/`); if it says *permission denied*, the account can't write `/var/www/html` — scp into `~` then `sudo mv` into place. On Windows, run scp from PowerShell (OpenSSH client) or Git Bash, not the conda prompt.
 
 **After uploading (either method)**, generate the checksum and verify the URLs. Easiest from an SSH session:
 
