@@ -4,14 +4,14 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-MAIN_SCRIPT="$SCRIPT_DIR/b210_spectrum_analyzer.py"
+MAIN_SCRIPT="$SCRIPT_DIR/dses_spectrum_analyzer.py"
 
 case "$(uname)" in
     Darwin)
-        CONFIG_DIR="$HOME/Library/Application Support/B210Analyzer"
+        CONFIG_DIR="$HOME/Library/Application Support/DSES_Analyzer"
         ;;
     *)
-        CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/b210-analyzer"
+        CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/dses-analyzer"
         ;;
 esac
 CONFIG_FILE="$CONFIG_DIR/radioconda_root"

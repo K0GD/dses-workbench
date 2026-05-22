@@ -1,4 +1,4 @@
-# B210 Spectrum Analyzer — Release Workflow
+# DSES Spectrum Analyzer — Release Workflow
 
 **Version 1.0.0**
 Author: Richard M Hambly (K0GD) — rick@cnssys.com
@@ -40,11 +40,11 @@ conda env update --prefix ./.conda -f environment.yml --prune
 
 | Path | Purpose |
 |---|---|
-| `b210_spectrum_analyzer.py` | The application. Single hand-polished Python file. `APP_VERSION` near the top is the source of truth for the release version. |
+| `dses_spectrum_analyzer.py` | The application. Single hand-polished Python file. `APP_VERSION` near the top is the source of truth for the release version. |
 | `launcher.bat` / `.ps1` | Windows entry point + launcher logic (finds Radioconda). |
 | `launcher.sh` | Linux / macOS launcher. |
 | `install-shortcut.ps1` | Windows desktop / Start-menu shortcut installer. |
-| `b210-spectrum-analyzer.desktop` | Linux desktop entry template. |
+| `dses-spectrum-analyzer.desktop` | Linux desktop entry template. |
 | `icons/b210.{ico,png}` | Windows / Linux icons. |
 | `icons/generate-icon.py` | Source for the icon. Re-run only if you change the design. |
 | `sample.sigmf-data` + `sample.sigmf-meta` | Bundled playback sample. Loaded by the app when no B210 is attached. |
@@ -53,7 +53,7 @@ conda env update --prefix ./.conda -f environment.yml --prune
 | `Installing.md` | Source for the user-facing install guide. |
 | `Release_Workflow.md` | This document. |
 | `build_install_docx.py` | Builds both `.docx` and `.pdf` from a Markdown source. CLI-parameterized (`--title`, `--subtitle`, `--docx`, `--pdf`). |
-| `make-release.ps1` / `.sh` | Stages the runtime files into `dist/b210-spectrum-analyzer-<version>/` and zips them. |
+| `make-release.ps1` / `.sh` | Stages the runtime files into `dist/dses-spectrum-analyzer-<version>/` and zips them. |
 | `CLAUDE.md` | Project ground rules for Claude Code sessions. Not shipped. |
 
 Not part of the release bundle: `.conda/`, `.git/`, `.vscode/`, `dist/`, `CLAUDE.md`, `Installing.md`, `Release_Workflow.md`, `build_install_docx.py`, `make-release.{ps1,sh}`, `icons/generate-icon.py`.
@@ -70,8 +70,8 @@ https://gpstime.com/sw_distribution/b210_sa/
 That single directory holds:
 
 - `manifest.json` — the version manifest the running app polls.
-- `b210-spectrum-analyzer-<version>.zip` — one zip per published release. Keep at least the current + previous version online.
-- `b210-spectrum-analyzer-<version>.sha256` — optional SHA-256 next to each zip so recipients can verify their download.
+- `dses-spectrum-analyzer-<version>.zip` — one zip per published release. Keep at least the current + previous version online.
+- `dses-spectrum-analyzer-<version>.sha256` — optional SHA-256 next to each zip so recipients can verify their download.
 - (Optional) `DSES_RFI_Spectrum_Analyzer_Installation.pdf` — latest install guide, separate from the zips, for users who want to read before downloading the bundle.
 
 There is no per-OS variant — one zip works on Windows, Linux (any current distro), macOS Intel, and macOS Apple Silicon. The OS-specific launchers ride along inside the bundle.
@@ -83,7 +83,7 @@ When you're ready to ship a new version:
 
 ### 4.1 Bump the version
 
-Edit `APP_VERSION` near the top of `b210_spectrum_analyzer.py`. Use semantic versioning: `MAJOR.MINOR.PATCH`. Bug fixes only → bump PATCH; new features → bump MINOR; breaking changes → bump MAJOR.
+Edit `APP_VERSION` near the top of `dses_spectrum_analyzer.py`. Use semantic versioning: `MAJOR.MINOR.PATCH`. Bug fixes only → bump PATCH; new features → bump MINOR; breaking changes → bump MAJOR.
 
 ### 4.2 Commit the source changes
 
@@ -120,28 +120,28 @@ Windows:  .\make-release.ps1
 Unix:     ./make-release.sh
 ```
 
-The script reads `APP_VERSION`, creates `dist\b210-spectrum-analyzer-<version>\` with the runtime files, and zips it to `dist\b210-spectrum-analyzer-<version>.zip`. The staging directory is kept so you can inspect the contents before publishing.
+The script reads `APP_VERSION`, creates `dist\dses-spectrum-analyzer-<version>\` with the runtime files, and zips it to `dist\dses-spectrum-analyzer-<version>.zip`. The staging directory is kept so you can inspect the contents before publishing.
 
 ### 4.6 Upload to the server
 
 From a shell with `scp`:
 
 ```text
-scp dist/b210-spectrum-analyzer-<version>.zip you@gpstime.com:/path/to/sw_distribution/b210_sa/
+scp dist/dses-spectrum-analyzer-<version>.zip you@gpstime.com:/path/to/sw_distribution/b210_sa/
 ```
 
 Then SSH in and:
 
 ```bash
 cd /path/to/sw_distribution/b210_sa/
-sha256sum b210-spectrum-analyzer-<version>.zip > b210-spectrum-analyzer-<version>.sha256
-chmod 644 b210-spectrum-analyzer-<version>.{zip,sha256}
+sha256sum dses-spectrum-analyzer-<version>.zip > dses-spectrum-analyzer-<version>.sha256
+chmod 644 dses-spectrum-analyzer-<version>.{zip,sha256}
 ```
 
 Verify the URL is reachable from outside:
 
 ```bash
-curl -sI https://gpstime.com/sw_distribution/b210_sa/b210-spectrum-analyzer-<version>.zip | head -1
+curl -sI https://gpstime.com/sw_distribution/b210_sa/dses-spectrum-analyzer-<version>.zip | head -1
 # expect "HTTP/2 200" or "HTTP/1.1 200 OK"
 ```
 
@@ -171,7 +171,7 @@ JSON object with these fields:
 ```json
 {
   "latest_version":  "1.0.1",
-  "download_url":    "https://gpstime.com/sw_distribution/b210_sa/b210-spectrum-analyzer-1.0.1.zip",
+  "download_url":    "https://gpstime.com/sw_distribution/b210_sa/dses-spectrum-analyzer-1.0.1.zip",
   "release_notes":   "Added auto-update check.\nFixed recording freeze at 25 MHz.\n"
 }
 ```
@@ -188,7 +188,7 @@ From your SSH session, after uploading the new zip:
 cat > /path/to/sw_distribution/b210_sa/manifest.json << 'EOF'
 {
   "latest_version": "1.0.1",
-  "download_url": "https://gpstime.com/sw_distribution/b210_sa/b210-spectrum-analyzer-1.0.1.zip",
+  "download_url": "https://gpstime.com/sw_distribution/b210_sa/dses-spectrum-analyzer-1.0.1.zip",
   "release_notes": "Added X.\nFixed Y.\n"
 }
 EOF
@@ -234,7 +234,7 @@ Temporarily edit `manifest.json` on the server to advertise a higher version tha
 ### 6.3 Verify the download URL
 
 ```bash
-curl -sI https://gpstime.com/sw_distribution/b210_sa/b210-spectrum-analyzer-<version>.zip | head -1
+curl -sI https://gpstime.com/sw_distribution/b210_sa/dses-spectrum-analyzer-<version>.zip | head -1
 ```
 
 Should be `HTTP/... 200`. If not, the **Open Download Page** button in the dialog will 404 in users' browsers.
@@ -247,21 +247,25 @@ Should be `HTTP/... 200`. If not, the **Open Download Page** button in the dialo
 `make-release.ps1` (Windows) and `make-release.sh` (Unix) produce identical bundles. Contents:
 
 ```text
-b210-spectrum-analyzer-<version>/
-├── b210_spectrum_analyzer.py
+dses-spectrum-analyzer-<version>/
+├── dses_spectrum_analyzer.py
 ├── LICENSE
 ├── launcher.bat
 ├── launcher.ps1
 ├── launcher.sh
 ├── install-shortcut.ps1
-├── b210-spectrum-analyzer.desktop
+├── dses-spectrum-analyzer.desktop
 ├── icons/b210.ico
 ├── icons/b210.png
+├── sdrplay/sdrPlaySupport.dll   ← pre-built SoapySDRPlay3 module (Windows)
+├── sdrplay/README.txt           ← what it is + ABI it was built against
 ├── environment.yml
 ├── DSES_RFI_Spectrum_Analyzer_Installation.pdf
 ├── sample.sigmf-data
 └── sample.sigmf-meta
 ```
+
+The `sdrplay/` payload is sourced from `vendor/windows/` in the repo. SDRplay users on Windows copy the DLL into Radioconda per Installing.md §1A.2; everyone else ignores it (Linux/macOS get the module from their package manager).
 
 `Release_Workflow.md`, the matching PDF, `CLAUDE.md`, `Installing.md`, `build_install_docx.py`, the `make-release.*` scripts themselves, the conda env, `.git`, and IDE configs are all excluded by name.
 
@@ -272,8 +276,8 @@ The bundled `sample.sigmf-{data,meta}` is a real B210 recording at 10 MHz center
 To replace it with a different recording:
 
 1. In live mode, hit **Record** and let it run for a few seconds.
-2. Stop recording. The new file lands in `~/Documents/B210_Recordings/DSES_Spectrum_Analyzer_<timestamp>.sigmf-{data,meta}`.
-3. Rename to `sample.sigmf-data` and `sample.sigmf-meta` and drop next to `b210_spectrum_analyzer.py` in your project root, replacing the existing pair.
+2. Stop recording. The new file lands in `~/Documents/DSES_SA_Recordings/DSES_Spectrum_Analyzer_<timestamp>.sigmf-{data,meta}`.
+3. Rename to `sample.sigmf-data` and `sample.sigmf-meta` and drop next to `dses_spectrum_analyzer.py` in your project root, replacing the existing pair.
 4. The next `make-release` picks up the new sample.
 
 Be aware the file size is dominated by the sample (several hundred MB at 10 MHz). For email-class distribution, ship a 1–2 second sample (~10–20 MB) instead, or omit it from the bundle and host it separately.
@@ -305,7 +309,7 @@ The application drives any of:
 - **UHD B200-family**: B200, B210. Via `uhd.usrp_source`, wrapped in `UhdB200Source`.
 - **SoapySDR-supported devices**: SDRPlay (RSP1A / RSP1B / RSPduo / RSPdx), RTL-SDR, HackRF, Airspy, Airspy HF+, BladeRF, LimeSDR, PlutoSDR. Via `gnuradio.soapy.source`, wrapped in `SoapyGenericSource`.
 
-The split-out classes live next to each other in `b210_spectrum_analyzer.py`:
+The split-out classes live next to each other in `dses_spectrum_analyzer.py`:
 
 ```text
 RadioSource           — abstract: gr block + set_samp_rate / set_center_freq / set_gain
@@ -317,7 +321,53 @@ RadioSource           — abstract: gr block + set_samp_rate / set_center_freq /
 
 Per-driver capabilities (sample-rate options, gain range) come from the `SOAPY_DEFAULTS` table at module top. Add a new Soapy backend by listing its driver string and adding an entry there.
 
-**SDRPlay-specific:** SDRPlay devices need both the SDRplay API installer (from sdrplay.com) and the `soapysdr-module-sdrplay` conda package. Neither ships in Radioconda by default. The install guide's §1A documents the steps for users.
+**SDRPlay-specific:** SDRPlay devices need the SDRplay API installer (from sdrplay.com) *and* Pothosware's **SoapySDRPlay3** module installed into Radioconda's SoapySDR modules directory. The module is **not** packaged on conda-forge for any OS.
+
+- **Windows:** we **ship a pre-built `sdrPlaySupport.dll`** in the release zip (`sdrplay/`), sourced from `vendor/windows/` in the repo. Users copy it into `modules0.8\` per Installing.md §1A.2. You only need the build recipe below when the module needs regenerating — see the **Rebuild trigger** note after it.
+- **Linux / macOS:** users install the module from their package manager (`apt install soapysdr-module-sdrplay`, `dnf install SoapySDRPlay`, or the Homebrew `pothosware/homebrew-pothos` tap). Nothing to ship.
+
+**Rebuild trigger:** the shipped DLL is built against **SoapySDR ABI 0.8** (module dir `modules0.8`). If a future Radioconda bumps SoapySDR to 0.9+, the dir becomes `modules0.9` and the 0.8 binary won't load — rebuild with the recipe below and replace `vendor/windows/sdrPlaySupport.dll` (and update its `README.txt`).
+
+**TODO — RSPduo: verify tuner mode + gain range when hardware is available.** All RSP models share the `sdrplay` driver, so the RSPduo is discovered and driven by the existing `SoapyGenericSource` + `SOAPY_DEFAULTS['sdrplay']` with no code changes expected. Two things to confirm on a real RSPduo (currently at the DSES Haswell, CO site):
+- **Tuner mode:** the RSPduo has two tuners (single-tuner / dual-tuner / master-slave). We open one channel with just `driver=sdrplay,serial=...`, which should default to single-tuner (tuner A). Confirm it enumerates as one device and opens cleanly; if it needs an explicit tuner arg, append it to the device-args string in `SoapyGenericSource.__init__` (not a new SDR type).
+- **Gain range:** verify the overall gain-reduction range really is 0–48 for the RSPduo (RF gain-reduction steps vary slightly by band). Check with `src.get_gain_range(0)` as we did for the RSP1B; adjust the `sdrplay` entry in `SOAPY_DEFAULTS` only if it differs.
+
+**Windows build-from-source recipe** (verified on Win 11, SDRplay API 3.15, Radioconda SoapySDR 0.8.1, VS 2022 Community 17.9, CMake 3.26):
+
+```powershell
+# 1. Clone (Xilinx Vivado ships an old `git.exe` with a broken CA bundle on PATH —
+#    use the system git if your shell finds the Vivado one first):
+& "C:\Program Files\Git\cmd\git.exe" `
+    -c http.sslbackend=schannel `
+    clone --depth 1 https://github.com/pothosware/SoapySDRPlay3.git `
+    $env:TEMP\SoapySDRPlay3
+
+# 2. Configure against Radioconda's SoapySDR and the SDRplay API:
+& "C:\Program Files\CMake\bin\cmake.exe" `
+    -S $env:TEMP\SoapySDRPlay3 -B $env:TEMP\SoapySDRPlay3\build `
+    -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release `
+    -DSoapySDR_DIR="C:/ProgramData/radioconda/Library/cmake" `
+    -DLIBSDRPLAY_INCLUDE_DIRS="C:/Program Files/SDRplay/API/inc" `
+    -DLIBSDRPLAY_LIBRARIES="C:/Program Files/SDRplay/API/x64/sdrplay_api.lib"
+
+# 3. Build:
+& "C:\Program Files\CMake\bin\cmake.exe" `
+    --build $env:TEMP\SoapySDRPlay3\build --config Release --parallel
+
+# 4. Install (Admin PowerShell — writes under C:\ProgramData):
+Copy-Item "$env:TEMP\SoapySDRPlay3\build\Release\sdrPlaySupport.dll" `
+          "C:\ProgramData\radioconda\Library\lib\SoapySDR\modules0.8\" -Force
+
+# 5. Enable + start the SDRplay API service (still Admin):
+Set-Service SDRplayAPIService -StartupType Manual
+Start-Service SDRplayAPIService
+```
+
+Verify with `SoapySDRUtil --find` — the RSP should appear with `driver=sdrplay`.
+
+**Why the SDRplay API DLL needs special handling:** `sdrPlaySupport.dll` depends on `sdrplay_api.dll` (installed by the SDRplay API installer at `C:\Program Files\SDRplay\API\x64\`). That directory is **not** on the system PATH after the installer runs, so SoapySDR can't load the support module out-of-the-box. The app calls `os.add_dll_directory(...)` at startup to register that location with the Python DLL loader — see the top of `dses_spectrum_analyzer.py`. End users do not need to munge PATH themselves.
+
+**Linux/macOS:** Most distributions ship SoapySDRPlay3 in their package manager (`soapysdr-module-sdrplay` on Debian/Ubuntu, Homebrew tap `pothosware/homebrew-pothos`). The install guide's §1A documents that path; only Windows requires the build-from-source recipe above.
 
 ### 7.5 Memory / notes worth knowing
 

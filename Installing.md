@@ -1,4 +1,4 @@
-# B210 Spectrum Analyzer — Installation Guide
+# DSES Spectrum Analyzer — Installation Guide
 
 **Version 1.0.0**
 Author: Richard M Hambly (K0GD) — rick@cnssys.com
@@ -6,7 +6,7 @@ License: GPL-3.0-or-later
 
 This document covers:
 
-- How to install the B210 Spectrum Analyzer on Windows 11, Linux, and macOS (Intel and Apple Silicon).
+- How to install the DSES Spectrum Analyzer on Windows 11, Linux, and macOS (Intel and Apple Silicon).
 - How to update to a new version.
 - Common troubleshooting and a reference for advanced settings.
 
@@ -54,22 +54,51 @@ After installation, verify the API can see your unit with the SDRplay Service / 
 
 ### 1A.2 Install the SoapySDRPlay module
 
-This is the glue between SDRplay's API and the SoapySDR layer the program uses.
+This is the glue between SDRplay's API and the SoapySDR layer the program uses. It is **not** available through `conda install` on any platform, so the steps differ by OS.
 
-```text
-Windows / Linux / macOS — from an activated Radioconda prompt:
-  conda install -c conda-forge soapysdr-module-sdrplay
+**Windows** — copy the pre-built module that ships in this distribution:
+
+The release zip contains `sdrplay\sdrPlaySupport.dll`. Copy it into Radioconda's SoapySDR module directory. That directory is under `C:\ProgramData`, so you need an **Administrator** PowerShell (right-click Windows PowerShell → "Run as administrator"):
+
+```powershell
+Copy-Item ".\sdrplay\sdrPlaySupport.dll" `
+  "C:\ProgramData\radioconda\Library\lib\SoapySDR\modules0.8\" -Force
 ```
 
-Verify it loaded:
+(Run it from the extracted release folder, or give the full path to the DLL.) If your Radioconda is installed somewhere else, adjust the path — the target is always `…\Library\lib\SoapySDR\modules0.8\`.
+
+Then start the SDRplay API service (also from the Administrator PowerShell — the installer leaves it stopped):
+
+```powershell
+Set-Service SDRplayAPIService -StartupType Automatic
+Start-Service SDRplayAPIService
+```
+
+**Linux** — install from your package manager:
+
+```text
+Debian / Ubuntu:   sudo apt install soapysdr-module-sdrplay
+Fedora:            sudo dnf install SoapySDRPlay
+```
+
+**macOS** — install from the Pothosware Homebrew tap:
+
+```text
+brew tap pothosware/homebrew-pothos
+brew install soapysdrplay3
+```
+
+Verify it loaded (any OS, from a Radioconda prompt):
 
 ```text
 SoapySDRUtil --info
 ```
 
-…should list `sdrplay` in the "Available factories" line. If it doesn't, the API install in §1A.1 didn't take — recheck that.
+…should list `sdrplay` in the "Available factories" line. If it doesn't:
+- Re-check that the SDRplay API from §1A.1 installed correctly.
+- On Windows, confirm the DLL landed in `modules0.8\` and the `SDRplayAPIService` is running (`Get-Service SDRplayAPIService`).
 
-When you launch the spectrum analyzer with an RSP attached, it will appear in the device picker as e.g. `RSPduo — 1234567 [sdrplay]`.
+When you launch the spectrum analyzer with an RSP attached, it appears in the device picker as e.g. `RSP1B — 240513BE60  [sdrplay]`.
 
 
 ## 2. Installing Radioconda
@@ -142,16 +171,16 @@ There is **no functional difference** between the two for our purposes. Pick the
    ```
 
 
-## 3. Installing the B210 Spectrum Analyzer
+## 3. Installing the DSES Spectrum Analyzer
 
-You will have received a zip file named `b210-spectrum-analyzer-<version>.zip` (e.g. `b210-spectrum-analyzer-1.0.0.zip`).
+You will have received a zip file named `dses-spectrum-analyzer-<version>.zip` (e.g. `dses-spectrum-analyzer-1.0.0.zip`).
 
 ### 3.1 Windows 11
 
-1. Extract the zip anywhere you have write permission. A common choice is `Documents\B210-Spectrum-Analyzer`. The extracted folder will be `b210-spectrum-analyzer-1.0.0\` and will contain `b210_spectrum_analyzer.py`, `launcher.bat`, `launcher.ps1`, `install-shortcut.ps1`, `LICENSE`, the `icons\` folder, and this guide.
+1. Extract the zip anywhere you have write permission. A common choice is `Documents\DSES-Spectrum-Analyzer`. The extracted folder will be `dses-spectrum-analyzer-1.0.0\` and will contain `dses_spectrum_analyzer.py`, `launcher.bat`, `launcher.ps1`, `install-shortcut.ps1`, `LICENSE`, the `icons\` folder, and this guide.
 2. Double-click **`launcher.bat`** to start the application.
 3. The first time you run it, the launcher searches for Radioconda in this order: the `RADIOCONDA_ROOT` environment variable, any currently-activated conda env, `%LOCALAPPDATA%\radioconda`, `C:\ProgramData\radioconda`, `%USERPROFILE%\radioconda`, a cached config file, then `conda info --base` if `conda` is on PATH. If none of these find a working install, you'll get a prompt asking for the path; type it in and the launcher remembers it for next time.
-4. (Optional) Right-click **`install-shortcut.ps1`** → "Run with PowerShell" to put a "B210 Spectrum Analyzer" shortcut on your desktop and Start menu.
+4. (Optional) Right-click **`install-shortcut.ps1`** → "Run with PowerShell" to put a "DSES Spectrum Analyzer" shortcut on your desktop and Start menu.
 
 After the first run, the app's window opens with the spectrum and waterfall plots. Tuning, sample-rate, gain, and recording controls are in the sidebar on the right.
 
@@ -160,8 +189,8 @@ After the first run, the app's window opens with the spectrum and waterfall plot
 1. Extract the zip:
 
    ```bash
-   unzip b210-spectrum-analyzer-1.0.0.zip
-   cd b210-spectrum-analyzer-1.0.0
+   unzip dses-spectrum-analyzer-1.0.0.zip
+   cd dses-spectrum-analyzer-1.0.0
    chmod +x launcher.sh
    ```
 
@@ -175,8 +204,8 @@ After the first run, the app's window opens with the spectrum and waterfall plot
 
    ```bash
    INSTALL_DIR="$(pwd)"
-   sed "s|__INSTALL_DIR__|$INSTALL_DIR|g" b210-spectrum-analyzer.desktop \
-       > ~/.local/share/applications/b210-spectrum-analyzer.desktop
+   sed "s|__INSTALL_DIR__|$INSTALL_DIR|g" dses-spectrum-analyzer.desktop \
+       > ~/.local/share/applications/dses-spectrum-analyzer.desktop
    update-desktop-database ~/.local/share/applications/ 2>/dev/null || true
    ```
 
@@ -187,8 +216,8 @@ After the first run, the app's window opens with the spectrum and waterfall plot
 The steps are the same as Linux:
 
 ```bash
-unzip b210-spectrum-analyzer-1.0.0.zip
-cd b210-spectrum-analyzer-1.0.0
+unzip dses-spectrum-analyzer-1.0.0.zip
+cd dses-spectrum-analyzer-1.0.0
 chmod +x launcher.sh
 ./launcher.sh
 ```
@@ -198,7 +227,7 @@ On Apple Silicon, **make sure** you installed the `arm64` build of Radioconda. M
 If the Finder warns about an unidentified developer when running `launcher.sh`, clear the quarantine attribute on the unzipped folder:
 
 ```bash
-xattr -dr com.apple.quarantine b210-spectrum-analyzer-1.0.0
+xattr -dr com.apple.quarantine dses-spectrum-analyzer-1.0.0
 ```
 
 
@@ -206,11 +235,32 @@ xattr -dr com.apple.quarantine b210-spectrum-analyzer-1.0.0
 
 Regardless of OS, before declaring the install good:
 
-- The window title bar reads `B210 Spectrum Analyzer — v1.0.0 — B210 Spectrum Analyzer`. The version number must match the bundle you installed.
+- The window title bar reads `DSES Spectrum Analyzer — v1.0.0 — <radio model> — <serial>` (e.g. `… — USRP B210 — 3273A91` or `… — RSP1B — 240513BE60`). The version number must match the bundle you installed; the radio portion confirms which device is being used.
 - Pull up **Help → User Guide** from the menu bar. The guide should open.
 - Pull up **Help → About**. The author, version, license, and the path to the settings file should be readable.
-- The spectrum plot should show live data (not a flat line at −140 dB). If it's flat, the B210 isn't streaming — see Troubleshooting §6.
+- The spectrum plot should show live data (not a flat line at −140 dB). If it's flat, the radio isn't streaming — see Troubleshooting §6.
 - Click the **408 MHz** preset under Pulsar Band. The center frequency should retune and the trace should redraw.
+
+### Recommended one-time VOLK tuning
+
+GNU Radio's number-crunching uses **VOLK**, which can profile your CPU once and pick the fastest SIMD kernels (AVX2, NEON, etc.) for the rest of your machine's life. Without the profile, you'll see this warning every time you launch the app:
+
+```text
+[WARNING] SoapyVOLKConverters: no VOLK config file found.
+          Run volk_profile for best performance.
+```
+
+To run it once and silence the warning:
+
+```text
+Windows: open the "Anaconda Prompt (Radioconda)" shortcut, then:
+  volk_profile
+
+Linux / macOS: open a terminal with Radioconda on PATH, then:
+  volk_profile
+```
+
+Takes about 30 seconds. Writes the chosen kernels to `%APPDATA%\.volk\volk_config` on Windows or `~/.volk/volk_config` on Linux/macOS. The warning disappears next time you launch the analyzer, and FFT throughput improves on machines with newer SIMD instruction sets.
 
 
 ## 5. Updating to a new version
@@ -228,7 +278,7 @@ The check is read-only — the program never auto-downloads or auto-installs any
 Each release is a self-contained zip. To update:
 
 1. **Close** the running app.
-2. **Extract** the new zip alongside the old one (or over the top of the old folder). The new folder is named with the new version (e.g. `b210-spectrum-analyzer-1.0.1`).
+2. **Extract** the new zip alongside the old one (or over the top of the old folder). The new folder is named with the new version (e.g. `dses-spectrum-analyzer-1.0.1`).
 3. **Run** `launcher.bat` or `launcher.sh` from the **new** folder.
 
 ### What is preserved across versions
@@ -237,22 +287,22 @@ Your settings and window geometry are kept outside the app folder, so updates ne
 
 | OS | Settings file |
 |---|---|
-| Windows | `%APPDATA%\B210Analyzer\settings.ini` |
-| macOS | `~/Library/Application Support/B210Analyzer/settings.ini` |
-| Linux | `~/.local/share/B210Analyzer/settings.ini` |
+| Windows | `%APPDATA%\DSES_Analyzer\settings.ini` |
+| macOS | `~/Library/Application Support/DSES_Analyzer/settings.ini` |
+| Linux | `~/.local/share/DSES_Analyzer/settings.ini` |
 
 The settings file is plain text and editable with any editor while the app is closed. To reset everything to defaults, either delete the file or use **Help → About → Restore Defaults…** in the running app.
 
-Window geometry is stored separately by Qt (`HKEY_CURRENT_USER\Software\gnuradio\flowgraphs\b210_spectrum_analyzer` on Windows; the equivalent QSettings storage on Mac/Linux). You don't need to touch it.
+Window geometry is stored separately by Qt (`HKEY_CURRENT_USER\Software\gnuradio\flowgraphs\dses_spectrum_analyzer` on Windows; the equivalent QSettings storage on Mac/Linux). You don't need to touch it.
 
 ### Backing up your settings
 
 The settings file is small (~1 KB). Copy it somewhere before a major upgrade if you want a quick rollback path:
 
 ```text
-Windows:  copy "%APPDATA%\B210Analyzer\settings.ini" "%USERPROFILE%\Desktop\settings.ini.bak"
-macOS:    cp "~/Library/Application Support/B210Analyzer/settings.ini" ~/Desktop/settings.ini.bak
-Linux:    cp ~/.local/share/B210Analyzer/settings.ini ~/Desktop/settings.ini.bak
+Windows:  copy "%APPDATA%\DSES_Analyzer\settings.ini" "%USERPROFILE%\Desktop\settings.ini.bak"
+macOS:    cp "~/Library/Application Support/DSES_Analyzer/settings.ini" ~/Desktop/settings.ini.bak
+Linux:    cp ~/.local/share/DSES_Analyzer/settings.ini ~/Desktop/settings.ini.bak
 ```
 
 
@@ -303,7 +353,7 @@ The GR flow graph is running but no samples are arriving. Usual causes:
 ### macOS: "developer cannot be verified"
 
 ```bash
-xattr -dr com.apple.quarantine /path/to/b210-spectrum-analyzer-1.0.0
+xattr -dr com.apple.quarantine /path/to/dses-spectrum-analyzer-1.0.0
 ```
 
 ### Settings won't persist
@@ -339,14 +389,10 @@ The program enumerates everything supported at launch — Ettus B210s via UHD, p
 
 - **No radio attached, no playback sample:** an error dialog says "No radio found" and explains how to enable playback (see below). The app exits.
 - **No radio attached, but `sample.sigmf-data` + `sample.sigmf-meta` are present next to the program:** the app falls back to **SigMF playback mode** (see below). An informational dialog announces the fallback.
-- **One radio attached:** the app opens it and remembers it in `settings.ini`.
-- **One B210 attached alongside other types** (e.g. B210 + RSPduo, B210 + RTL-SDR): the app silently opens the B210. The B210 is the primary supported device; other types are still reachable through the **Device** button on the sidebar.
-- **Multiple B210s attached:** a picker shows the B210s; pick one. Other attached non-B210 radios are reachable through the **Device** button after launch.
-- **Multiple non-B210 radios attached (no B210)**: a picker shows them all (e.g. an RSPduo and an RTL-SDR); pick one. The app remembers your choice.
+- **One radio attached:** the app opens it silently and remembers it in `settings.ini`.
+- **Two or more radios attached** (any mix of B210s and SoapySDR receivers): a picker always appears so you choose which one to use. Your previously-used radio is pre-selected, so pressing Enter reuses the same one. The app remembers your selection for next launch.
 
-If the remembered device isn't attached on a later launch, the picker re-opens.
-
-The **RX** sidebar group has a button labeled `Device: <product> <serial>` showing which radio the current session is using. Clicking it re-opens the picker; the new choice takes effect on the next launch.
+The **RX** sidebar group has a button labeled `Device: <product> — <serial>` showing which radio the current session is using. Clicking it re-opens the picker; the new choice is saved and takes effect on the next launch.
 
 The sample-rate combo and gain-slider range adapt automatically to whichever radio is open. SDRPlay caps at 10 MHz; RTL-SDR maxes around 3.2 MHz; HackRF goes to 20 MHz; the B210 to 25 MHz. Saved gain is clamped to the new device's range if you switch to a narrower one.
 
@@ -354,13 +400,13 @@ To pin a specific device permanently without using the picker, edit `settings.in
 
 ### SigMF playback mode (no-device fallback)
 
-The distribution bundle includes a short SigMF recording so that users without a B210 can still launch the program, see live spectrum, and try the controls.
+The distribution bundle includes a short SigMF recording so that users without any SDR attached can still launch the program, see live spectrum, and try the controls.
 
-- Filenames: **`sample.sigmf-data`** (raw IQ) and **`sample.sigmf-meta`** (JSON metadata). Both live next to `b210_spectrum_analyzer.py` in your install folder.
+- Filenames: **`sample.sigmf-data`** (raw IQ) and **`sample.sigmf-meta`** (JSON metadata). Both live next to `dses_spectrum_analyzer.py` in your install folder.
 - The file is read in a continuous loop, paced to match the original capture's sample rate.
 - The window title shows **[Playback]**, the Device button shows the file name, and the Recording-status label reads `Playback (looping): sample.sigmf-data`.
 - **Sample Rate**, **RX Gain**, and **Recording** controls are **disabled** — they have no meaning for a recorded file. Sample rate comes from the file's metadata.
 - **Tuning IS enabled** in playback mode and works as a digital frequency shift on the file's baseband. Tuning to the file's actual center frequency (read from the .sigmf-meta) shows the recording's true content. Tuning to other frequencies within ±(sample_rate/2) of the file's center lets you explore the recorded bandwidth — useful for poking around inside the capture. Tune well outside that window and you'll see noise / wrap-around, since the recording doesn't contain data at those frequencies. This is the expected behavior for true I/Q data, not a bug.
 - All visualization controls (Spectrum panel, Waterfall panel, including the dark/light background toggle, FFT averaging, max/min hold, intensity range, colormap, etc.) work normally.
 - To replace the bundled sample with your own recording, do a real recording in live mode, then rename the resulting two files to `sample.sigmf-data` and `sample.sigmf-meta` and drop them next to the program. No source-code change is required.
-- To skip playback mode and force an error exit when no B210 is attached, delete or rename either of the two `sample.sigmf-*` files.
+- To skip playback mode and force an error exit when no SDR is attached, delete or rename either of the two `sample.sigmf-*` files.

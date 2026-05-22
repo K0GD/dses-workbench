@@ -1,9 +1,9 @@
-# install-shortcut.ps1 - create a desktop shortcut to the B210 Spectrum Analyzer.
+# install-shortcut.ps1 - create a desktop shortcut to the DSES Spectrum Analyzer.
 # Run once per Windows machine. Re-run after generating an icon to refresh it.
 $ErrorActionPreference = 'Stop'
 
 $ScriptDir    = $PSScriptRoot
-$ShortcutName = 'B210 Spectrum Analyzer'
+$ShortcutName = 'DSES Spectrum Analyzer'
 $DesktopPath  = [Environment]::GetFolderPath('Desktop')
 $ShortcutPath = Join-Path $DesktopPath "$ShortcutName.lnk"
 $PsLauncher   = Join-Path $ScriptDir 'launcher.ps1'
@@ -21,7 +21,7 @@ $Shortcut = $WScriptShell.CreateShortcut($ShortcutPath)
 $Shortcut.TargetPath       = $PowerShellExe
 $Shortcut.Arguments        = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$PsLauncher`""
 $Shortcut.WorkingDirectory = $ScriptDir
-$Shortcut.Description      = 'B210 Spectrum Analyzer for pulsar RFI'
+$Shortcut.Description      = 'DSES Spectrum Analyzer for pulsar RFI'
 $Shortcut.WindowStyle      = 7  # minimized; -WindowStyle Hidden in args takes precedence
 if (Test-Path $IconPath) {
     $Shortcut.IconLocation = "$IconPath, 0"

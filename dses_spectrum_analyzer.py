@@ -5,16 +5,38 @@
 # SPDX-License-Identifier: GPL-3.0
 #
 # GNU Radio Python Flow Graph
-# Title: B210 Spectrum Analyzer
-# Description: Simple spectrum analyzer for the Ettus USRP B210
+# Title: DSES Spectrum Analyzer
+# Description: Spectrum analyzer for the Ettus USRP B210 and other SDRs,
+# designed for pulsar RFI investigation.
 # GNU Radio version: 3.10.12.0
 #
-# Originally generated from b210_spectrum_analyzer.grc and then hand-polished.
-# Migrated off gnuradio.qtgui (PyQt5) to a native PySide6 + PyQtGraph display
-# so the whole app runs on one Qt binding (Qt6).
+# Originally generated from dses_spectrum_analyzer.grc (the .grc was never
+# renamed) and then hand-polished. Migrated off gnuradio.qtgui (PyQt5) to a
+# native PySide6 + PyQtGraph display so the whole app runs on one Qt
+# binding (Qt6), then extended past B210-only to a multi-radio app via
+# SoapySDR.
 
 import os
 os.environ["PYQTGRAPH_QT_LIB"] = "PySide6"
+
+# Quiet known-benign chatter from underlying native libraries before any of
+# them get imported. See the README; users can override any of these from
+# the shell because we use setdefault rather than overwriting.
+os.environ.setdefault("LIBUSB_DEBUG", "0")
+os.environ.setdefault("LIBUSB_LOG_LEVEL", "0")
+os.environ.setdefault("UHD_LOG_CONSOLE_LEVEL", "warning")
+os.environ.setdefault("SOAPY_SDR_LOG_LEVEL", "WARNING")
+
+# Make sdrplay_api.dll discoverable to SoapySDR's sdrPlaySupport module.
+# Must run BEFORE gnuradio.soapy / SoapySDR is imported anywhere.
+if os.name == "nt":
+    _sdrplay_api_dir = r"C:\Program Files\SDRplay\API\x64"
+    if os.path.isdir(_sdrplay_api_dir):
+        try:
+            os.add_dll_directory(_sdrplay_api_dir)
+        except (AttributeError, OSError):
+            pass
+        os.environ["PATH"] = _sdrplay_api_dir + os.pathsep + os.environ.get("PATH", "")
 
 from PySide6 import QtCore, QtGui, QtWidgets
 from PySide6.QtCore import Qt, QObject, Signal, Slot, QTimer
@@ -45,14 +67,14 @@ import time
 
 
 # === App metadata ===
-APP_NAME        = "B210 Spectrum Analyzer"
+APP_NAME        = "DSES Spectrum Analyzer"
 APP_VERSION     = "1.0.0"
 APP_AUTHOR      = "Richard M Hambly (K0GD)"
 APP_AUTHOR_EMAIL = "rick@cnssys.com"
 APP_COPYRIGHT   = "Copyright © 2026 Richard M Hambly (K0GD)"
 APP_LICENSE     = "GPL-3.0-or-later"
-APP_DESCRIPTION = ("Simple spectrum analyzer for the Ettus USRP B210, designed "
-                   "for pulsar RFI investigation.")
+APP_DESCRIPTION = ("Spectrum analyzer for the Ettus USRP B210 and other SDRs, "
+                   "designed for pulsar RFI investigation.")
 
 
 # === Window function table (drop-in for gnuradio.fft.window) ===
@@ -82,7 +104,7 @@ def _pretty_rate(hz: float) -> str:
 # === User-editable settings (INI-backed, persisted across runs) ===
 
 def _default_recording_dir():
-    return str(Path.home() / "Documents" / "B210_Recordings")
+    return str(Path.home() / "Documents" / "DSES_SA_Recordings")
 
 
 DEFAULTS = {
@@ -103,6 +125,11 @@ DEFAULTS = {
         # chooses a different radio.
         'device_driver':   'uhd_b200',
         'device_serial':   'auto',
+        # RF input/antenna port. Blank = use the radio's default. Only
+        # meaningful on radios with more than one port (B210 TX/RX vs RX2,
+        # RSPduo tuner 1 vs 2, RSPdx antenna A/B/C). Saved when the user
+        # picks a port from the sidebar's Antenna combo.
+        'antenna':         '',
     },
     'recording': {
         # Set at runtime from _default_recording_dir() if blank.
@@ -168,16 +195,16 @@ DEFAULTS = {
 
 def _settings_path():
     """Cross-platform config location. Matches launcher.ps1's
-    %APPDATA%\\B210Analyzer on Windows; main() sets QApplication app name
-    to 'B210Analyzer' with no org, so AppDataLocation resolves to:
-        Windows: %APPDATA%/B210Analyzer/
-        macOS:   ~/Library/Application Support/B210Analyzer/
-        Linux:   ~/.local/share/B210Analyzer/
+    %APPDATA%\\DSES_Analyzer on Windows; main() sets QApplication app name
+    to 'DSES_Analyzer' with no org, so AppDataLocation resolves to:
+        Windows: %APPDATA%/DSES_Analyzer/
+        macOS:   ~/Library/Application Support/DSES_Analyzer/
+        Linux:   ~/.local/share/DSES_Analyzer/
     """
     base = QtCore.QStandardPaths.writableLocation(
         QtCore.QStandardPaths.AppDataLocation)
     if not base:
-        base = str(Path.home() / ".config" / "B210Analyzer")
+        base = str(Path.home() / ".config" / "DSES_Analyzer")
     cfg_dir = Path(base)
     cfg_dir.mkdir(parents=True, exist_ok=True)
     return cfg_dir / "settings.ini"
@@ -1239,7 +1266,7 @@ class RangeWidget(QtWidgets.QWidget):
 # When resolve_device_serial returns this sentinel, the main class builds a
 # SigMF-playback flowgraph instead of opening a USRP. The sample files
 # (sample.sigmf-data, sample.sigmf-meta) ship in the release bundle and live
-# next to b210_spectrum_analyzer.py.
+# next to dses_spectrum_analyzer.py.
 PLAYBACK_SENTINEL = "__PLAYBACK__"
 SIGMF_SAMPLE_BASENAME = "sample"
 
@@ -1333,39 +1360,46 @@ def find_soapy_devices():
         import SoapySDR
     except Exception:
         return []
-    try:
-        addrs = SoapySDR.Device.enumerate()
-    except Exception as exc:
-        print(f"SoapySDR discovery failed: {exc}", file=sys.stderr)
-        return []
+    # Enumerate each known driver explicitly rather than calling
+    # SoapySDR.Device.enumerate() with no args. A no-arg enumerate also runs
+    # the bundled "remote" module's discovery, which pings IPv6 SSDP
+    # multicast and logs a noisy (benign) ERROR on hosts with no IPv6 route.
+    # Per-driver enumeration only invokes the driver we ask for, so that
+    # network scan never happens.
     out = []
-    for a in addrs:
+    for drv in SOAPY_KNOWN_DRIVERS:
         try:
-            d = dict(a)
-        except Exception:
+            addrs = SoapySDR.Device.enumerate(f"driver={drv}")
+        except Exception as exc:
+            print(f"SoapySDR discovery failed for {drv}: {exc}",
+                  file=sys.stderr)
             continue
-        drv = (d.get('driver') or '').lower()
-        if drv not in SOAPY_KNOWN_DRIVERS:
-            continue
-        # Each Soapy driver names its serial field differently. Try the
-        # common keys; fall back to the driver name + index for display.
-        serial = (d.get('serial') or d.get('serial_number')
-                  or d.get('device_id') or '')
-        product = (d.get('label') or d.get('product')
-                   or d.get('hardware') or drv)
-        # SDRPlay-specific: drop the redundant "SDRPlay Dev0: " prefix some
-        # label fields use, keep just the model name.
-        if drv == 'sdrplay' and product.startswith('SDRPlay Dev'):
+        for a in addrs:
             try:
-                product = product.split(':', 1)[1].strip()
-            except IndexError:
-                pass
-        out.append({
-            'driver':  drv,
-            'serial':  serial,
-            'product': product,
-            'label':   f"{product} — {serial or '(no serial)'}  [{drv}]",
-        })
+                d = dict(a)
+            except Exception:
+                continue
+            # Each Soapy driver names its serial field differently. Try the
+            # common keys; fall back to the driver name + index for display.
+            serial = (d.get('serial') or d.get('serial_number')
+                      or d.get('device_id') or '')
+            product = (d.get('label') or d.get('product')
+                       or d.get('hardware') or drv)
+            # SDRPlay-specific: SoapySDR's label is "SDRplay Dev{N} {model} {serial}"
+            # (sometimes with a colon, sometimes without). Strip the prefix and
+            # the trailing duplicate serial so we keep only the model, e.g. "RSP1B".
+            if drv == 'sdrplay':
+                m = re.match(
+                    r'^SDRplay\s+Dev\d+:?\s+(?P<model>\S+)(?:\s+\S+)?\s*$',
+                    product, re.IGNORECASE)
+                if m:
+                    product = m.group('model')
+            out.append({
+                'driver':  drv,
+                'serial':  serial,
+                'product': product,
+                'label':   f"{product} — {serial or '(no serial)'}  [{drv}]",
+            })
     return out
 
 
@@ -1422,6 +1456,9 @@ def resolve_device(saved_driver, saved_serial, parent=None):
           sample is present
         - None if the user canceled the picker and there's nothing to fall
           back on.
+    Selection rule: no radio → playback/error; exactly one radio → use it
+    silently; two or more radios → always show the picker so the user
+    chooses, pre-selecting the saved (driver, serial) from settings.
     `saved_driver` and `saved_serial` come from settings."""
     devices = find_all_radios()
 
@@ -1437,7 +1474,7 @@ def resolve_device(saved_driver, saved_serial, parent=None):
                 "Plug a supported radio in and relaunch, or place "
                 f"'{SIGMF_SAMPLE_BASENAME}.sigmf-data' and "
                 f"'{SIGMF_SAMPLE_BASENAME}.sigmf-meta' alongside "
-                "b210_spectrum_analyzer.py to enable demo playback.")
+                "dses_spectrum_analyzer.py to enable demo playback.")
             return None
         QtWidgets.QMessageBox.information(
             parent, "Playback mode",
@@ -1455,42 +1492,13 @@ def resolve_device(saved_driver, saved_serial, parent=None):
     if saved_serial and not saved_driver:
         saved_driver = DRIVER_UHD_B200
 
-    # Pinned to a specific (driver, serial): use it if present.
-    if saved_serial and saved_serial.lower() != 'auto':
-        for d in devices:
-            if d['driver'] == saved_driver and d['serial'] == saved_serial:
-                return d
-        QtWidgets.QMessageBox.warning(
-            parent, "Saved radio not attached",
-            f"The saved radio ({saved_driver} / {saved_serial}) is not "
-            f"currently attached. Falling back to the device picker.")
-        # Fall through to picker/auto logic.
-
-    # When more than one type of radio is attached, the B210 (UHD) family
-    # wins. It's the primary supported device — Soapy support is a more
-    # recent addition with less coverage in testing. The user can still
-    # switch to a non-B210 device via the sidebar's Device button, which
-    # shows every attached radio regardless of driver.
-    b210s = [d for d in devices if d['driver'] == DRIVER_UHD_B200]
-    if b210s:
-        if len(b210s) == 1:
-            return b210s[0]
-        # Multiple B210s — disambiguate among them. Non-B210 devices stay
-        # accessible via the Device-button picker after launch.
-        dlg = DevicePickerDialog(
-            b210s, current_driver=saved_driver, current_serial=saved_serial,
-            parent=parent,
-            prompt=("Multiple USRP B210s detected — pick one. "
-                    "(Other attached SDRs are reachable via the Device "
-                    "button on the sidebar.)"))
-        if dlg.exec() == QtWidgets.QDialog.Accepted:
-            return dlg.selected_device()
-        return None
-
-    # No B210 attached: single device = silent use; multiple = ask.
+    # Exactly one radio attached → use it silently.
     if len(devices) == 1:
         return devices[0]
 
+    # Two or more radios attached → always let the user choose. The saved
+    # (driver, serial) is pre-selected in the picker, so the common case is
+    # a single Enter to confirm the same radio as last time.
     dlg = DevicePickerDialog(devices, current_driver=saved_driver,
                              current_serial=saved_serial, parent=parent)
     if dlg.exec() == QtWidgets.QDialog.Accepted:
@@ -1531,8 +1539,8 @@ class AboutDialog(QtWidgets.QDialog):
             f"published by the Free Software Foundation, either version 3 of "
             f"the License, or (at your option) any later version. See the "
             f"LICENSE file for the full text.</p>"
-            f"<p><b>Built on:</b> GNU Radio · UHD · PySide6 · PyQtGraph · "
-            f"NumPy · SciPy</p>"
+            f"<p><b>Built on:</b> GNU Radio · UHD · SoapySDR · PySide6 · "
+            f"PyQtGraph · NumPy · SciPy</p>"
             f"<p><b>Settings file:</b><br><code>{settings.path}</code></p>"
         )
         info.setTextFormat(Qt.RichText)
@@ -1581,28 +1589,32 @@ HELP_TEXT_HTML = f"""
 <h2>{APP_NAME} — User Guide</h2>
 
 <p>This is a live spectrum analyzer and waterfall display for the Ettus USRP
-B210, designed for pulsar RFI investigation but useful for general-purpose
-spectrum monitoring.</p>
+B210 and other software-defined radios (SDRPlay RSP1A/RSP1B/RSPduo/RSPdx,
+RTL-SDR, HackRF, Airspy, BladeRF, LimeSDR, PlutoSDR via SoapySDR), designed
+for pulsar RFI investigation but useful for general-purpose spectrum
+monitoring.</p>
 
 <h3>Starting up — device selection</h3>
-<p>At launch the program enumerates attached USRPs and decides what to use:</p>
+<p>At launch the program enumerates attached SDRs (UHD + SoapySDR) and
+decides what to use:</p>
 <ul>
-<li><b>One B210 attached</b>: opens it silently and remembers the serial in
-the settings file.</li>
-<li><b>Multiple B210s attached</b>: a picker dialog appears with serial +
-product name. Your choice is remembered for next launch. If the remembered
-device isn't attached on a later launch, the picker re-opens.</li>
-<li><b>No B210 attached, but a bundled SigMF sample is present</b>: the
+<li><b>One supported SDR attached</b>: opens it silently and remembers the
+driver and serial in the settings file.</li>
+<li><b>Two or more radios attached</b>: a picker dialog always appears so
+you can choose which one to use. Your previous choice is pre-selected, so
+you can just press Enter to use the same radio as last time. Your selection
+is remembered for next launch.</li>
+<li><b>No SDR attached, but a bundled SigMF sample is present</b>: the
 program falls back to <b>playback mode</b> — see below.</li>
-<li><b>No B210 and no sample</b>: an error dialog explains how to fix it
+<li><b>No SDR and no sample</b>: an error dialog explains how to fix it
 and the program exits.</li>
 </ul>
-<p>The <b>RX</b> group has a <code>Device: &lt;serial&gt;</code> button
-showing which USRP this session is using. Clicking it re-opens the picker;
-the new choice takes effect on the next launch.</p>
+<p>The window title always shows which radio is feeding the display, and
+the <b>RX</b> group has a <code>Device:</code> button you can click to
+re-open the picker. The new choice takes effect on the next launch.</p>
 
 <h3>Playback mode</h3>
-<p>If no B210 is attached, the program looks next to the application file
+<p>If no SDR is attached, the program looks next to the application file
 for <code>sample.sigmf-data</code> + <code>sample.sigmf-meta</code> and, if
 both are found, plays the file back in a continuous loop. The window title
 shows <b>[Playback]</b>. The data source is the file, paced to the original
@@ -1640,16 +1652,31 @@ Accepts engineering notation, e.g. <code>1.42G</code> or <code>408M</code>.</li>
 
 <h4>RX</h4>
 <ul>
-<li><b>Sample Rate</b>: 1–25 MHz. Higher rate = wider spectrum but more
-disk usage when recording.</li>
-<li><b>RX Gain</b>: 0–76 dB. The B210 maps this onto the AD9361's
-RX1/RX2 gain table.</li>
+<li><b>Sample Rate</b>: per-radio. The combo shows the rates the connected
+radio actually supports (e.g. B210: 1–25 MHz; SDRPlay: 2–10 MHz; RTL-SDR:
+0.25–3.2 MHz). Higher rate = wider spectrum but more disk usage when
+recording.</li>
+<li><b>RX Gain</b>: per-radio range and meaning. The slider's min/max
+matches what the driver reports (e.g. B210: 0–76 dB on the AD9361 gain
+table; SDRPlay: 0–48 dB, internally inverted so higher = stronger signal;
+RTL-SDR: 0–49.6 dB). AGC, if the driver defaults it on, is disabled at
+startup so the slider always takes effect.</li>
+<li><b>Antenna</b>: appears only when the open radio has more than one RF
+input. For a B210 this lists all four physical connectors as
+<code>A : RX2</code>, <code>A : TX/RX</code>, <code>B : RX2</code>,
+<code>B : TX/RX</code> — receiver A and receiver B, each with its two SMA
+ports — and switching includes hopping between the two receivers. An
+RSPduo lists its two tuners. Pick the connector your cable is actually
+plugged into; the choice is remembered per radio. Single-port radios (most
+RTL dongles, the RSP1B) don't show this control.</li>
+<li><b>Device</b>: shows the currently-open radio and re-opens the picker
+on click.</li>
 </ul>
 
 <h4>Recording</h4>
 <ul>
 <li><b>Folder</b>: where SigMF capture pairs (.sigmf-meta / .sigmf-data)
-land. Defaults to <code>~/Documents/B210_Recordings</code>.</li>
+land. Defaults to <code>~/Documents/DSES_SA_Recordings</code>.</li>
 <li><b>Record</b>: <i>Stopped</i> / <i>Recording</i>. Recording always
 starts <i>Stopped</i> on launch.</li>
 </ul>
@@ -1739,7 +1766,7 @@ class HelpDialog(QtWidgets.QDialog):
         layout.addLayout(btn_row)
 
 
-# === Overflow capture (UHD/GR write 'O' to FD-level stderr on RX overflow) ===
+# === Overflow capture (UHD and gr-soapy write 'O' to FD-level stderr on RX overflow) ===
 
 # Match runs of bare 'O' characters that aren't part of a word (so "OOO"
 # scrolls past, but normal stderr text like "Operating" or "Boost_108600"
@@ -1749,9 +1776,10 @@ _OVERFLOW_RE = re.compile(r'\bO+\b')
 
 class OverflowMonitor(QtCore.QObject):
     """Redirects FD 2 (C-level stderr) into a pipe, scans the byte stream
-    for UHD overflow indicators ('O' characters), and emits them via a Qt
-    signal. All stderr output is passed through to the original console
-    unchanged, so info logs and tracebacks still appear there."""
+    for RX overflow indicators ('O' characters, written by both UHD and
+    gr-soapy), and emits them via a Qt signal. All stderr output is passed
+    through to the original console unchanged, so info logs and tracebacks
+    still appear there."""
 
     chars_received = Signal(str)
 
@@ -1819,17 +1847,18 @@ class OverflowMonitor(QtCore.QObject):
 
 
 class OverflowDisplayWidget(QtWidgets.QGroupBox):
-    """Sidebar group that streams UHD overflow 'O' characters into a fixed
-    4-line text view. Older lines are auto-dropped by Qt itself via
-    `setMaximumBlockCount`, so the widget never grows past 4 lines and
-    there's nothing to scroll."""
+    """Sidebar group that streams RX overflow 'O' characters into a fixed
+    4-line text view. Both UHD and gr-soapy print 'O' to stderr when the
+    host can't drain samples fast enough, so this works for any radio.
+    Older lines are auto-dropped by Qt itself via `setMaximumBlockCount`,
+    so the widget never grows past 4 lines and there's nothing to scroll."""
 
     MAX_LINES = 4
     LINE_WIDTH = 40  # chars per logical line — fits the narrowest sidebar
     IDLE_CLEAR_MS = 15000  # auto-clear if no new overflow chars for this long
 
     def __init__(self, parent=None):
-        super().__init__("Overflow ('O' = USRP RX overflow)", parent)
+        super().__init__("Overflow ('O' = dropped samples)", parent)
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(6, 6, 6, 6)
         layout.setSpacing(4)
@@ -2041,7 +2070,7 @@ class RadioSource:
     override when the defaults — B210's range — aren't right)."""
 
     # The GR source block. Connected to the display chain at
-    # b210_spectrum_analyzer.__init__'s "Connections" section.
+    # dses_spectrum_analyzer.__init__'s "Connections" section.
     block = None
 
     # Discrete sample-rate choices the sidebar combo offers. Defaults to
@@ -2052,8 +2081,20 @@ class RadioSource:
     # (min_db, max_db, step_db) for the RX-gain slider in the sidebar.
     gain_range = (0.0, 76.0, 1.0)
 
-    # Short label for the sidebar Device button.
+    # Short label for the sidebar Device button and the window title.
     display_label = "(unknown radio)"
+
+    # Verbose hardware description for SigMF metadata (core:hw field).
+    hw_info = "(unknown radio)"
+
+    # RF input ports the device exposes (e.g. ['TX/RX', 'RX2'] on a B210,
+    # ['Tuner 1 50ohm', 'Tuner 2 50ohm'] on an RSPduo). Subclasses fill this
+    # from the live block. A single-port radio leaves it length-1 (or empty)
+    # and the sidebar omits the Antenna combo.
+    antennas = []
+
+    # The port currently selected; set by subclasses after opening.
+    current_antenna = ""
 
     def set_samp_rate(self, hz: float) -> None:
         raise NotImplementedError
@@ -2064,6 +2105,16 @@ class RadioSource:
     def set_gain(self, db: float) -> None:
         raise NotImplementedError
 
+    def set_antenna(self, name: str) -> None:
+        # Default: radios with a single fixed port don't need to do anything.
+        pass
+
+    def antenna_needs_restart(self, name: str) -> bool:
+        """True if applying antenna `name` changes the active RX frontend in a
+        way that requires the flowgraph to be restarted (lock/unlock) for the
+        change to take effect. Default: live setter is enough."""
+        return False
+
 
 class UhdB200Source(RadioSource):
     """Wraps `uhd.usrp_source` for B200-family devices (B200 / B210)."""
@@ -2072,9 +2123,12 @@ class UhdB200Source(RadioSource):
     gain_range = (0.0, 76.0, 1.0)
 
     def __init__(self, serial: str, samp_rate: float, center_freq: float,
-                 gain: float, antenna: str = "RX2"):
+                 gain: float, antenna: str = ""):
         self._serial = serial
-        self._antenna = antenna
+        # Cache the live freq/gain so we can re-apply them after a receiver
+        # (subdev) switch, which resets per-frontend state.
+        self._cur_freq = center_freq
+        self._cur_gain = gain
         self.block = uhd.usrp_source(
             ",".join((f'serial={serial}', '')),
             uhd.stream_args(
@@ -2086,18 +2140,88 @@ class UhdB200Source(RadioSource):
         self.block.set_samp_rate(samp_rate)
         self.block.set_time_unknown_pps(uhd.time_spec(0))
         self.block.set_center_freq(center_freq, 0)
-        self.block.set_antenna(antenna, 0)
+
+        # The B210 has two RX frontends, mapped as subdevs "A:A" and "A:B"
+        # (receiver A and receiver B). The B200 has just "A:A". The default
+        # subdev spec lists all available frontends.
+        try:
+            self._subdevs = self.block.get_subdev_spec(0).split()
+        except Exception:
+            self._subdevs = []
+        try:
+            ports = list(self.block.get_antennas(0))   # e.g. ['TX/RX', 'RX2']
+        except Exception:
+            ports = []
+        self._ports = ports
+        self._recv_labels = ['A', 'B', 'C', 'D'][:len(self._subdevs)]
+        if len(self._subdevs) >= 2 and ports:
+            # Composite "<receiver> : <port>" — covers all physical inputs.
+            self.antennas = [f"{r} : {p}"
+                             for r in self._recv_labels for p in ports]
+        else:
+            # Single-receiver B200 (or unknown): plain port names.
+            self.antennas = ports
+        # The frontend the streamer is currently mapped to. Default mapping
+        # for channel 0 is the first subdev (receiver A).
+        self._current_subdev = self._subdevs[0] if self._subdevs else None
+
+        chosen = self._pick_initial(antenna)
+        self._apply(chosen)
         self.block.set_gain(gain, 0)
         self.display_label = f"USRP B210 — {serial}"
+        self.hw_info = f"Ettus USRP B210 (s/n {serial})"
+
+    def _pick_initial(self, saved: str) -> str:
+        """Saved port if still valid; else prefer an RX2 input; else first."""
+        if saved and saved in self.antennas:
+            return saved
+        for a in self.antennas:
+            if a.endswith("RX2"):
+                return a
+        return self.antennas[0] if self.antennas else "RX2"
+
+    def _split(self, name: str):
+        """(subdev_spec_or_None, port) for a composite or plain antenna name."""
+        if ' : ' in name:
+            recv, port = name.split(' : ', 1)
+            idx = self._recv_labels.index(recv) if recv in self._recv_labels else 0
+            spec = self._subdevs[idx] if idx < len(self._subdevs) else None
+            return spec, port
+        return None, name
+
+    def _apply(self, name: str) -> None:
+        spec, port = self._split(name)
+        if spec is not None and spec != self._current_subdev:
+            # Remap channel 0 to a different RX frontend (receiver A↔B).
+            # set_subdev_spec only takes effect when the RX streamer is
+            # (re)created — the caller must do this while the flowgraph is
+            # stopped or inside a lock()/unlock() cycle (see
+            # antenna_needs_restart). Per-frontend params reset on the
+            # remap, so re-apply freq + gain.
+            self.block.set_subdev_spec(spec, 0)
+            self.block.set_center_freq(self._cur_freq, 0)
+            self.block.set_gain(self._cur_gain, 0)
+            self._current_subdev = spec
+        self.block.set_antenna(port, 0)
+        self.current_antenna = name
+
+    def antenna_needs_restart(self, name: str) -> bool:
+        spec, _ = self._split(name)
+        return spec is not None and spec != self._current_subdev
 
     def set_samp_rate(self, hz: float) -> None:
         self.block.set_samp_rate(hz)
 
     def set_center_freq(self, hz: float) -> None:
+        self._cur_freq = hz
         self.block.set_center_freq(hz, 0)
 
     def set_gain(self, db: float) -> None:
+        self._cur_gain = db
         self.block.set_gain(db, 0)
+
+    def set_antenna(self, name: str) -> None:
+        self._apply(name)
 
 
 # Per-Soapy-driver default sample-rate lists and gain ranges. SDRPlay
@@ -2108,10 +2232,15 @@ class UhdB200Source(RadioSource):
 # get_sample_rate_range(), the actual values are clamped at use time.
 SOAPY_DEFAULTS = {
     # SDRPlay RSPx supports a set of discrete rates up to ~10 MHz.
+    # SoapySDRPlay3's overall set_gain accepts 0..48 dB but it's actually
+    # *gain reduction* — 0 = max gain, 48 = max attenuation. We invert at
+    # the wrapper layer so the slider behaves like every other gain knob:
+    # higher number = stronger signal.
     'sdrplay':  {
         'samp_rates': [2e6, 3e6, 4e6, 5e6, 6e6, 7e6, 8e6, 9e6, 10e6],
-        'gain':      (0.0, 59.0, 1.0),   # overall gain (dB) range
+        'gain':      (0.0, 48.0, 1.0),
         'product':   "SDRPlay",
+        'invert_gain': True,
     },
     'rtlsdr':   {
         'samp_rates': [0.25e6, 1.024e6, 1.4e6, 1.8e6, 1.92e6,
@@ -2157,10 +2286,11 @@ class SoapyGenericSource(RadioSource):
     Sample rate options and gain range come from SOAPY_DEFAULTS when the
     driver is known; otherwise we leave the defaults from the base class.
     The constructor signature mirrors UhdB200Source so the dispatch site
-    in b210_spectrum_analyzer.__init__ stays uniform."""
+    in dses_spectrum_analyzer.__init__ stays uniform."""
 
     def __init__(self, driver: str, serial: str, samp_rate: float,
-                 center_freq: float, gain: float, product: str = ""):
+                 center_freq: float, gain: float, product: str = "",
+                 antenna: str = ""):
         from gnuradio import soapy
         self._driver = driver
         self._serial = serial
@@ -2168,6 +2298,9 @@ class SoapyGenericSource(RadioSource):
         self.samp_rate_options = list(defaults.get(
             'samp_rates', RadioSource.samp_rate_options))
         self.gain_range = defaults.get('gain', RadioSource.gain_range)
+        # See SOAPY_DEFAULTS — some drivers (SDRplay) expose set_gain as
+        # *gain reduction*, so we map the slider value through (max - x).
+        self._invert_gain = bool(defaults.get('invert_gain', False))
         # Build the SoapySDR device-address string. driver= is required;
         # serial= disambiguates when multiple devices of the same driver
         # are attached.
@@ -2198,11 +2331,19 @@ class SoapyGenericSource(RadioSource):
         gain = max(lo, min(hi, gain))
         self.block.set_sample_rate(0, samp_rate)
         self.block.set_frequency(0, center_freq)
+        # Disable AGC so the user's gain slider actually takes effect.
+        # SDRPlay drivers default to AGC=on and silently drop every set_gain
+        # call ("Not updating IFGR gain because AGC is enabled") otherwise.
+        # Not every driver supports the call; ignore if missing/unsupported.
+        try:
+            self.block.set_gain_mode(0, False)
+        except Exception:
+            pass
         # gr-soapy's set_gain(channel, value) takes overall gain in dB.
         # Some drivers (notably SDRPlay) expose multiple gain stages; the
         # overall setter applies the SoapySDR generic distribution.
         try:
-            self.block.set_gain(0, float(gain))
+            self.block.set_gain(0, self._driver_gain(float(gain)))
         except Exception as exc:
             # Some Soapy drivers fail on overall set_gain when only named
             # stages exist; don't kill the whole flow on a non-critical
@@ -2210,8 +2351,40 @@ class SoapyGenericSource(RadioSource):
             print(f"Soapy set_gain warning ({driver}): {exc}",
                   file=sys.stderr)
 
+        # RF input ports this radio exposes (single-port radios report one,
+        # e.g. RSP1B → ['RX']; the RSPduo reports its two tuners). Apply the
+        # saved port if it's valid for this device.
+        try:
+            self.antennas = list(self.block.list_antennas(0))
+        except Exception:
+            self.antennas = []
+        if antenna and antenna in self.antennas:
+            try:
+                self.block.set_antenna(0, antenna)
+            except Exception as exc:
+                print(f"Soapy set_antenna warning ({driver}): {exc}",
+                      file=sys.stderr)
+        try:
+            self.current_antenna = self.block.get_antenna(0)
+        except Exception:
+            self.current_antenna = antenna or (
+                self.antennas[0] if self.antennas else "")
+
         nice_name = product or defaults.get('product') or driver
         self.display_label = f"{nice_name} — {serial or '(no serial)'}"
+        self.hw_info = (f"{nice_name} (s/n {serial})" if serial
+                        else f"{nice_name} via SoapySDR ({driver})")
+
+    def _driver_gain(self, slider_db: float) -> float:
+        """Translate the user-facing gain value (higher = more signal) into
+        whatever convention the underlying driver wants. For drivers flagged
+        'invert_gain' (SDRPlay), the driver treats the number as *gain
+        reduction*, so we send (max - slider). For everyone else we pass
+        through unchanged."""
+        if self._invert_gain:
+            lo, hi, _ = self.gain_range
+            return hi - (slider_db - lo)
+        return slider_db
 
     def set_samp_rate(self, hz: float) -> None:
         # Round to the nearest supported rate when we have a list.
@@ -2227,13 +2400,21 @@ class SoapyGenericSource(RadioSource):
         lo, hi, _ = self.gain_range
         db = max(lo, min(hi, float(db)))
         try:
-            self.block.set_gain(0, db)
+            self.block.set_gain(0, self._driver_gain(db))
         except Exception as exc:
             print(f"Soapy set_gain warning ({self._driver}): {exc}",
                   file=sys.stderr)
 
+    def set_antenna(self, name: str) -> None:
+        try:
+            self.block.set_antenna(0, name)
+            self.current_antenna = name
+        except Exception as exc:
+            print(f"Soapy set_antenna warning ({self._driver}): {exc}",
+                  file=sys.stderr)
 
-class b210_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
+
+class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
 
     # Both bases define `connect` and `disconnect`. PySide6's QObject.connect/
     # disconnect win MRO, so `self.(dis)connect((blk, 0), (blk2, 0))` ends up
@@ -2311,11 +2492,11 @@ class b210_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         self.sidebar_layout.addStretch(1)
 
         # QSettings is kept for window geometry only (Qt-native binary blob).
-        self.settings = QtCore.QSettings("gnuradio/flowgraphs", "b210_spectrum_analyzer")
+        self.settings = QtCore.QSettings("gnuradio/flowgraphs", "dses_spectrum_analyzer")
 
         self.recording_dir = self._app_settings.get_str('recording', 'directory')
         if not self.recording_dir:
-            self.recording_dir = str(Path.home() / "Documents" / "B210_Recordings")
+            self.recording_dir = str(Path.home() / "Documents" / "DSES_SA_Recordings")
         os.makedirs(self.recording_dir, exist_ok=True)
 
         self._recording_dir_button = QtWidgets.QPushButton("Folder: " + self._elided_dir())
@@ -2342,6 +2523,7 @@ class b210_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         self.freq_manual    = freq_manual    = s.get_float('tuning', 'manual_hz')
         self.samp_rate      = samp_rate      = s.get_float('rx', 'samp_rate_hz')
         self.gain           = gain           = s.get_float('rx', 'gain_db')
+        saved_antenna       = s.get_str('rx', 'antenna')
         # `record` is intentionally NOT persisted — always start stopped.
         self.record         = 0
         self.center_freq    = center_freq    = ((freq_manual if freq_preset == 0 else freq_preset)
@@ -2403,7 +2585,8 @@ class b210_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
                 if self._device_driver == DRIVER_UHD_B200:
                     src: RadioSource = UhdB200Source(
                         serial=chosen['serial'], samp_rate=samp_rate,
-                        center_freq=center_freq, gain=gain)
+                        center_freq=center_freq, gain=gain,
+                        antenna=saved_antenna)
                 else:
                     src = SoapyGenericSource(
                         driver=self._device_driver,
@@ -2411,7 +2594,8 @@ class b210_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
                         samp_rate=samp_rate,
                         center_freq=center_freq,
                         gain=gain,
-                        product=chosen.get('product', ''))
+                        product=chosen.get('product', ''),
+                        antenna=saved_antenna)
                     # Snap requested rate to the driver's nearest supported.
                     if src.samp_rate_options:
                         samp_rate = min(
@@ -2428,7 +2612,17 @@ class b210_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
             self.uhd_usrp_source_0 = src.block
             sr_options = list(src.samp_rate_options)
             gain_range_tuple = src.gain_range
-            device_label_text = f"Device: {chosen['product']} {self._device_serial}".strip()
+            device_label_text = f"Device: {src.display_label}"
+
+        # Window title shows the active radio so the user can see at a
+        # glance which device is feeding the display.
+        if self._playback_mode:
+            assert self._playback_path is not None
+            title_device = f"Playback: {Path(self._playback_path).name}"
+        else:
+            assert self._source is not None
+            title_device = self._source.display_label
+        self.setWindowTitle(f"{APP_NAME}  —  v{APP_VERSION}  —  {title_device}")
 
         # --- Sample-rate selector (device-aware options) ---
         self._samp_rate_options = sr_options
@@ -2480,6 +2674,27 @@ class b210_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         self._gain_win = RangeWidget(self._gain_range, self.set_gain, "RX Gain (dB)",
                                       "counter_slider", float, Qt.Horizontal)
         self._rx_group_layout.addWidget(self._gain_win)
+
+        # --- Antenna / RF-input selector (only when the radio has >1 port) ---
+        # B210: TX/RX vs RX2. RSPduo: tuner 1 vs 2. RSPdx: antenna A/B/C.
+        # Single-port radios (RSP1B → ['RX'], most RTL dongles) omit it.
+        self._antenna_options = []
+        if not self._playback_mode and self._source is not None:
+            self._antenna_options = list(self._source.antennas)
+        if len(self._antenna_options) > 1 and self._source is not None:
+            self._antenna_tool_bar = QtWidgets.QToolBar(self)
+            self._antenna_tool_bar.addWidget(QtWidgets.QLabel("Antenna: "))
+            self._antenna_combo_box = QtWidgets.QComboBox()
+            self._antenna_tool_bar.addWidget(self._antenna_combo_box)
+            for _name in self._antenna_options:
+                self._antenna_combo_box.addItem(_name)
+            cur = self._source.current_antenna
+            if cur in self._antenna_options:
+                self._antenna_combo_box.setCurrentIndex(
+                    self._antenna_options.index(cur))
+            self._antenna_combo_box.currentIndexChanged.connect(
+                lambda i: self.set_antenna(self._antenna_options[i]))
+            self._rx_group_layout.addWidget(self._antenna_tool_bar)
 
         # --- Device picker button (label already computed above) ---
         self._device_button = QtWidgets.QPushButton(device_label_text)
@@ -2808,7 +3023,7 @@ class b210_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
     def closeEvent(self, event):
         # Keep QSettings purely for window geometry (binary blob, not
         # appropriate for the hand-editable INI).
-        self.settings = QtCore.QSettings("gnuradio/flowgraphs", "b210_spectrum_analyzer")
+        self.settings = QtCore.QSettings("gnuradio/flowgraphs", "dses_spectrum_analyzer")
         self.settings.setValue("geometry", self.saveGeometry())
         # Persist app settings to INI one more time on close to flush any
         # tail-end edits that didn't auto-save.
@@ -2965,14 +3180,15 @@ class b210_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         base = os.path.join(self.recording_dir,
                             f"DSES_Spectrum_Analyzer_{ts}")
         try:
+            assert self._source is not None  # guarded by _playback_mode check above
             sink = blocks.sigmf_sink_minimal(
                 item_size=gr.sizeof_gr_complex,
                 filename=base,
                 sample_rate=self.samp_rate,
                 center_freq=self.center_freq,
                 author=APP_AUTHOR,
-                description='B210 capture, RX2 antenna',
-                hw_info='Ettus USRP B210',
+                description=f"Spectrum analyzer capture ({self._source.display_label})",
+                hw_info=self._source.hw_info,
                 is_complex=True)
         except Exception as exc:
             QtWidgets.QMessageBox.critical(
@@ -3036,6 +3252,64 @@ class b210_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         self._source.set_gain(self.gain)
         self._save_setting('rx', 'gain_db', float(gain))
 
+    def set_antenna(self, name):
+        if self._playback_mode or self._source is None:
+            return  # no antenna selection in playback mode
+        # A plain port change within a receiver (B210 TX/RX↔RX2) takes effect
+        # live. Switching the active *receiver* (A↔B) remaps channel 0 to a
+        # different RX frontend, which only takes hold when the source block's
+        # RX streamer is created fresh — a runtime set_subdev_spec (even under
+        # lock/unlock) does not rebind the live streamer. So we tear down and
+        # rebuild the source block on a receiver change.
+        if self._source.antenna_needs_restart(name):
+            if self._sigmf_sink is not None:
+                QtWidgets.QMessageBox.information(
+                    self, "Stop recording first",
+                    "Switching between receiver A and receiver B restarts the "
+                    "radio, which can't be done while recording. Stop the "
+                    "recording, then switch receivers.")
+                self._sync_antenna_combo()  # revert combo to the live port
+                return
+            self._rebuild_source_for_antenna(name)
+        else:
+            self._source.set_antenna(name)
+        self._save_setting('rx', 'antenna', name)
+
+    def _rebuild_source_for_antenna(self, name):
+        """Tear the radio source out of the flowgraph and rebuild it on the
+        requested antenna/receiver. Needed because the active RX frontend is
+        fixed when the source's streamer is created; only a fresh block picks
+        up a different receiver. Brief stream gap while it restarts."""
+        import gc
+        self.stop()
+        self.wait()
+        self.disconnect((self.uhd_usrp_source_0, 0), (self._stream_to_vec, 0))
+        # Release the old device handle fully (the B210 is exclusive-access)
+        # before opening it again on the new frontend.
+        self._source = None
+        self.uhd_usrp_source_0 = None
+        gc.collect()
+        assert self._device_serial is not None  # always set in live mode
+        new = UhdB200Source(
+            serial=self._device_serial, samp_rate=self.samp_rate,
+            center_freq=self.center_freq, gain=self.gain, antenna=name)
+        self._source = new
+        self.uhd_usrp_source_0 = new.block
+        self.connect((self.uhd_usrp_source_0, 0), (self._stream_to_vec, 0))
+        self.start()
+        self._overflow_widget.clear()
+
+    def _sync_antenna_combo(self):
+        """Set the Antenna combo back to the source's live port without
+        re-triggering set_antenna (used when a switch is refused)."""
+        combo = getattr(self, '_antenna_combo_box', None)
+        if combo is None or self._source is None:
+            return
+        cur = self._source.current_antenna
+        if cur in self._antenna_options:
+            with _SignalBlocker(combo):
+                combo.setCurrentIndex(self._antenna_options.index(cur))
+
     def get_center_freq(self):
         return self.center_freq
 
@@ -3061,13 +3335,13 @@ class b210_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
 
 
 
-def main(top_block_cls=b210_spectrum_analyzer, options=None):
+def main(top_block_cls=dses_spectrum_analyzer, options=None):
 
     qapp = QtWidgets.QApplication(sys.argv)
-    # Drive QStandardPaths.AppDataLocation to %APPDATA%/B210Analyzer (Windows)
-    # / ~/Library/Application Support/B210Analyzer (mac) / ~/.local/share/...
+    # Drive QStandardPaths.AppDataLocation to %APPDATA%/DSES_Analyzer (Windows)
+    # / ~/Library/Application Support/DSES_Analyzer (mac) / ~/.local/share/...
     # Must be set BEFORE constructing the top block (which builds Settings).
-    QtWidgets.QApplication.setApplicationName("B210Analyzer")
+    QtWidgets.QApplication.setApplicationName("DSES_Analyzer")
     QtWidgets.QApplication.setApplicationDisplayName(APP_NAME)
     QtWidgets.QApplication.setApplicationVersion(APP_VERSION)
 

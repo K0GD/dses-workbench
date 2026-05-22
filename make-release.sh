@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# make-release.sh — build a distributable zip of the B210 Spectrum Analyzer.
+# make-release.sh — build a distributable zip of the DSES Spectrum Analyzer.
 #
-# Reads APP_VERSION from b210_spectrum_analyzer.py, copies the runtime files
-# into dist/b210-spectrum-analyzer-<version>/, zips the folder, prints the
+# Reads APP_VERSION from dses_spectrum_analyzer.py, copies the runtime files
+# into dist/dses-spectrum-analyzer-<version>/, zips the folder, prints the
 # path to the resulting archive.
 #
 # Run from the project root:    ./make-release.sh
@@ -13,19 +13,19 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-if [ ! -f b210_spectrum_analyzer.py ]; then
-    echo "b210_spectrum_analyzer.py not found in $(pwd)" >&2
+if [ ! -f dses_spectrum_analyzer.py ]; then
+    echo "dses_spectrum_analyzer.py not found in $(pwd)" >&2
     exit 1
 fi
 
-version="$(grep -oE '^APP_VERSION[[:space:]]*=[[:space:]]*"[^"]+"' b210_spectrum_analyzer.py \
+version="$(grep -oE '^APP_VERSION[[:space:]]*=[[:space:]]*"[^"]+"' dses_spectrum_analyzer.py \
             | head -n1 | sed -E 's/.*"([^"]+)".*/\1/')"
 if [ -z "$version" ]; then
-    echo "Could not find APP_VERSION in b210_spectrum_analyzer.py" >&2
+    echo "Could not find APP_VERSION in dses_spectrum_analyzer.py" >&2
     exit 1
 fi
 
-bundle="b210-spectrum-analyzer-$version"
+bundle="dses-spectrum-analyzer-$version"
 dist="dist"
 stage="$dist/$bundle"
 archive="$dist/$bundle.zip"
@@ -46,25 +46,31 @@ copy_if_present() {
 
 # Runtime files
 for f in \
-    b210_spectrum_analyzer.py \
+    dses_spectrum_analyzer.py \
     LICENSE \
     launcher.bat \
     launcher.ps1 \
     launcher.sh \
     install-shortcut.ps1 \
-    b210-spectrum-analyzer.desktop \
+    dses-spectrum-analyzer.desktop \
     environment.yml ; do
     copy_if_present "$f" "$stage/"
 done
 copy_if_present icons/b210.ico "$stage/icons/"
 copy_if_present icons/b210.png "$stage/icons/"
 
+# Pre-built SoapySDRPlay3 module for Windows (SDRplay support). Not on
+# conda-forge, so we ship it; install guide §1A says where to copy it.
+mkdir -p "$stage/sdrplay"
+copy_if_present vendor/windows/sdrPlaySupport.dll "$stage/sdrplay/"
+copy_if_present vendor/windows/README.txt "$stage/sdrplay/"
+
 # Install guide PDF (the DSES-styled PDF is the deliverable; the .docx
 # is a developer-side intermediate and stays out of the bundle).
 copy_if_present DSES_RFI_Spectrum_Analyzer_Installation.pdf "$stage/"
 
-# Default SigMF playback sample (large, ~500+ MB) — lets users without a
-# B210 launch the program and see live spectrum from a recorded file.
+# Default SigMF playback sample (large, ~500+ MB) — lets users without any
+# SDR attached launch the program and see live spectrum from a recorded file.
 copy_if_present sample.sigmf-data "$stage/"
 copy_if_present sample.sigmf-meta "$stage/"
 

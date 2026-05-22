@@ -1,18 +1,18 @@
-# make-release.ps1 — build a distributable zip of the B210 Spectrum Analyzer.
+# make-release.ps1 — build a distributable zip of the DSES Spectrum Analyzer.
 #
-# Reads APP_VERSION from b210_spectrum_analyzer.py, copies the runtime files
-# into dist\b210-spectrum-analyzer-<version>\, zips the folder, prints the
+# Reads APP_VERSION from dses_spectrum_analyzer.py, copies the runtime files
+# into dist\dses-spectrum-analyzer-<version>\, zips the folder, prints the
 # path to the resulting archive.
 #
 # Run from the project root:    .\make-release.ps1
 #
 # Files included in the bundle:
-#   b210_spectrum_analyzer.py     — the application
+#   dses_spectrum_analyzer.py     — the application
 #   LICENSE                       — GPL-3.0
 #   launcher.bat / .ps1           — Windows launcher
 #   launcher.sh                   — Linux / macOS launcher
 #   install-shortcut.ps1          — Windows desktop-shortcut installer
-#   b210-spectrum-analyzer.desktop — Linux desktop file (template)
+#   dses-spectrum-analyzer.desktop — Linux desktop file (template)
 #   icons\b210.ico / b210.png     — icons
 #   environment.yml               — reference for env reproducibility
 #   Installing.docx               — install / update guide (if built)
@@ -26,9 +26,9 @@ $root = $PSScriptRoot
 Push-Location $root
 try {
     # --- Pull version from the source file ---
-    $main = Join-Path $root 'b210_spectrum_analyzer.py'
+    $main = Join-Path $root 'dses_spectrum_analyzer.py'
     if (-not (Test-Path $main)) {
-        throw "b210_spectrum_analyzer.py not found in $root"
+        throw "dses_spectrum_analyzer.py not found in $root"
     }
     $verMatch = Select-String -Path $main -Pattern '^APP_VERSION\s*=\s*"([^"]+)"' | Select-Object -First 1
     if (-not $verMatch) {
@@ -38,7 +38,7 @@ try {
     Write-Host "Building release for version $version"
 
     # --- Lay out the staging dir ---
-    $bundle = "b210-spectrum-analyzer-$version"
+    $bundle = "dses-spectrum-analyzer-$version"
     $dist   = Join-Path $root 'dist'
     $stage  = Join-Path $dist $bundle
     $zip    = Join-Path $dist "$bundle.zip"
@@ -50,13 +50,13 @@ try {
 
     # --- Copy runtime files ---
     $files = @(
-        'b210_spectrum_analyzer.py',
+        'dses_spectrum_analyzer.py',
         'LICENSE',
         'launcher.bat',
         'launcher.ps1',
         'launcher.sh',
         'install-shortcut.ps1',
-        'b210-spectrum-analyzer.desktop',
+        'dses-spectrum-analyzer.desktop',
         'environment.yml'
     )
     foreach ($f in $files) {
@@ -70,14 +70,22 @@ try {
         if (Test-Path $f) { Copy-Item $f -Destination (Join-Path $stage 'icons') }
         else { Write-Warning "Missing (skipped): $f" }
     }
+    # Pre-built SoapySDRPlay3 module for Windows (SDRplay support). Not on
+    # conda-forge, so we ship it; the install guide §1A tells the user where
+    # to copy it. README.txt records the ABI it was built against.
+    New-Item -ItemType Directory -Force -Path (Join-Path $stage 'sdrplay') | Out-Null
+    foreach ($f in @('vendor\windows\sdrPlaySupport.dll', 'vendor\windows\README.txt')) {
+        if (Test-Path $f) { Copy-Item $f -Destination (Join-Path $stage 'sdrplay') }
+        else { Write-Warning "Missing (skipped): $f" }
+    }
     # Install guide PDF (the DSES-styled PDF is the deliverable; the .docx
     # is a developer-side intermediate and stays out of the bundle).
     foreach ($doc in @('DSES_RFI_Spectrum_Analyzer_Installation.pdf')) {
         if (Test-Path $doc) { Copy-Item $doc -Destination $stage }
         else { Write-Warning "Missing (skipped): $doc — run build_install_docx.py first" }
     }
-    # Default SigMF playback sample — ships so users without a B210 can
-    # still launch and see live spectrum. Large (~500+ MB).
+    # Default SigMF playback sample — ships so users without any SDR
+    # attached can still launch and see live spectrum. Large (~500+ MB).
     foreach ($f in @('sample.sigmf-data', 'sample.sigmf-meta')) {
         if (Test-Path $f) {
             Copy-Item $f -Destination $stage

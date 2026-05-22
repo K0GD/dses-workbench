@@ -2,10 +2,10 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Run b210_spectrum_analyzer.py",
+      "name": "Run dses_spectrum_analyzer.py",
       "type": "debugpy",
       "request": "launch",
-      "program": "${workspaceFolder}/b210_spectrum_analyzer.py",
+      "program": "${workspaceFolder}/dses_spectrum_analyzer.py",
       "console": "integratedTerminal",
       "justMyCode": true,
       "cwd": "${workspaceFolder}"

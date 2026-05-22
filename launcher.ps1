@@ -3,8 +3,8 @@
 $ErrorActionPreference = 'Stop'
 
 $ScriptDir  = $PSScriptRoot
-$MainScript = Join-Path $ScriptDir 'b210_spectrum_analyzer.py'
-$ConfigDir  = Join-Path $env:APPDATA 'B210Analyzer'
+$MainScript = Join-Path $ScriptDir 'dses_spectrum_analyzer.py'
+$ConfigDir  = Join-Path $env:APPDATA 'DSES_Analyzer'
 $ConfigFile = Join-Path $ConfigDir 'radioconda_root.txt'
 $Marker     = 'Library\share\uhd\images\usrp_b210_fpga.bin'
 
