@@ -143,10 +143,10 @@ Upload **into the directory** `/var/www/html/sw_distribution/b210_sa/` on gpstim
 
 **Method B — scp (command line), if you prefer.**
 
+Run it as a **single line** (scp takes multiple source files before the destination). Do NOT break it across lines with `^` — that's a CMD continuation char and fails in PowerShell (which uses a backtick); the safe choice is one line:
+
 ```text
-scp dist/dses-spectrum-analyzer-<version>.zip ^
-    DSES_RFI_Spectrum_Analyzer_Installation.pdf ^
-    rick@gpstime.com:/var/www/html/sw_distribution/b210_sa/
+scp dist\dses-spectrum-analyzer-<version>.zip DSES_RFI_Spectrum_Analyzer_Installation.pdf rick@gpstime.com:/var/www/html/sw_distribution/b210_sa/
 ```
 
 The SSH username is `rick` (so `rick@gpstime.com`), not an email. Common scp gotchas: the path after the colon is absolute (leading `/`); if it says *permission denied*, the account can't write `/var/www/html` — scp into `~` then `sudo mv` into place. On Windows, run scp from PowerShell (OpenSSH client) or Git Bash, not the conda prompt.
