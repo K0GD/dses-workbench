@@ -127,35 +127,36 @@ The script reads `APP_VERSION`, creates `dist\dses-spectrum-analyzer-<version>\`
 
 ### 4.6 Upload to the server
 
-From a shell with `scp`:
+Upload **into the directory** `/var/www/html/sw_distribution/b210_sa/` on gpstime.com. Two files go up each release:
+
+- `dses-spectrum-analyzer-<version>.zip` — the bundle.
+- `DSES_RFI_Spectrum_Analyzer_Installation.pdf` — standalone install guide (bundled in the zip too, but the standalone copy is the "read before you download the 200+ MB bundle" link). Overwrite it every release so the public guide stays in sync.
+
+**Method A — FileZilla (SFTP), the usual method.**
+
+1. Connect to gpstime.com over **SFTP** (protocol "SFTP - SSH File Transfer Protocol", port 22), using your SSH login.
+2. Navigate the *remote* pane to `/var/www/html/sw_distribution/b210_sa/`. If you land in your home directory and can't see `/var/www`, type the path into FileZilla's "Remote site:" box and press Enter.
+3. Drag the zip and the PDF over.
+4. **Set permissions to 644** so the web server can read them: right-click each uploaded file → **File permissions…** → set the numeric value to `644` (or tick read for owner/group/public, write for owner only). Without this the file may exist but the URL returns 403.
+
+> If FileZilla can't write into `/var/www/html/...` (permission denied), the SSH account doesn't own that path. Either have the host grant write access to that directory, or upload to your home dir and ask whoever has `sudo` to move the files into place. This is a server-account setup issue, not a FileZilla bug.
+
+**Method B — scp (command line), if you prefer.**
 
 ```text
-scp dist/dses-spectrum-analyzer-<version>.zip you@gpstime.com:/var/www/html/sw_distribution/b210_sa/
+scp dist/dses-spectrum-analyzer-<version>.zip ^
+    DSES_RFI_Spectrum_Analyzer_Installation.pdf ^
+    you@gpstime.com:/var/www/html/sw_distribution/b210_sa/
 ```
 
-If your account can't scp directly into `/var/www/html` (permissions), scp to your home dir then `sudo mv` it into place. Then SSH in and:
+Common scp gotchas: use your **SSH username** (`whoami` on the server) not an email, e.g. `rick@gpstime.com`; the path after the colon is absolute (leading `/`); if it says *permission denied*, the account can't write `/var/www/html` — scp into `~` then `sudo mv` into place. On Windows, run scp from PowerShell (OpenSSH client) or Git Bash, not the conda prompt.
+
+**After uploading (either method)**, generate the checksum and verify the URLs. Easiest from an SSH session:
 
 ```bash
 cd /var/www/html/sw_distribution/b210_sa/
 sha256sum dses-spectrum-analyzer-<version>.zip > dses-spectrum-analyzer-<version>.sha256
-chmod 644 dses-spectrum-analyzer-<version>.{zip,sha256}
-```
-
-Also upload the install guide PDF as a standalone file (it's bundled inside the zip too, but a standalone copy gives users a "read before you download the 200+ MB bundle" link):
-
-```text
-scp DSES_RFI_Spectrum_Analyzer_Installation.pdf you@gpstime.com:/var/www/html/sw_distribution/b210_sa/
-```
-
-```bash
-chmod 644 /var/www/html/sw_distribution/b210_sa/DSES_RFI_Spectrum_Analyzer_Installation.pdf
-```
-
-→ served at `https://gpstime.com/sw_distribution/b210_sa/DSES_RFI_Spectrum_Analyzer_Installation.pdf`. Overwrite it on every release so the public guide stays in sync with the shipped bundle.
-
-Verify the URLs are reachable from outside:
-
-```bash
+chmod 644 dses-spectrum-analyzer-<version>.{zip,sha256} DSES_RFI_Spectrum_Analyzer_Installation.pdf
 curl -sI https://gpstime.com/sw_distribution/b210_sa/dses-spectrum-analyzer-<version>.zip | head -1
 curl -sI https://gpstime.com/sw_distribution/b210_sa/DSES_RFI_Spectrum_Analyzer_Installation.pdf | head -1
 # expect "HTTP/2 200" or "HTTP/1.1 200 OK"
