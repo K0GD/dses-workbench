@@ -1,4 +1,4 @@
-# make-release.ps1 — build a distributable zip of the DSES Spectrum Analyzer.
+# make-release.ps1 - build a distributable zip of the DSES Spectrum Analyzer.
 #
 # Reads APP_VERSION from dses_spectrum_analyzer.py, copies the runtime files
 # into dist\dses-spectrum-analyzer-<version>\, zips the folder, prints the
@@ -7,15 +7,15 @@
 # Run from the project root:    .\make-release.ps1
 #
 # Files included in the bundle:
-#   dses_spectrum_analyzer.py     — the application
-#   LICENSE                       — GPL-3.0
-#   launcher.bat / .ps1           — Windows launcher
-#   launcher.sh                   — Linux / macOS launcher
-#   install-shortcut.ps1          — Windows desktop-shortcut installer
-#   dses-spectrum-analyzer.desktop — Linux desktop file (template)
-#   icons\b210.ico / b210.png     — icons
-#   environment.yml               — reference for env reproducibility
-#   Installing.docx               — install / update guide (if built)
+#   dses_spectrum_analyzer.py     - the application
+#   LICENSE                       - GPL-3.0
+#   launcher.bat / .ps1           - Windows launcher
+#   launcher.sh                   - Linux / macOS launcher
+#   install-shortcut.ps1          - Windows desktop-shortcut installer
+#   dses-spectrum-analyzer.desktop - Linux desktop file (template)
+#   icons\b210.ico / b210.png     - icons
+#   environment.yml               - reference for env reproducibility
+#   Installing.docx               - install / update guide (if built)
 #
 # Excluded: .conda\, .git\, .vscode\, __pycache__, CLAUDE.md,
 #           icons\generate-icon.py, make-release.*, settings files.
@@ -71,7 +71,7 @@ try {
         else { Write-Warning "Missing (skipped): $f" }
     }
     # Pre-built SoapySDRPlay3 module for Windows (SDRplay support). Not on
-    # conda-forge, so we ship it; the install guide §1A tells the user where
+    # conda-forge, so we ship it; the install guide section 1A tells the user where
     # to copy it. README.txt records the ABI it was built against.
     New-Item -ItemType Directory -Force -Path (Join-Path $stage 'sdrplay') | Out-Null
     foreach ($f in @('vendor\windows\sdrPlaySupport.dll', 'vendor\windows\README.txt')) {
@@ -82,9 +82,9 @@ try {
     # is a developer-side intermediate and stays out of the bundle).
     foreach ($doc in @('DSES_RFI_Spectrum_Analyzer_Installation.pdf')) {
         if (Test-Path $doc) { Copy-Item $doc -Destination $stage }
-        else { Write-Warning "Missing (skipped): $doc — run build_install_docx.py first" }
+        else { Write-Warning "Missing (skipped): $doc - run build_install_docx.py first" }
     }
-    # Default SigMF playback sample — ships so users without any SDR
+    # Default SigMF playback sample - ships so users without any SDR
     # attached can still launch and see live spectrum. Large (~500+ MB).
     foreach ($f in @('sample.sigmf-data', 'sample.sigmf-meta')) {
         if (Test-Path $f) {
