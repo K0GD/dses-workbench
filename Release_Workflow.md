@@ -64,8 +64,11 @@ Not part of the release bundle: `.conda/`, `.git/`, `.vscode/`, `dist/`, `CLAUDE
 All distribution goes through:
 
 ```text
-https://gpstime.com/sw_distribution/b210_sa/
+URL:        https://gpstime.com/sw_distribution/b210_sa/
+Filesystem: /var/www/html/sw_distribution/b210_sa/   (on gpstime.com)
 ```
+
+Upload releases straight into that filesystem directory (Apache/nginx docroot is `/var/www/html`). A common mistake is to scp into your home directory (e.g. `~/spectrum_analyzer_dist`) — files there are NOT web-served and the URL 404s. Always `mv` them into `/var/www/html/sw_distribution/b210_sa/` and `chmod 644`.
 
 That single directory holds:
 
@@ -127,13 +130,13 @@ The script reads `APP_VERSION`, creates `dist\dses-spectrum-analyzer-<version>\`
 From a shell with `scp`:
 
 ```text
-scp dist/dses-spectrum-analyzer-<version>.zip you@gpstime.com:/path/to/sw_distribution/b210_sa/
+scp dist/dses-spectrum-analyzer-<version>.zip you@gpstime.com:/var/www/html/sw_distribution/b210_sa/
 ```
 
-Then SSH in and:
+If your account can't scp directly into `/var/www/html` (permissions), scp to your home dir then `sudo mv` it into place. Then SSH in and:
 
 ```bash
-cd /path/to/sw_distribution/b210_sa/
+cd /var/www/html/sw_distribution/b210_sa/
 sha256sum dses-spectrum-analyzer-<version>.zip > dses-spectrum-analyzer-<version>.sha256
 chmod 644 dses-spectrum-analyzer-<version>.{zip,sha256}
 ```
@@ -185,14 +188,14 @@ JSON object with these fields:
 From your SSH session, after uploading the new zip:
 
 ```bash
-cat > /path/to/sw_distribution/b210_sa/manifest.json << 'EOF'
+cat > /var/www/html/sw_distribution/b210_sa/manifest.json << 'EOF'
 {
   "latest_version": "1.0.1",
   "download_url": "https://gpstime.com/sw_distribution/b210_sa/dses-spectrum-analyzer-1.0.1.zip",
   "release_notes": "Added X.\nFixed Y.\n"
 }
 EOF
-chmod 644 /path/to/sw_distribution/b210_sa/manifest.json
+chmod 644 /var/www/html/sw_distribution/b210_sa/manifest.json
 ```
 
 The single-quoted `<< 'EOF'` is important so the shell doesn't expand `$`/backslashes inside the JSON.
