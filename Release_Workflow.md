@@ -284,22 +284,28 @@ dses-spectrum-analyzer-<version>/
 └── sample.sigmf-meta
 ```
 
-The `sdrplay/` payload is sourced from `vendor/windows/` in the repo. SDRplay users on Windows copy the DLL into Radioconda per Installing.md §1A.2; everyone else ignores it (Linux/macOS get the module from their package manager).
+The `sdrplay/` payload is sourced from `vendor/windows/` in the repo. SDRplay users on Windows copy the DLL into Radioconda per Installing.md §3A.2; everyone else ignores it (Linux/macOS get the module from their package manager).
 
 `Release_Workflow.md`, the matching PDF, `CLAUDE.md`, `Installing.md`, `build_install_docx.py`, the `make-release.*` scripts themselves, the conda env, `.git`, and IDE configs are all excluded by name.
 
 ### 7.2 Where the SigMF sample comes from
 
-The bundled `sample.sigmf-{data,meta}` is a real B210 recording at 10 MHz centered on 408 MHz (the pulsar preset). It loops in playback mode and lets users without a B210 see the GUI work.
+The bundled `sample.sigmf-{data,meta}` is a real B210 recording at 10 MHz centered on 408 MHz (the pulsar preset). It loops in playback mode and lets users with no radio attached see the GUI work — useful for training.
 
-To replace it with a different recording:
+It is shipped as a **2-second clip** (cf32 @ 10 MS/s = 160 MB), trimmed from the original ~7.2-second capture to keep the zip small (~60 MB vs ~223 MB). The full original is kept locally as `sample_full.sigmf-data` (git-ignored, not committed) so you can re-trim to a different length. Two seconds was judged a good balance: the spectrum looks identical at any length, and the waterfall's loop repetition was acceptable for demo/training.
+
+To re-trim to a different length (cf32 @ 10 MS/s is 80 MB per second, so bytes = seconds × 80,000,000 rounded to a multiple of 8):
+
+```bash
+head -c 160000000 sample_full.sigmf-data > sample.sigmf-data   # 2.0 s
+```
+
+To replace it with a different recording entirely:
 
 1. In live mode, hit **Record** and let it run for a few seconds.
 2. Stop recording. The new file lands in `~/Documents/DSES_SA_Recordings/DSES_Spectrum_Analyzer_<timestamp>.sigmf-{data,meta}`.
 3. Rename to `sample.sigmf-data` and `sample.sigmf-meta` and drop next to `dses_spectrum_analyzer.py` in your project root, replacing the existing pair.
 4. The next `make-release` picks up the new sample.
-
-Be aware the file size is dominated by the sample (several hundred MB at 10 MHz). For email-class distribution, ship a 1–2 second sample (~10–20 MB) instead, or omit it from the bundle and host it separately.
 
 ### 7.3 Documentation toolchain
 
@@ -342,7 +348,7 @@ Per-driver capabilities (sample-rate options, gain range) come from the `SOAPY_D
 
 **SDRPlay-specific:** SDRPlay devices need the SDRplay API installer (from sdrplay.com) *and* Pothosware's **SoapySDRPlay3** module installed into Radioconda's SoapySDR modules directory. The module is **not** packaged on conda-forge for any OS.
 
-- **Windows:** we **ship a pre-built `sdrPlaySupport.dll`** in the release zip (`sdrplay/`), sourced from `vendor/windows/` in the repo. Users copy it into `modules0.8\` per Installing.md §1A.2. You only need the build recipe below when the module needs regenerating — see the **Rebuild trigger** note after it.
+- **Windows:** we **ship a pre-built `sdrPlaySupport.dll`** in the release zip (`sdrplay/`), sourced from `vendor/windows/` in the repo. Users copy it into `modules0.8\` per Installing.md §3A.2. You only need the build recipe below when the module needs regenerating — see the **Rebuild trigger** note after it.
 - **Linux / macOS:** users install the module from their package manager (`apt install soapysdr-module-sdrplay`, `dnf install SoapySDRPlay`, or the Homebrew `pothosware/homebrew-pothos` tap). Nothing to ship.
 
 **Rebuild trigger:** the shipped DLL is built against **SoapySDR ABI 0.8** (module dir `modules0.8`). If a future Radioconda bumps SoapySDR to 0.9+, the dir becomes `modules0.9` and the 0.8 binary won't load — rebuild with the recipe below and replace `vendor/windows/sdrPlaySupport.dll` (and update its `README.txt`).
@@ -386,7 +392,7 @@ Verify with `SoapySDRUtil --find` — the RSP should appear with `driver=sdrplay
 
 **Why the SDRplay API DLL needs special handling:** `sdrPlaySupport.dll` depends on `sdrplay_api.dll` (installed by the SDRplay API installer at `C:\Program Files\SDRplay\API\x64\`). That directory is **not** on the system PATH after the installer runs, so SoapySDR can't load the support module out-of-the-box. The app calls `os.add_dll_directory(...)` at startup to register that location with the Python DLL loader — see the top of `dses_spectrum_analyzer.py`. End users do not need to munge PATH themselves.
 
-**Linux/macOS:** Most distributions ship SoapySDRPlay3 in their package manager (`soapysdr-module-sdrplay` on Debian/Ubuntu, Homebrew tap `pothosware/homebrew-pothos`). The install guide's §1A documents that path; only Windows requires the build-from-source recipe above.
+**Linux/macOS:** Most distributions ship SoapySDRPlay3 in their package manager (`soapysdr-module-sdrplay` on Debian/Ubuntu, Homebrew tap `pothosware/homebrew-pothos`). The install guide's §3A documents that path; only Windows requires the build-from-source recipe above.
 
 ### 7.5 Memory / notes worth knowing
 
