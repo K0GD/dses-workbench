@@ -116,11 +116,12 @@ There is **no functional difference** between the two for our purposes. Pick the
 
 ## 3. Installing the DSES Spectrum Analyzer
 
-Download the application zip from the distribution site:
+Download the application from the distribution site using the direct links below. (The folder itself is not browsable — opening `https://gpstime.com/sw_distribution/b210_sa/` in a browser returns "Forbidden", which is normal; use the file links directly.)
 
-<https://gpstime.com/sw_distribution/b210_sa/>
+- **Application (zip):** <https://gpstime.com/sw_distribution/b210_sa/dses-spectrum-analyzer-1.0.0.zip>
+- **This guide (PDF):** <https://gpstime.com/sw_distribution/b210_sa/DSES_RFI_Spectrum_Analyzer_Installation.pdf>
 
-Get the file named `dses-spectrum-analyzer-<version>.zip` (e.g. `dses-spectrum-analyzer-1.0.0.zip`) — that's the latest release. This guide (`DSES_RFI_Spectrum_Analyzer_Installation.pdf`) lives in the same directory if you ever need a fresh copy. The zip is large (a few hundred MB) because it includes a sample recording for playback mode.
+The zip is roughly 60 MB — it includes a short sample recording so the program can run in playback mode when no radio is attached. (Replace `1.0.0` in the link with a newer version number if a later release has been published.)
 
 ### 3.1 Windows 11
 

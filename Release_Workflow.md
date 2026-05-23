@@ -96,6 +96,8 @@ Note the version in the commit message.
 
 **Sync the operating guide first.** Installing.md §9 (Appendix C — Operating Guide) is a hand-maintained copy of the in-app Help text (`HELP_TEXT_HTML` in `dses_spectrum_analyzer.py`). If you changed any control or Help wording this release, update §9 to match before rebuilding the PDF. The in-app Help is authoritative; §9 just mirrors it for the printable guide.
 
+**Bump the §3 download link.** Installing.md §3 has a direct, version-stamped download URL (`…/dses-spectrum-analyzer-<version>.zip`). Update that version to the release you're publishing before rebuilding the PDF. (The folder is not browsable — Apache returns 403 on the bare directory — so users need the exact file link, not a folder to browse.)
+
 ```text
 .conda\python.exe build_install_docx.py
 ```
