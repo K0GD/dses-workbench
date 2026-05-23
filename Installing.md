@@ -12,16 +12,16 @@ This document covers:
 
 The application itself is one Python file plus a few launchers and an icon. The heavy machinery — GNU Radio, UHD, SoapySDR, PySide6, NumPy, SciPy — is supplied by **Radioconda**, which you install separately as a one-time prerequisite.
 
-**Supported radios.** The program is designed around the Ettus USRP B210 but also drives any SoapySDR-compatible receiver: SDRPlay RSP1A / RSP1B / RSPduo / RSPdx (with one extra setup step — see §1A), RTL-SDR, HackRF, Airspy / Airspy HF+, BladeRF, LimeSDR, and PlutoSDR. The sample-rate combo and gain slider adapt automatically to whichever device you pick at startup.
+**Supported radios.** The program is designed around the Ettus USRP B210 but also drives any SoapySDR-compatible receiver: SDRPlay RSP1A / RSP1B / RSPduo / RSPdx (with one extra setup step — see §3A), RTL-SDR, HackRF, Airspy / Airspy HF+, BladeRF, LimeSDR, and PlutoSDR. The sample-rate combo and gain slider adapt automatically to whichever device you pick at startup.
 
 
 ## 1. What the recipient needs to know first
 
 Each recipient performs **two installs**, in this order (plus a third optional step if you're using SDRPlay):
 
-1. **Install Radioconda** (one-time). Radioconda is a curated conda distribution that bundles GNU Radio, UHD, SoapySDR, and the surrounding scientific Python stack for software-defined radio. We require version 4.8 or newer (it ships with UHD ≥ 4.8). Download: <https://github.com/ryanvolz/radioconda/releases>.
-2. **Install this app**, which is just a small zip of Python and launcher scripts.
-3. **If using SDRPlay only:** install the SDRplay API + SoapySDRPlay module (see §1A). Other supported radios work without any extra setup.
+1. **Install Radioconda** (one-time). Radioconda is a curated conda distribution that bundles GNU Radio, UHD, SoapySDR, and the surrounding scientific Python stack for software-defined radio. We require version 4.8 or newer (it ships with UHD ≥ 4.8). Download: <https://github.com/ryanvolz/radioconda/releases>. (§2)
+2. **Install this app**, which is just a small zip of Python and launcher scripts. (§3)
+3. **If using an SDRPlay receiver:** after the two installs above, do the extra SDRPlay setup in §3A (install the SDRplay API + the SoapySDRPlay module). It comes last because it copies a file from the app's zip into Radioconda's folders. Other supported radios need no extra setup.
 
 Updates to the app afterwards are a small zip replace — Radioconda does not need to be re-installed for every release.
 
@@ -36,69 +36,6 @@ Updates to the app afterwards are a small zip replace — Radioconda does not ne
 | Hardware | Ettus USRP B210 *or* any SoapySDR-supported receiver (SDRPlay RSPx, RTL-SDR, HackRF, Airspy, BladeRF, LimeSDR, PlutoSDR). With one radio attached the app uses it silently; with several, a picker appears. See §8 for details. |
 | Disk | ~3 GB for Radioconda, plus ~1 MB for this app |
 | Display | 1280 × 800 minimum; 14″ MacBook Pro is the layout target |
-
-
-## 1A. Optional: extra setup for SDRPlay (RSP1A / RSP1B / RSPduo)
-
-If you're using an **SDRPlay** receiver (RSP1A, RSP1B, RSPduo, or RSPdx), you need two extra pieces beyond Radioconda. **Skip this section entirely if you're only using a B210, RTL-SDR, HackRF, Airspy, BladeRF, LimeSDR, or PlutoSDR — those work out of the box once Radioconda is installed.**
-
-### 1A.1 Install the SDRplay API
-
-SDRPlay devices need the manufacturer's proprietary API driver. Download and install it from <https://www.sdrplay.com/api/> — pick the installer for your OS.
-
-- **Windows:** run the `.exe` installer; accept defaults. A reboot may be needed.
-- **Linux:** run the `.run` installer with `sudo`.
-- **macOS:** run the `.pkg` installer.
-
-After installation, verify the API can see your unit with the SDRplay Service / Status app (Windows) or `SDRplayService` (Linux/macOS). You should see your RSP listed.
-
-### 1A.2 Install the SoapySDRPlay module
-
-This is the glue between SDRplay's API and the SoapySDR layer the program uses. It is **not** available through `conda install` on any platform, so the steps differ by OS.
-
-**Windows** — copy the pre-built module that ships in this distribution:
-
-The release zip contains `sdrplay\sdrPlaySupport.dll`. Copy it into Radioconda's SoapySDR module directory. That directory is under `C:\ProgramData`, so you need an **Administrator** PowerShell (right-click Windows PowerShell → "Run as administrator"):
-
-```powershell
-Copy-Item ".\sdrplay\sdrPlaySupport.dll" `
-  "C:\ProgramData\radioconda\Library\lib\SoapySDR\modules0.8\" -Force
-```
-
-(Run it from the extracted release folder, or give the full path to the DLL.) If your Radioconda is installed somewhere else, adjust the path — the target is always `…\Library\lib\SoapySDR\modules0.8\`.
-
-Then start the SDRplay API service (also from the Administrator PowerShell — the installer leaves it stopped):
-
-```powershell
-Set-Service SDRplayAPIService -StartupType Automatic
-Start-Service SDRplayAPIService
-```
-
-**Linux** — install from your package manager:
-
-```text
-Debian / Ubuntu:   sudo apt install soapysdr-module-sdrplay
-Fedora:            sudo dnf install SoapySDRPlay
-```
-
-**macOS** — install from the Pothosware Homebrew tap:
-
-```text
-brew tap pothosware/homebrew-pothos
-brew install soapysdrplay3
-```
-
-Verify it loaded (any OS, from a Radioconda prompt):
-
-```text
-SoapySDRUtil --info
-```
-
-…should list `sdrplay` in the "Available factories" line. If it doesn't:
-- Re-check that the SDRplay API from §1A.1 installed correctly.
-- On Windows, confirm the DLL landed in `modules0.8\` and the `SDRplayAPIService` is running (`Get-Service SDRplayAPIService`).
-
-When you launch the spectrum analyzer with an RSP attached, it appears in the device picker as e.g. `RSP1B — 240513BE60  [sdrplay]`.
 
 
 ## 2. Installing Radioconda
@@ -229,6 +166,71 @@ If the Finder warns about an unidentified developer when running `launcher.sh`, 
 ```bash
 xattr -dr com.apple.quarantine dses-spectrum-analyzer-1.0.0
 ```
+
+
+## 3A. Extra setup for SDRPlay receivers (RSP1A / RSP1B / RSPduo / RSPdx)
+
+**Do this only if you're using an SDRPlay receiver** — and only *after* you've installed Radioconda (§2) and extracted this app (§3), because the steps below put files into Radioconda's folders and use a file that ships inside the app's zip. B210, RTL-SDR, HackRF, Airspy, BladeRF, LimeSDR, and PlutoSDR users can skip this section entirely.
+
+SDRPlay needs two extra pieces: the manufacturer's API driver, and the SoapySDRPlay module that bridges that driver to the SoapySDR layer the program uses.
+
+### 3A.1 Install the SDRplay API
+
+Download and install it from <https://www.sdrplay.com/api/> — pick the installer for your OS.
+
+- **Windows:** run the `.exe` installer; accept defaults. A reboot may be needed.
+- **Linux:** run the `.run` installer with `sudo`.
+- **macOS:** run the `.pkg` installer.
+
+After installation, verify the API can see your unit with the SDRplay Service / Status app (Windows) or `SDRplayService` (Linux/macOS). You should see your RSP listed.
+
+### 3A.2 Install the SoapySDRPlay module
+
+This module is **not** available through `conda install` on any platform, so the steps differ by OS.
+
+**Windows** — copy the pre-built module that ships in this distribution:
+
+The extracted release folder (from §3) contains `sdrplay\sdrPlaySupport.dll`. Copy it into Radioconda's SoapySDR module directory. That directory is under `C:\ProgramData`, so you need an **Administrator** PowerShell (right-click Windows PowerShell → "Run as administrator"):
+
+```powershell
+Copy-Item ".\sdrplay\sdrPlaySupport.dll" `
+  "C:\ProgramData\radioconda\Library\lib\SoapySDR\modules0.8\" -Force
+```
+
+(Run it from the extracted release folder, or give the full path to the DLL.) If your Radioconda is installed somewhere else, adjust the path — the target is always `…\Library\lib\SoapySDR\modules0.8\`.
+
+Then start the SDRplay API service (also from the Administrator PowerShell — the installer leaves it stopped):
+
+```powershell
+Set-Service SDRplayAPIService -StartupType Automatic
+Start-Service SDRplayAPIService
+```
+
+**Linux** — install from your package manager:
+
+```text
+Debian / Ubuntu:   sudo apt install soapysdr-module-sdrplay
+Fedora:            sudo dnf install SoapySDRPlay
+```
+
+**macOS** — install from the Pothosware Homebrew tap:
+
+```text
+brew tap pothosware/homebrew-pothos
+brew install soapysdrplay3
+```
+
+Verify it loaded (any OS, from a Radioconda prompt):
+
+```text
+SoapySDRUtil --info
+```
+
+…should list `sdrplay` in the "Available factories" line. If it doesn't:
+- Re-check that the SDRplay API from §3A.1 installed correctly.
+- On Windows, confirm the DLL landed in `modules0.8\` and the `SDRplayAPIService` is running (`Get-Service SDRplayAPIService`).
+
+When you launch the spectrum analyzer with an RSP attached, it appears in the device picker as e.g. `RSP1B — 240513BE60  [sdrplay]`.
 
 
 ## 4. First-run checklist
