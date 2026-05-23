@@ -149,7 +149,9 @@ Run it as a **single line** (scp takes multiple source files before the destinat
 scp dist\dses-spectrum-analyzer-<version>.zip DSES_RFI_Spectrum_Analyzer_Installation.pdf rick@gpstime.com:/var/www/html/sw_distribution/b210_sa/
 ```
 
-The SSH username is `rick` (so `rick@gpstime.com`), not an email. Common scp gotchas: the path after the colon is absolute (leading `/`); if it says *permission denied*, the account can't write `/var/www/html` — scp into `~` then `sudo mv` into place. On Windows, run scp from PowerShell (OpenSSH client) or Git Bash, not the conda prompt.
+The SSH username is `rick` (so `rick@gpstime.com`), not an email. Common scp gotchas: the path after the colon is absolute (leading `/`); on Windows, run scp from PowerShell (OpenSSH client) or Git Bash, not the conda prompt.
+
+**Ownership note:** `/var/www/html/sw_distribution/b210_sa/` and its contents are owned by `rick:rick`, so `rick` can overwrite the zip/PDF/manifest directly on each release — no `sudo` needed. If you ever see *"dest open … Permission denied"* on an overwrite, a file in there reverted to root ownership (e.g. something dropped in via `sudo`); fix it once with `sudo chown -R rick:rick /var/www/html/sw_distribution/b210_sa/`.
 
 **After uploading (either method)**, generate the checksum and verify the URLs. Easiest from an SSH session:
 
