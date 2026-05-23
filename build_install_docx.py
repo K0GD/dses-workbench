@@ -236,12 +236,17 @@ def configure_section(section):
     section.top_margin    = Inches(PAGE_MARGINS['top'])
     section.bottom_margin = Inches(PAGE_MARGINS['bottom'])
 
-    # Header: "DSES" on line 1, document subtitle on line 2.
+    # Suppress the header/footer on the cover page: enable a distinct
+    # first-page header/footer and leave it empty. The primary header/footer
+    # configured below then applies only to page 2 onward.
+    section.different_first_page_header_footer = True
+
+    # Header (pages 2+): document title on line 1, subtitle on line 2.
     hdr = section.header
     # Reuse existing first paragraph; we control its content fully.
     p1 = hdr.paragraphs[0]
     p1.text = ''
-    r = p1.add_run(DOC_ORG)
+    r = p1.add_run(DOC_TITLE)
     r.bold = True
     r.font.size = Pt(11)
     r.font.color.rgb = TITLE_COLOR_RGB
