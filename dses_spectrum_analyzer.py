@@ -52,8 +52,6 @@ from gnuradio import blocks
 from gnuradio import eng_notation
 from gnuradio import gr
 from gnuradio import uhd
-from gnuradio.eng_arg import eng_float, intx
-from gnuradio.filter import firdes
 
 from argparse import ArgumentParser
 from datetime import datetime

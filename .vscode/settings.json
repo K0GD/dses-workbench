@@ -12,7 +12,13 @@
     "**/__pycache__": true,
     "**/*.pyc": true
   },
-  "python.analysis.typeCheckingMode": "basic",
+  // Type-checking is off: this is a hand-maintained GNU Radio / PySide6 /
+  // pyqtgraph / numpy app, and those libraries' type stubs produce dozens of
+  // false positives (unscoped Qt enums like Qt.Horizontal, signal.connect
+  // slot signatures, pyqtgraph kwargs, numpy ArrayLike). Import resolution
+  // and autocomplete still work via the interpreter below. Switch to "basic"
+  // if you want type hints back and can tolerate the stub noise.
+  "python.analysis.typeCheckingMode": "off",
   "python.terminal.activateEnvironment": true,
   // Radioconda has GNU Radio, PySide6, pyqtgraph, SoapySDR, etc., so pointing
   // Pylance here resolves the "import could not be resolved" warnings. This
