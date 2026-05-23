@@ -17,6 +17,7 @@
 # SoapySDR.
 
 import os
+import sys
 os.environ["PYQTGRAPH_QT_LIB"] = "PySide6"
 
 # Quiet known-benign chatter from underlying native libraries before any of
@@ -27,16 +28,38 @@ os.environ.setdefault("LIBUSB_LOG_LEVEL", "0")
 os.environ.setdefault("UHD_LOG_CONSOLE_LEVEL", "warning")
 os.environ.setdefault("SOAPY_SDR_LOG_LEVEL", "WARNING")
 
-# Make sdrplay_api.dll discoverable to SoapySDR's sdrPlaySupport module.
-# Must run BEFORE gnuradio.soapy / SoapySDR is imported anywhere.
+# --- Windows DLL setup so SoapySDR device modules load ---
+# Must run BEFORE any gnuradio.soapy / SoapySDR import. SoapySDR's support
+# modules (rtlsdr, hackrf, airspy, bladerf, lime, plutosdr, audio, …) live in
+# <prefix>\Library\lib\SoapySDR\modules0.8 and depend on vendor DLLs in
+# <prefix>\Library\bin. When the app is launched via python.exe rather than an
+# activated conda shell, that directory isn't on the DLL search path and every
+# module fails with "LoadLibrary() failed: The specified module could not be
+# found". The SDRplay module additionally needs the SDRplay API directory.
 if os.name == "nt":
-    _sdrplay_api_dir = r"C:\Program Files\SDRplay\API\x64"
-    if os.path.isdir(_sdrplay_api_dir):
+    _lib_bin = os.path.join(sys.prefix, "Library", "bin")
+    _dll_dirs = [d for d in (_lib_bin, r"C:\Program Files\SDRplay\API\x64")
+                 if os.path.isdir(d)]
+    for _d in _dll_dirs:
         try:
-            os.add_dll_directory(_sdrplay_api_dir)
+            os.add_dll_directory(_d)
         except (AttributeError, OSError):
             pass
-        os.environ["PATH"] = _sdrplay_api_dir + os.pathsep + os.environ.get("PATH", "")
+    if _dll_dirs:
+        os.environ["PATH"] = os.pathsep.join(_dll_dirs) + os.pathsep + os.environ.get("PATH", "")
+    # Windows searches System32 before PATH, and some machines have an older
+    # C:\Windows\System32\libusb-1.0.dll (installed by Zadig / other SDR tools)
+    # that lacks symbols the rtlsdr/hackrf/airspy/bladerf modules need — they
+    # then fail with "The specified procedure could not be found". Pre-load
+    # Radioconda's own libusb-1.0.dll by full path so it's already resident and
+    # wins the base-name match for every module loaded afterward.
+    _libusb = os.path.join(_lib_bin, "libusb-1.0.dll")
+    if os.path.isfile(_libusb):
+        try:
+            import ctypes
+            ctypes.CDLL(_libusb)
+        except OSError:
+            pass
 
 from PySide6 import QtCore, QtGui, QtWidgets
 from PySide6.QtCore import Qt, QObject, Signal, Slot, QTimer
@@ -59,7 +82,6 @@ from pathlib import Path
 import configparser
 import re
 import signal
-import sys
 import threading
 import time
 

@@ -339,6 +339,8 @@ The application drives any of:
 - **UHD B200-family**: B200, B210. Via `uhd.usrp_source`, wrapped in `UhdB200Source`.
 - **SoapySDR-supported devices**: SDRPlay (RSP1A / RSP1B / RSPduo / RSPdx), RTL-SDR, HackRF, Airspy, Airspy HF+, BladeRF, LimeSDR, PlutoSDR. Via `gnuradio.soapy.source`, wrapped in `SoapyGenericSource`.
 
+**Windows DLL loading (the startup block at the top of `dses_spectrum_analyzer.py`).** When launched via `python.exe` rather than an activated conda shell, SoapySDR's support modules can't find their vendor DLLs and every one fails with "LoadLibrary() failed". The startup block fixes this on Windows by (1) adding `<sys.prefix>\Library\bin` (and the SDRplay API dir) to the DLL search path so `rtlsdr.dll`, `hackrf.dll`, etc. resolve, and (2) pre-loading Radioconda's own `libusb-1.0.dll` by full path. The libusb pre-load matters because Windows searches `C:\Windows\System32` before PATH, and machines with Zadig / other SDR tools often have an older `System32\libusb-1.0.dll` that lacks symbols the rtlsdr/hackrf/airspy/bladerf modules need — without the pre-load those modules fail with "the specified procedure could not be found" even though `Library\bin` is on PATH. Pre-loading the correct copy first makes every later `LoadLibrary("libusb-1.0.dll")` reuse it (Windows matches loaded modules by base name).
+
 The split-out classes live next to each other in `dses_spectrum_analyzer.py`:
 
 ```text
