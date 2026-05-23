@@ -116,7 +116,11 @@ There is **no functional difference** between the two for our purposes. Pick the
 
 ## 3. Installing the DSES Spectrum Analyzer
 
-You will have received a zip file named `dses-spectrum-analyzer-<version>.zip` (e.g. `dses-spectrum-analyzer-1.0.0.zip`).
+Download the application zip from the distribution site:
+
+<https://gpstime.com/sw_distribution/b210_sa/>
+
+Get the file named `dses-spectrum-analyzer-<version>.zip` (e.g. `dses-spectrum-analyzer-1.0.0.zip`) — that's the latest release. This guide (`DSES_RFI_Spectrum_Analyzer_Installation.pdf`) lives in the same directory if you ever need a fresh copy. The zip is large (a few hundred MB) because it includes a sample recording for playback mode.
 
 ### 3.1 Windows 11
 
