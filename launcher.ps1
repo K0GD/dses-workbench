@@ -78,4 +78,9 @@ if (-not $root) {
 
 $python = Join-Path $root 'python.exe'
 $argList = @($MainScript) + $args
-Start-Process -FilePath $python -ArgumentList $argList -WorkingDirectory $ScriptDir
+# Start the console minimized so it doesn't clutter the desktop — the Qt
+# window is what the user interacts with. We use python.exe (not pythonw.exe)
+# on purpose: the app's overflow monitor redirects FD 2 (stderr), which needs
+# a real console allocated; a minimized console keeps FD 2 valid and the logs
+# reachable from the taskbar, whereas pythonw.exe has no console at all.
+Start-Process -FilePath $python -ArgumentList $argList -WorkingDirectory $ScriptDir -WindowStyle Minimized
