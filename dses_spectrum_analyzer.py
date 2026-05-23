@@ -670,6 +670,13 @@ class FftPlotWidget(QtWidgets.QWidget):
         autoscale_btn = QtWidgets.QPushButton("Autoscale")
         autoscale_btn.clicked.connect(lambda: self._plot.enableAutoRange(axis='y'))
         yf.addRow(autoscale_btn)
+        reset_axes_btn = QtWidgets.QPushButton("Reset Axes")
+        reset_axes_btn.setToolTip(
+            "Restore the default Y range and full-span frequency view "
+            "(undoes manual min/max edits and any mouse zoom/pan). "
+            "Leaves FFT size, window, traces, and colors unchanged.")
+        reset_axes_btn.clicked.connect(self.reset_axes)
+        yf.addRow(reset_axes_btn)
         v.addWidget(y_group)
 
         # Display group
@@ -751,6 +758,22 @@ class FftPlotWidget(QtWidgets.QWidget):
         self._plot.setYRange(y_min, y_max)
         for spin, val in ((self._ymin_spin, y_min), (self._ymax_spin, y_max)):
             spin.blockSignals(True); spin.setValue(val); spin.blockSignals(False)
+
+    def reset_axes(self):
+        """Snap the spectrum view back to defaults: built-in Y range plus the
+        full-span frequency view for the current center/sample rate. Undoes
+        manual Y min/max edits and any mouse pan/zoom, without touching FFT
+        size, window, averaging, traces, or colors. The Y values are persisted
+        so the reset survives a restart."""
+        y_min = DEFAULTS['spectrum']['y_min']
+        y_max = DEFAULTS['spectrum']['y_max']
+        # Clear any mouse-driven autorange/zoom state on both axes first.
+        self._plot.disableAutoRange()
+        self.set_y_axis(y_min, y_max)
+        self.control_changed.emit('y_min', y_min)
+        self.control_changed.emit('y_max', y_max)
+        # Restore the full frequency span (re-derives X from center/bandwidth).
+        self.set_frequency_range(self._center_freq, self._samp_rate)
 
     def _on_toggle_panel(self, on):
         self._panel.setVisible(on)
@@ -1695,7 +1718,10 @@ is a fresh measurement). Smaller = more smoothing.</li>
 <li><b>Max / Min hold</b>: overlay traces showing the highest/lowest value
 ever seen at each bin. Use <b>Reset</b> to clear.</li>
 <li><b>Y-Axis</b>: dB min/max, or click <b>Autoscale</b> to fit the
-current data.</li>
+current data. <b>Reset Axes</b> snaps the plot back to the default dB range
+and full-span frequency view — handy after you've zoomed/panned with the
+mouse or nudged the min/max and want to get un-lost. It leaves FFT size,
+window, traces, and colors untouched.</li>
 <li><b>Trace</b>: color, line width, alpha, label.</li>
 </ul>
 
