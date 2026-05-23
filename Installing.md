@@ -128,7 +128,13 @@ The zip is roughly 60 MB — it includes a short sample recording so the program
 1. Extract the zip anywhere you have write permission. A common choice is `Documents\DSES-Spectrum-Analyzer`. The extracted folder will be `dses-spectrum-analyzer-1.0.0\` and will contain `dses_spectrum_analyzer.py`, `launcher.bat`, `launcher.ps1`, `install-shortcut.ps1`, `LICENSE`, the `icons\` folder, and this guide.
 2. Double-click **`launcher.bat`** to start the application.
 3. The first time you run it, the launcher searches for Radioconda in this order: the `RADIOCONDA_ROOT` environment variable, any currently-activated conda env, `%LOCALAPPDATA%\radioconda`, `C:\ProgramData\radioconda`, `%USERPROFILE%\radioconda`, a cached config file, then `conda info --base` if `conda` is on PATH. If none of these find a working install, you'll get a prompt asking for the path; type it in and the launcher remembers it for next time.
-4. (Optional) Right-click **`install-shortcut.ps1`** → "Run with PowerShell" to put a "DSES Spectrum Analyzer" shortcut on your desktop and Start menu.
+4. (Optional) Create a desktop shortcut (with the app's pulsar icon) by running **`install-shortcut.ps1`**. The reliable way — which works regardless of your PowerShell execution policy — is to open PowerShell in the extracted folder and run:
+
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File .\install-shortcut.ps1
+   ```
+
+   It prints `Created: …\DSES Spectrum Analyzer.lnk`. (Right-clicking the script → "Run with PowerShell" also works *if* your machine's execution policy allows local scripts; if nothing appears, the policy blocked it — use the command above instead.) The shortcut is named **DSES Spectrum Analyzer** and launches the app via `launcher.ps1`.
 
 After the first run, the app's window opens with the spectrum and waterfall plots. Tuning, sample-rate, gain, and recording controls are in the sidebar on the right.
 
