@@ -114,7 +114,7 @@ def _smartify_line(line: str, dq_state: dict) -> str:
 SRC = Path("Installing.md")
 DST_DOCX = Path("DSES_RFI_Spectrum_Analyzer_Installation.docx")
 DST_PDF  = Path("DSES_RFI_Spectrum_Analyzer_Installation.pdf")
-DOC_TITLE    = "B210 Spectrum Analyzer"
+DOC_TITLE    = "DSES Spectrum Analyzer"
 DOC_SUBTITLE = "Installation Guide"
 DOC_VERSION  = "v1.0.0"
 DOC_AUTHOR   = "Richard M Hambly (K0GD)"
@@ -311,14 +311,14 @@ def add_cover_page(doc):
     title = doc.add_paragraph()
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
     tr = title.add_run(DOC_TITLE)
-    tr.font.size = Pt(26)
+    tr.font.size = Pt(38)
     tr.font.color.rgb = TITLE_COLOR_RGB
     tr.bold = True
 
     subtitle = doc.add_paragraph()
     subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
     sr = subtitle.add_run(DOC_SUBTITLE)
-    sr.font.size = Pt(16)
+    sr.font.size = Pt(24)
     sr.font.color.rgb = SUBTITLE_COLOR_RGB
     sr.italic = True
 
@@ -345,7 +345,7 @@ def add_cover_page(doc):
         p = doc.add_paragraph()
         p.alignment = WD_ALIGN_PARAGRAPH.CENTER
         r = p.add_run(text)
-        r.font.size = Pt(12)
+        r.font.size = Pt(16)
         r.font.color.rgb = SUBTITLE_COLOR_RGB
     add_page_break(doc)
 
