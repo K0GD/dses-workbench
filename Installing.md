@@ -44,14 +44,13 @@ Updates to the app afterwards are a small zip replace — Radioconda does not ne
 
 1. Download `radioconda-Windows-x86_64.exe` from the Radioconda releases page.
 2. Double-click the installer. Accept defaults; the installer offers to put Radioconda under `C:\ProgramData\radioconda` (system-wide) or `%LOCALAPPDATA%\radioconda` (per-user). Either works; the app's launcher checks both.
-3. After the install finishes, plug the B210 into a USB 3 port. The first time you do this, Windows will silently install the UHD driver from the Radioconda install. No prompt should appear.
-4. Verify the B210 is detected by opening the **Anaconda Prompt (Radioconda)** shortcut from the Start menu and running:
+3. If you have a radio, plug it into a USB 3 port. A B210 silently installs its UHD driver from Radioconda the first time it's connected (no prompt).
+4. (Optional) Confirm your radio is detected — open the **Anaconda Prompt (Radioconda)** shortcut from the Start menu and run the command for your device:
 
-   ```text
-   uhd_find_devices
-   ```
-
-   You should see one device with `serial: 3273A91`.
+   - **B210 / USRP:** `uhd_find_devices` — lists the unit with its own serial number.
+   - **RTL-SDR, HackRF, Airspy, BladeRF, LimeSDR, PlutoSDR:** `SoapySDRUtil --find` — lists the device under its driver name.
+   - **SDRPlay (RSPx):** do §3A first, then `SoapySDRUtil --find` shows it as `driver = sdrplay`.
+   - **No radio yet:** skip this — the app starts in playback mode using the bundled sample file (see §8), which is ideal for training.
 
 ### 2.2 Linux
 
@@ -63,20 +62,24 @@ Updates to the app afterwards are a small zip replace — Radioconda does not ne
    ```
 
    Accept the license and let it install to `~/radioconda` (the launcher checks this path automatically).
-3. **USB permissions for the B210.** Radioconda installs the Ettus udev rules, but they need to be activated:
+3. **USB permissions (B210 / USRP only).** If you have a B210, activate the Ettus udev rules so the device is reachable without root:
 
    ```bash
    sudo cp ~/radioconda/lib/uhd/utils/uhd-usrp.rules /etc/udev/rules.d/
    sudo udevadm control --reload-rules && sudo udevadm trigger
    ```
 
-   Without this step, you'll get permission errors when the B210 is plugged in.
-4. Add yourself to the `usrp` (or `plugdev`, depending on distro) group if your distribution uses one. Log out and back in.
-5. Plug in the B210 and verify:
+   Without this you'll get permission errors when the B210 is plugged in. Then add yourself to the `usrp` (or `plugdev`) group if your distro uses one, and log out/in.
+
+   Other USB SDRs (RTL-SDR, HackRF, Airspy, etc.) have their own udev rules, usually installed with the device's own package. SDRPlay uses its API service (see §3A) and needs no udev rules.
+4. (Optional) Confirm your radio is detected, using the command for your device:
 
    ```bash
-   ~/radioconda/bin/uhd_find_devices
+   ~/radioconda/bin/uhd_find_devices      # B210 / USRP
+   ~/radioconda/bin/SoapySDRUtil --find   # RTL-SDR, HackRF, Airspy, SDRPlay (after §3A), …
    ```
+
+   No radio yet? Skip this — the app starts in playback mode from the bundled sample (see §8).
 
 ### 2.3 macOS (Intel and Apple Silicon)
 
@@ -94,12 +97,15 @@ There is **no functional difference** between the two for our purposes. Pick the
    ```
 
 2. Accept the default install location (`~/radioconda`).
-3. Plug in the B210. macOS does not require a driver install.
-4. Verify:
+3. If you have a radio, plug it in. macOS needs no driver install for the B210.
+4. (Optional) Confirm your radio is detected, using the command for your device:
 
    ```bash
-   ~/radioconda/bin/uhd_find_devices
+   ~/radioconda/bin/uhd_find_devices      # B210 / USRP
+   ~/radioconda/bin/SoapySDRUtil --find   # RTL-SDR, HackRF, Airspy, SDRPlay (after §3A), …
    ```
+
+   No radio yet? Skip this — the app starts in playback mode from the bundled sample (see §8).
 
 5. **Quarantine note.** If you ever see a Gatekeeper "cannot verify developer" dialog on a Radioconda binary, run:
 
