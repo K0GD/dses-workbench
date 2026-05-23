@@ -144,6 +144,7 @@ DEFAULTS = {
         'min_hold':        False,
         'y_min':           -140.0,
         'y_max':           10.0,
+        'linear_scale':    False,
         'grid':            True,
         'axis_labels':     True,
         'dark_background': True,
@@ -520,6 +521,8 @@ class FftPlotWidget(QtWidgets.QWidget):
         self._samp_rate = float(samp_rate)
         self._y_min = -140.0
         self._y_max = 10.0
+        self._linear = False      # False = dB (log) scale, True = linear amplitude
+        self._labels_on = True    # axis-label visibility (mirrors the checkbox)
         self._dark_bg = True
         # Per-background trace styling. The Trace controls in the panel show
         # whichever set matches `_dark_bg`. Edits write to the active set;
@@ -677,6 +680,15 @@ class FftPlotWidget(QtWidgets.QWidget):
             "Leaves FFT size, window, traces, and colors unchanged.")
         reset_axes_btn.clicked.connect(self.reset_axes)
         yf.addRow(reset_axes_btn)
+        self._linear_check = QtWidgets.QCheckBox("Linear scale")
+        self._linear_check.setToolTip(
+            "Plot linear magnitude instead of dB (log). The dB Min/Max boxes "
+            "don't apply in linear mode — the Y axis auto-fits. Affects the "
+            "spectrum plot only; the waterfall stays in dB.")
+        self._linear_check.toggled.connect(self._on_linear_scale_toggled)
+        self._linear_check.toggled.connect(
+            lambda on: self.control_changed.emit('linear_scale', on))
+        yf.addRow(self._linear_check)
         v.addWidget(y_group)
 
         # Display group
@@ -733,17 +745,26 @@ class FftPlotWidget(QtWidgets.QWidget):
         v.addStretch(1)
         return panel
 
+    @staticmethod
+    def _to_linear(db):
+        # The processor emits power-dB (10·log10(power)); linear amplitude is
+        # 10^(dB/20). Display-only transform; the data pipeline stays in dB.
+        return np.power(10.0, np.asarray(db) / 20.0)
+
     @Slot(object, object, object)
     def on_frame(self, avg_db, max_db, min_db):
         n = len(avg_db)
         freqs = self._center_freq + np.fft.fftshift(np.fft.fftfreq(n, d=1.0 / self._samp_rate))
-        self._curve.setData(freqs, avg_db)
-        if max_db is not None:
-            self._max_curve.setData(freqs, max_db); self._max_curve.show()
+        avg = self._to_linear(avg_db) if self._linear else avg_db
+        mx = (self._to_linear(max_db) if self._linear else max_db) if max_db is not None else None
+        mn = (self._to_linear(min_db) if self._linear else min_db) if min_db is not None else None
+        self._curve.setData(freqs, avg)
+        if mx is not None:
+            self._max_curve.setData(freqs, mx); self._max_curve.show()
         else:
             self._max_curve.hide()
-        if min_db is not None:
-            self._min_curve.setData(freqs, min_db); self._min_curve.show()
+        if mn is not None:
+            self._min_curve.setData(freqs, mn); self._min_curve.show()
         else:
             self._min_curve.hide()
 
@@ -765,13 +786,16 @@ class FftPlotWidget(QtWidgets.QWidget):
         manual Y min/max edits and any mouse pan/zoom, without touching FFT
         size, window, averaging, traces, or colors. The Y values are persisted
         so the reset survives a restart."""
-        y_min = DEFAULTS['spectrum']['y_min']
-        y_max = DEFAULTS['spectrum']['y_max']
-        # Clear any mouse-driven autorange/zoom state on both axes first.
-        self._plot.disableAutoRange()
-        self.set_y_axis(y_min, y_max)
-        self.control_changed.emit('y_min', y_min)
-        self.control_changed.emit('y_max', y_max)
+        if self._linear:
+            # Linear mode has no fixed dB range; just auto-fit Y.
+            self._plot.enableAutoRange(axis='y')
+        else:
+            y_min = DEFAULTS['spectrum']['y_min']
+            y_max = DEFAULTS['spectrum']['y_max']
+            self._plot.disableAutoRange()
+            self.set_y_axis(y_min, y_max)
+            self.control_changed.emit('y_min', y_min)
+            self.control_changed.emit('y_max', y_max)
         # Restore the full frequency span (re-derives X from center/bandwidth).
         self.set_frequency_range(self._center_freq, self._samp_rate)
 
@@ -783,8 +807,31 @@ class FftPlotWidget(QtWidgets.QWidget):
         self._plot.setYRange(self._ymin_spin.value(), self._ymax_spin.value())
 
     def _on_labels_toggled(self, on):
-        self._plot.setLabel('left', 'Relative Gain' if on else '', units='dB' if on else '')
+        self._labels_on = bool(on)
+        self._update_y_label()
         self._plot.setLabel('bottom', 'Frequency' if on else '', units='Hz' if on else '')
+
+    def _update_y_label(self):
+        """Set the left-axis label to match the scale mode + label visibility."""
+        if not self._labels_on:
+            self._plot.setLabel('left', '', units='')
+        elif self._linear:
+            self._plot.setLabel('left', 'Magnitude (linear)', units='')
+        else:
+            self._plot.setLabel('left', 'Relative Gain', units='dB')
+
+    def _on_linear_scale_toggled(self, on):
+        self._linear = bool(on)
+        self._update_y_label()
+        # The dB Min/Max spinboxes are meaningless in linear mode; disable them
+        # and let the Y axis auto-fit the linear data. Back in dB, restore the
+        # saved fixed range.
+        self._ymin_spin.setEnabled(not self._linear)
+        self._ymax_spin.setEnabled(not self._linear)
+        if self._linear:
+            self._plot.enableAutoRange(axis='y')
+        else:
+            self._plot.setYRange(self._ymin_spin.value(), self._ymax_spin.value())
 
     def _on_dark_bg_toggled(self, on):
         # Save the live trace styling into the OLD slot before switching.
@@ -879,7 +926,7 @@ class FftPlotWidget(QtWidgets.QWidget):
                             self._avg_slider, self._max_check, self._min_check,
                             self._ymin_spin, self._ymax_spin, self._grid_check,
                             self._labels_check, self._dark_bg_check, self._width_spin,
-                            self._alpha_slider, self._label_edit):
+                            self._alpha_slider, self._label_edit, self._linear_check):
             idx = self._fft_size_combo.findData(settings.get_int(section, 'fft_size'))
             if idx >= 0:
                 self._fft_size_combo.setCurrentIndex(idx)
@@ -895,13 +942,17 @@ class FftPlotWidget(QtWidgets.QWidget):
             self._grid_check.setChecked(settings.get_bool(section, 'grid'))
             self._labels_check.setChecked(settings.get_bool(section, 'axis_labels'))
             self._dark_bg_check.setChecked(settings.get_bool(section, 'dark_background'))
+            self._linear_check.setChecked(settings.get_bool(section, 'linear_scale'))
             # Trace controls are filled from the active slot below via
             # _restore_trace_from_slot; nothing to set here.
         # Apply the effects that the blocked signals would normally have triggered.
         self._dark_bg = self._dark_bg_check.isChecked()
+        self._labels_on = self._labels_check.isChecked()
         self._plot.setYRange(self._ymin_spin.value(), self._ymax_spin.value())
         self._plot.showGrid(x=self._grid_check.isChecked(), y=self._grid_check.isChecked(), alpha=0.3)
         self._on_labels_toggled(self._labels_check.isChecked())
+        # Apply the saved scale mode (sets label, spinbox-enable, Y range).
+        self._on_linear_scale_toggled(self._linear_check.isChecked())
         _apply_plot_theme(self._plot, "Spectrum", self._dark_bg)
         # Populate the Trace controls + pen from whichever slot is active.
         self._restore_trace_from_slot(self._dark_bg)
@@ -1722,6 +1773,9 @@ current data. <b>Reset Axes</b> snaps the plot back to the default dB range
 and full-span frequency view — handy after you've zoomed/panned with the
 mouse or nudged the min/max and want to get un-lost. It leaves FFT size,
 window, traces, and colors untouched.</li>
+<li><b>Linear scale</b>: plots linear magnitude instead of dB (the default
+log scale). In linear mode the Y axis auto-fits and the dB Min/Max boxes are
+disabled. Affects the spectrum plot only — the waterfall stays in dB.</li>
 <li><b>Trace</b>: color, line width, alpha, label.</li>
 </ul>
 
