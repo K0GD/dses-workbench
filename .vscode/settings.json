@@ -14,9 +14,17 @@
   },
   "python.analysis.typeCheckingMode": "basic",
   "python.terminal.activateEnvironment": true,
+  // Radioconda has GNU Radio, PySide6, pyqtgraph, SoapySDR, etc., so pointing
+  // Pylance here resolves the "import could not be resolved" warnings. This
+  // path is WINDOWS-SPECIFIC; on macOS/Linux pick the Radioconda interpreter
+  // via "Python: Select Interpreter" (commonly ~/radioconda/bin/python) — a
+  // per-machine choice that overrides this default.
+  "python.defaultInterpreterPath": "C:\\ProgramData\\radioconda\\python.exe",
   "[python]": {
     "editor.formatOnSave": false,
     "editor.tabSize": 4,
     "editor.insertSpaces": true
-  }
+  },
+  "python-envs.defaultEnvManager": "ms-python.python:conda",
+  "python-envs.defaultPackageManager": "ms-python.python:conda"
 }
