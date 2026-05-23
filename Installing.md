@@ -154,13 +154,16 @@ After the first run, the app's window opens with the spectrum and waterfall plot
 
 ### 3.2 Linux
 
-1. Extract the zip:
+1. Extract the zip somewhere under your home directory where you have write permission — a conventional spot for a per-user app is `~/Applications`. For example:
 
    ```bash
-   unzip dses-spectrum-analyzer-1.0.0.zip
+   mkdir -p ~/Applications && cd ~/Applications
+   unzip ~/Downloads/dses-spectrum-analyzer-1.0.0.zip
    cd dses-spectrum-analyzer-1.0.0
    chmod +x launcher.sh
    ```
+
+   The extracted `dses-spectrum-analyzer-1.0.0/` folder contains `dses_spectrum_analyzer.py`, `launcher.sh`, `dses-spectrum-analyzer.desktop`, `LICENSE`, the `icons/` folder, and this guide. (Avoid system locations like `/opt` unless you extract with `sudo` — keeping it in your home directory avoids permission issues.)
 
 2. Launch:
 
@@ -181,14 +184,17 @@ After the first run, the app's window opens with the spectrum and waterfall plot
 
 ### 3.3 macOS
 
-The steps are the same as Linux:
+The steps are the same as Linux. Extract it into your personal **`~/Applications`** folder (Finder shows it as your own Applications folder, separate from the system `/Applications`):
 
 ```bash
-unzip dses-spectrum-analyzer-1.0.0.zip
+mkdir -p ~/Applications && cd ~/Applications
+unzip ~/Downloads/dses-spectrum-analyzer-1.0.0.zip
 cd dses-spectrum-analyzer-1.0.0
 chmod +x launcher.sh
 ./launcher.sh
 ```
+
+Keeping it under your home directory (rather than the system `/Applications`) avoids permission prompts and Gatekeeper friction.
 
 On Apple Silicon, **make sure** you installed the `arm64` build of Radioconda. Mixing an `x86_64` Radioconda with a native `arm64` Python or Qt will produce confusing errors at startup. There is no Rosetta-only step required if both halves match the CPU.
 
