@@ -279,8 +279,8 @@ dses-spectrum-analyzer-<version>/
 ├── launcher.sh
 ├── install-shortcut.ps1
 ├── dses-spectrum-analyzer.desktop
-├── icons/b210.ico
-├── icons/b210.png
+├── icons/dses_sa.ico
+├── icons/dses_sa.png
 ├── sdrplay/sdrPlaySupport.dll   ← pre-built SoapySDRPlay3 module (Windows)
 ├── sdrplay/README.txt           ← what it is + ABI it was built against
 ├── environment.yml

@@ -1,5 +1,5 @@
-"""Generate b210.ico (multi-resolution Windows icon) and a b210.png preview
-for the B210 Spectrum Analyzer.
+"""Generate dses_sa.ico (multi-resolution Windows icon) and a dses_sa.png
+preview for the DSES Spectrum Analyzer.
 
 Design: pulsar lighthouse beam (cyan bowtie cones along NW-SE diagonal) with
 a bright white core glowing yellow, over a deep-space navy background, with
@@ -115,8 +115,8 @@ def main():
 
     img = make_icon()
 
-    png_path = here / "b210.png"
-    ico_path = here / "b210.ico"
+    png_path = here / "dses_sa.png"
+    ico_path = here / "dses_sa.ico"
 
     img.save(png_path, format="PNG")
     img.save(

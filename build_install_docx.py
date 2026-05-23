@@ -331,7 +331,7 @@ def add_cover_page(doc):
         doc.add_paragraph()
 
     # If the project ships a PNG icon, drop it on the cover as a small mark.
-    icon_path = Path('icons/b210.png')
+    icon_path = Path('icons/dses_sa.png')
     if icon_path.exists():
         p = doc.add_paragraph()
         p.alignment = WD_ALIGN_PARAGRAPH.CENTER

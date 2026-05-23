@@ -13,7 +13,7 @@
 #   launcher.sh                   - Linux / macOS launcher
 #   install-shortcut.ps1          - Windows desktop-shortcut installer
 #   dses-spectrum-analyzer.desktop - Linux desktop file (template)
-#   icons\b210.ico / b210.png     - icons
+#   icons\dses_sa.ico / dses_sa.png - icons
 #   environment.yml               - reference for env reproducibility
 #   Installing.docx               - install / update guide (if built)
 #
@@ -66,7 +66,7 @@ try {
             Write-Warning "Missing (skipped): $f"
         }
     }
-    foreach ($f in @('icons\b210.ico', 'icons\b210.png')) {
+    foreach ($f in @('icons\dses_sa.ico', 'icons\dses_sa.png')) {
         if (Test-Path $f) { Copy-Item $f -Destination (Join-Path $stage 'icons') }
         else { Write-Warning "Missing (skipped): $f" }
     }
@@ -95,7 +95,21 @@ try {
     }
 
     # --- Zip ---
-    Compress-Archive -Path $stage -DestinationPath $zip -Force
+    # Retry: a real-time AV scan (Defender) or a just-launched copy of the app
+    # can briefly lock a freshly-staged file, making Compress-Archive throw
+    # "being used by another process". Retry a few times before giving up.
+    $maxAttempts = 5
+    for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+        try {
+            Compress-Archive -Path $stage -DestinationPath $zip -Force -ErrorAction Stop
+            break
+        } catch {
+            if ($attempt -eq $maxAttempts) { throw }
+            Write-Warning ("Zip attempt {0}/{1} failed (file locked?); retrying in 3s..." -f $attempt, $maxAttempts)
+            if (Test-Path $zip) { Remove-Item -Force $zip -ErrorAction SilentlyContinue }
+            Start-Sleep -Seconds 3
+        }
+    }
     $size = (Get-Item $zip).Length
     Write-Host ""
     Write-Host "Wrote $zip ($([math]::Round($size/1KB, 1)) KB)"

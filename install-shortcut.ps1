@@ -7,7 +7,7 @@ $ShortcutName = 'DSES Spectrum Analyzer'
 $DesktopPath  = [Environment]::GetFolderPath('Desktop')
 $ShortcutPath = Join-Path $DesktopPath "$ShortcutName.lnk"
 $PsLauncher   = Join-Path $ScriptDir 'launcher.ps1'
-$IconPath     = Join-Path $ScriptDir 'icons\b210.ico'
+$IconPath     = Join-Path $ScriptDir 'icons\dses_sa.ico'
 
 if (-not (Test-Path $PsLauncher)) {
     Write-Host "launcher.ps1 not found alongside this script. Aborting." -ForegroundColor Red
