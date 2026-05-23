@@ -71,7 +71,7 @@ if ! ROOT="$(find_radioconda)"; then
     printf 'Enter path to Radioconda install (blank to abort): '
     read -r USER_PATH
     if [ -z "$USER_PATH" ]; then
-        echo "Aborted. Install Radioconda from https://github.com/ryanvolz/radioconda/releases" >&2
+        echo "Aborted. Install Radioconda from https://github.com/radioconda/radioconda-installer/releases" >&2
         exit 1
     fi
     if ! is_radioconda "$USER_PATH"; then

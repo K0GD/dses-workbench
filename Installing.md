@@ -19,7 +19,11 @@ The application itself is one Python file plus a few launchers and an icon. The 
 
 Each recipient performs **two installs**, in this order (plus a third optional step if you're using SDRPlay):
 
-1. **Install Radioconda** (one-time). Radioconda is a curated conda distribution that bundles GNU Radio, UHD, SoapySDR, and the surrounding scientific Python stack for software-defined radio. We require version 4.8 or newer (it ships with UHD ≥ 4.8). Download: <https://github.com/ryanvolz/radioconda/releases>. (§2)
+1. **Install Radioconda** (one-time). Radioconda is a curated conda distribution that bundles GNU Radio, UHD, SoapySDR, and the surrounding scientific Python stack for software-defined radio. Use a current build — releases are date-stamped (e.g. `2025.03.14`) and any recent one ships UHD ≥ 4.8, which the B210 needs. Download from the releases page:
+   - **Primary:** <https://github.com/radioconda/radioconda-installer/releases>
+   - **Backup:** <https://github.com/ryanvolz/radioconda/releases> (redirects to the primary)
+
+   Per-OS file names and steps are in §2 below. (§2)
 2. **Install this app**, which is just a small zip of Python and launcher scripts. (§3)
 3. **If using an SDRPlay receiver:** after the two installs above, do the extra SDRPlay setup in §3A (install the SDRplay API + the SoapySDRPlay module). It comes last because it copies a file from the app's zip into Radioconda's folders. Other supported radios need no extra setup.
 
@@ -42,7 +46,9 @@ Updates to the app afterwards are a small zip replace — Radioconda does not ne
 
 ### 2.1 Windows 11
 
-1. Download `radioconda-Windows-x86_64.exe` from the Radioconda releases page.
+1. Download the Windows installer — the asset named **`radioconda-<version>-Windows-x86_64.exe`** (e.g. `radioconda-2025.03.14-Windows-x86_64.exe`) — from the Radioconda releases page. Pick the newest release and grab the `…-Windows-x86_64.exe` file.
+   - **Primary:** <https://github.com/radioconda/radioconda-installer/releases>
+   - **Backup:** <https://github.com/ryanvolz/radioconda/releases> (redirects to the primary)
 2. Double-click the installer. Accept defaults; the installer offers to put Radioconda under `C:\ProgramData\radioconda` (system-wide) or `%LOCALAPPDATA%\radioconda` (per-user). Either works; the app's launcher checks both.
 3. If you have a radio, plug it into a USB 3 port. A B210 silently installs its UHD driver from Radioconda the first time it's connected (no prompt).
 4. (Optional) Confirm your radio is detected — open the **Anaconda Prompt (Radioconda)** shortcut from the Start menu and run the command for your device:
@@ -54,11 +60,15 @@ Updates to the app afterwards are a small zip replace — Radioconda does not ne
 
 ### 2.2 Linux
 
-1. Download `radioconda-Linux-x86_64.sh` from the releases page.
-2. From a terminal:
+1. Download the Linux installer — the asset named **`radioconda-<version>-Linux-x86_64.sh`** (e.g. `radioconda-2025.03.14-Linux-x86_64.sh`) — from the releases page:
+   - **Primary:** <https://github.com/radioconda/radioconda-installer/releases>
+   - **Backup:** <https://github.com/ryanvolz/radioconda/releases> (redirects to the primary)
+
+   (ARM and POWER builds — `…-Linux-aarch64.sh`, `…-Linux-ppc64le.sh` — are published too if you're on one of those.)
+2. From a terminal, run the file you downloaded (substitute the real version):
 
    ```bash
-   bash radioconda-Linux-x86_64.sh
+   bash radioconda-<version>-Linux-x86_64.sh
    ```
 
    Accept the license and let it install to `~/radioconda` (the launcher checks this path automatically).
@@ -83,17 +93,21 @@ Updates to the app afterwards are a small zip replace — Radioconda does not ne
 
 ### 2.3 macOS (Intel and Apple Silicon)
 
-Radioconda publishes builds for both architectures:
+Download from the releases page:
+- **Primary:** <https://github.com/radioconda/radioconda-installer/releases>
+- **Backup:** <https://github.com/ryanvolz/radioconda/releases> (redirects to the primary)
 
-- `radioconda-MacOSX-x86_64.sh` — Intel Macs.
-- `radioconda-MacOSX-arm64.sh` — Apple Silicon Macs (M1/M2/M3/M4).
+Radioconda publishes builds for both Mac architectures — pick the one matching your CPU (`uname -m` prints `x86_64` or `arm64`):
 
-There is **no functional difference** between the two for our purposes. Pick the file that matches your CPU (`uname -m` prints `x86_64` or `arm64`).
+- **Intel:** `radioconda-<version>-MacOSX-x86_64.sh` (e.g. `radioconda-2025.03.14-MacOSX-x86_64.sh`)
+- **Apple Silicon (M1/M2/M3/M4):** `radioconda-<version>-MacOSX-arm64.sh`
 
-1. From a terminal:
+(Each Mac build also comes as a double-click `.pkg` graphical installer — `…-MacOSX-x86_64.pkg` / `…-MacOSX-arm64.pkg` — if you prefer that over the shell script.)
+
+1. From a terminal, run the file you downloaded (substitute the real version + arch):
 
    ```bash
-   bash radioconda-MacOSX-<arch>.sh
+   bash radioconda-<version>-MacOSX-<arch>.sh
    ```
 
 2. Accept the default install location (`~/radioconda`).

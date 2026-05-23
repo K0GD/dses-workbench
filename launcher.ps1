@@ -62,7 +62,7 @@ if (-not $root) {
     Write-Host ""
     $userPath = Read-Host "Enter path to Radioconda install (blank to abort)"
     if (-not $userPath) {
-        Write-Host "Aborted. Install Radioconda from https://github.com/ryanvolz/radioconda/releases" -ForegroundColor Red
+        Write-Host "Aborted. Install Radioconda from https://github.com/radioconda/radioconda-installer/releases" -ForegroundColor Red
         exit 1
     }
     if (-not (Test-RadiocondaRoot $userPath)) {
