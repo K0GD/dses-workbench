@@ -116,7 +116,7 @@ There is **no functional difference** between the two for our purposes. Pick the
 
 ## 3. Installing the DSES Spectrum Analyzer
 
-Download the application from the distribution site using the direct links below. (The folder itself is not browsable — opening `https://gpstime.com/sw_distribution/b210_sa/` in a browser returns "Forbidden", which is normal; use the file links directly.)
+Download the application from the distribution site. You can either use the direct links below, or browse the folder <https://gpstime.com/sw_distribution/b210_sa/> and pick the newest `dses-spectrum-analyzer-*.zip`:
 
 - **Application (zip):** <https://gpstime.com/sw_distribution/b210_sa/dses-spectrum-analyzer-1.0.0.zip>
 - **This guide (PDF):** <https://gpstime.com/sw_distribution/b210_sa/DSES_RFI_Spectrum_Analyzer_Installation.pdf>

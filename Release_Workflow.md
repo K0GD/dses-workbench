@@ -76,6 +76,7 @@ That single directory holds:
 - `dses-spectrum-analyzer-<version>.zip` — one zip per published release. Keep at least the current + previous version online.
 - `dses-spectrum-analyzer-<version>.sha256` — optional SHA-256 next to each zip so recipients can verify their download.
 - `DSES_RFI_Spectrum_Analyzer_Installation.pdf` — latest install guide, separate from the zips, for users who want to read before downloading the bundle. (Also bundled inside each zip; the standalone copy is the "read first" link — see §4.6.)
+- `.htaccess` — enables directory listing for this folder (`Options +Indexes` + `FancyIndexing`, with `IndexIgnore .htaccess`). Without it Apache returns 403 on the bare directory. Leave it in place; it's why users can browse the folder as well as use direct file links.
 
 There is no per-OS variant — one zip works on Windows, Linux (any current distro), macOS Intel, and macOS Apple Silicon. The OS-specific launchers ride along inside the bundle.
 
@@ -96,7 +97,7 @@ Note the version in the commit message.
 
 **Sync the operating guide first.** Installing.md §9 (Appendix C — Operating Guide) is a hand-maintained copy of the in-app Help text (`HELP_TEXT_HTML` in `dses_spectrum_analyzer.py`). If you changed any control or Help wording this release, update §9 to match before rebuilding the PDF. The in-app Help is authoritative; §9 just mirrors it for the printable guide.
 
-**Bump the §3 download link.** Installing.md §3 has a direct, version-stamped download URL (`…/dses-spectrum-analyzer-<version>.zip`). Update that version to the release you're publishing before rebuilding the PDF. (The folder is not browsable — Apache returns 403 on the bare directory — so users need the exact file link, not a folder to browse.)
+**Bump the §3 download link.** Installing.md §3 has a direct, version-stamped download URL (`…/dses-spectrum-analyzer-<version>.zip`). Update that version to the release you're publishing before rebuilding the PDF. (The folder is also browsable — see §3 of this document — so a slightly stale link isn't fatal, but keep it current.)
 
 ```text
 .conda\python.exe build_install_docx.py
