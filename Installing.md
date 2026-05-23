@@ -422,3 +422,90 @@ The distribution bundle includes a short SigMF recording so that users without a
 - All visualization controls (Spectrum panel, Waterfall panel, including the dark/light background toggle, FFT averaging, max/min hold, intensity range, colormap, etc.) work normally.
 - To replace the bundled sample with your own recording, do a real recording in live mode, then rename the resulting two files to `sample.sigmf-data` and `sample.sigmf-meta` and drop them next to the program. No source-code change is required.
 - To skip playback mode and force an error exit when no SDR is attached, delete or rename either of the two `sample.sigmf-*` files.
+
+
+## 9. Appendix C — Operating Guide
+
+> This appendix is a copy of the program's built-in **Help → User Guide**. If the two ever differ, the in-app Help is authoritative for the version you're actually running (it ships inside the application).
+
+This is a live spectrum analyzer and waterfall display for the Ettus USRP B210 and other software-defined radios (SDRPlay RSP1A/RSP1B/RSPduo/RSPdx, RTL-SDR, HackRF, Airspy, BladeRF, LimeSDR, PlutoSDR via SoapySDR), designed for pulsar RFI investigation but useful for general-purpose spectrum monitoring.
+
+### Starting up — device selection
+
+At launch the program enumerates attached SDRs (UHD + SoapySDR) and decides what to use:
+
+- **One supported SDR attached**: opens it silently and remembers the driver and serial in the settings file.
+- **Two or more radios attached**: a picker dialog always appears so you can choose which one to use. Your previous choice is pre-selected, so you can just press Enter to use the same radio as last time. Your selection is remembered for next launch.
+- **No SDR attached, but a bundled SigMF sample is present**: the program falls back to **playback mode** — see below.
+- **No SDR and no sample**: an error dialog explains how to fix it and the program exits.
+
+The window title always shows which radio is feeding the display, and the **RX** group has a `Device:` button you can click to re-open the picker. The new choice takes effect on the next launch.
+
+### Playback mode
+
+If no SDR is attached, the program looks next to the application file for `sample.sigmf-data` + `sample.sigmf-meta` and, if both are found, plays the file back in a continuous loop. The window title shows **[Playback]**. The data source is the file, paced to the original capture's sample rate.
+
+- **Sample Rate**, **RX Gain**, and **Recording** controls are disabled — they have no meaning for a recorded file. Sample rate comes from the file's metadata.
+- **Tuning is enabled** and works as a digital frequency shift on the file's baseband. Tuning to the file's actual center frequency (read from the .sigmf-meta) shows the recording's true content; tuning to other frequencies within ±(sample_rate/2) of the file's center lets you "look around" inside the recorded bandwidth. Tune well outside that window and you'll just see noise / wrap-around — exactly what you'd expect, since the recording doesn't contain data at those frequencies.
+- All visualization controls (Spectrum panel, Waterfall panel) work normally.
+- To replace the sample with your own, save a SigMF recording, rename the two files to `sample.sigmf-data` and `sample.sigmf-meta`, and drop them next to the program. (You don't need to change any code.)
+
+### Sidebar controls (right side)
+
+#### Tuning
+
+- **Pulsar Band**: preset frequencies for common pulsar observation bands. Choose *Manual* to use the Manual Frequency field instead.
+- **Coarse Tune**: ±100 MHz offset from the selected preset (or from the manual frequency).
+- **Fine Tune**: ±10 MHz offset, layered on top of Coarse Tune.
+- **Manual Frequency**: used when the *Manual* preset is selected. Accepts engineering notation, e.g. `1.42G` or `408M`.
+
+#### RX
+
+- **Sample Rate**: per-radio. The combo shows the rates the connected radio actually supports (e.g. B210: 1–25 MHz; SDRPlay: 2–10 MHz; RTL-SDR: 0.25–3.2 MHz). Higher rate = wider spectrum but more disk usage when recording.
+- **RX Gain**: per-radio range and meaning. The slider's min/max matches what the driver reports (e.g. B210: 0–76 dB on the AD9361 gain table; SDRPlay: 0–48 dB, internally inverted so higher = stronger signal; RTL-SDR: 0–49.6 dB). AGC, if the driver defaults it on, is disabled at startup so the slider always takes effect.
+- **Antenna**: appears only when the open radio has more than one RF input. For a B210 this lists all four physical connectors as `A : RX2`, `A : TX/RX`, `B : RX2`, `B : TX/RX` — receiver A and receiver B, each with its two SMA ports — and switching includes hopping between the two receivers. An RSPduo lists its two tuners. Pick the connector your cable is actually plugged into; the choice is remembered per radio. Single-port radios (most RTL dongles, the RSP1B) don't show this control.
+- **Device**: shows the currently-open radio and re-opens the picker on click.
+
+#### Recording
+
+- **Folder**: where SigMF capture pairs (.sigmf-meta / .sigmf-data) land. Defaults to `~/Documents/DSES_SA_Recordings`.
+- **Record**: *Stopped* / *Recording*. Recording always starts *Stopped* on launch.
+
+### Spectrum (top plot)
+
+Live FFT magnitude in dB. Use the control panel on the right side to adjust:
+
+- **FFT Size**: 256–8192. Larger = finer frequency resolution but slower response and more averaging-window flicker.
+- **Window**: Blackman-Harris is the default — low sidelobes, good for RFI hunting. Hann/Hamming have narrower main lobes; Rectangular has the sharpest peak but the worst sidelobes.
+- **Avg α**: exponential averaging. 1.0 = no smoothing (every frame is a fresh measurement). Smaller = more smoothing.
+- **Max / Min hold**: overlay traces showing the highest/lowest value ever seen at each bin. Use **Reset** to clear.
+- **Y-Axis**: dB min/max, or click **Autoscale** to fit the current data. **Reset Axes** snaps the plot back to the default dB range and full-span frequency view — handy after you've zoomed/panned with the mouse or nudged the min/max and want to get un-lost. It leaves FFT size, window, traces, and colors untouched.
+- **Linear scale**: plots linear magnitude instead of dB (the default log scale). In linear mode the Y axis auto-fits and the dB Min/Max boxes are disabled. Affects the spectrum plot only — the waterfall stays in dB.
+- **Trace**: color, line width, alpha, label.
+
+### Waterfall (bottom plot)
+
+Scrolling 2-D image of FFT vs. time. Newest row at the bottom.
+
+- **Intensity Min/Max**: dB range that maps to the colormap. **Autoscale intensity** picks the 5%–99% percentile of the current data.
+- **Colormap**: viridis (default), plasma, inferno, magma, turbo, cividis, gray.
+- **Rows**: how many history rows to display (default 256).
+
+### Persistence
+
+All selections are saved to a plain-text INI file and restored on next launch. The file location is shown in **Help → About**; you can open the folder directly with the **Open Settings Folder** button.
+
+To revert everything to factory defaults, use **Restore Defaults** in the About dialog.
+
+### Update checks
+
+If the developer has configured a manifest URL, the program checks for a newer release in the background at launch (no more than once every 24 hours). When a newer version is found, a non-modal dialog opens with the release notes and a button that opens the download page in your browser — you can ignore it and keep using the app, or click **Skip this version** to not be reminded about that particular version again.
+
+The check is read-only and never auto-downloads or auto-installs. To trigger a check manually, use **Help → Check for Updates…**. To disable auto-checks, set `auto_check = false` under `[updates]` in the settings file. If the manifest URL has not been configured yet, the auto-check is silently skipped.
+
+### Tips for pulsar work
+
+- 1422 MHz preset is centered on the neutral-hydrogen line (HI).
+- 1666 MHz preset covers the OH maser band.
+- Use **Avg α** ≈ 0.05 and **Max hold** to find intermittent RFI sources.
+- The waterfall reveals time-structured interference (e.g. radar sweeps, ADS-B bursts) that the live spectrum smears out.

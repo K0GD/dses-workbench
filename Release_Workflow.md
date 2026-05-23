@@ -94,6 +94,8 @@ Note the version in the commit message.
 
 ### 4.3 Rebuild the user-facing install guide
 
+**Sync the operating guide first.** Installing.md §9 (Appendix C — Operating Guide) is a hand-maintained copy of the in-app Help text (`HELP_TEXT_HTML` in `dses_spectrum_analyzer.py`). If you changed any control or Help wording this release, update §9 to match before rebuilding the PDF. The in-app Help is authoritative; §9 just mirrors it for the printable guide.
+
 ```text
 .conda\python.exe build_install_docx.py
 ```
