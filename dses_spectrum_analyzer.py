@@ -1552,11 +1552,15 @@ def _bring_to_front(win):
 
 
 def _front_messagebox(parent, icon, title, text):
-    """Modal message box that comes to the front when shown (see
-    _bring_to_front). Returns the clicked StandardButton."""
+    """Modal message box that opens in front of everything — including another
+    app's windows (e.g. the Terminal that launched us on macOS, where a
+    plain raise_() isn't enough to clear another application). The stay-on-top
+    flag floats it above the terminal; it's dismissed immediately so it
+    doesn't linger on top."""
     box = QtWidgets.QMessageBox(icon, title, text,
                                 QtWidgets.QMessageBox.Ok, parent)
     box.setWindowModality(Qt.ApplicationModal)
+    box.setWindowFlag(Qt.WindowStaysOnTopHint, True)
     box.show()
     _bring_to_front(box)
     return box.exec()
@@ -1571,6 +1575,7 @@ class DevicePickerDialog(QtWidgets.QDialog):
                  parent=None, prompt="Pick a radio to use:"):
         super().__init__(parent)
         self.setWindowTitle("Choose Radio")
+        self.setWindowFlag(Qt.WindowStaysOnTopHint, True)  # float above the terminal
         self.setMinimumWidth(460)
         layout = QtWidgets.QVBoxLayout(self)
 
@@ -3229,6 +3234,7 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         # appropriate for the hand-editable INI).
         self.settings = QtCore.QSettings("gnuradio/flowgraphs", "dses_spectrum_analyzer")
         self.settings.setValue("geometry", self.saveGeometry())
+        self.settings.sync()  # force the write (macOS prefs can lag)
         # Persist app settings to INI one more time on close to flush any
         # tail-end edits that didn't auto-save.
         try:
@@ -3558,9 +3564,18 @@ def main(top_block_cls=dses_spectrum_analyzer, options=None):
     _bring_to_front(tb)  # open in front (esp. macOS launched from a terminal)
 
     def sig_handler(sig=None, frame=None):
+        # closeEvent doesn't fire on SIGINT/SIGTERM (e.g. Ctrl-C in the
+        # terminal or closing the terminal window), so persist window geometry
+        # and settings here too — otherwise quitting from the terminal loses
+        # the latest configuration.
+        try:
+            tb.settings.setValue("geometry", tb.saveGeometry())
+            tb.settings.sync()  # force the write (macOS prefs can lag)
+            tb._app_settings.save()
+        except Exception as exc:
+            print(f"Settings save on signal failed: {exc}", file=sys.stderr)
         tb.stop()
         tb.wait()
-
         QtWidgets.QApplication.quit()
 
     signal.signal(signal.SIGINT, sig_handler)
