@@ -68,6 +68,12 @@ pg.setConfigOption('imageAxisOrder', 'row-major')
 pg.setConfigOption('background', 'k')
 pg.setConfigOption('foreground', 'w')
 
+# macOS hides "as needed" scrollbars (overlay style) until you actively scroll,
+# so a scrollable panel looks like it has no scrollbar. Force scrollbars
+# always-on there; other platforms keep the tidier as-needed behavior.
+_VBAR_POLICY = (Qt.ScrollBarAlwaysOn if sys.platform == "darwin"
+                else Qt.ScrollBarAsNeeded)
+
 import numpy as np
 from scipy.signal import windows as scipy_windows
 
@@ -605,7 +611,7 @@ class FftPlotWidget(QtWidgets.QWidget):
         self._panel_scroll.setWidgetResizable(True)
         self._panel_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
         self._panel_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self._panel_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._panel_scroll.setVerticalScrollBarPolicy(_VBAR_POLICY)
         self._panel_scroll.setFixedWidth(248)   # 230 panel + room for scrollbar
         self._panel_scroll.setMinimumHeight(80)  # let the window shrink past it
         layout.addWidget(self._panel_scroll)
@@ -1067,7 +1073,7 @@ class WaterfallPlotWidget(QtWidgets.QWidget):
         self._panel_scroll.setWidgetResizable(True)
         self._panel_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
         self._panel_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self._panel_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._panel_scroll.setVerticalScrollBarPolicy(_VBAR_POLICY)
         self._panel_scroll.setFixedWidth(248)
         self._panel_scroll.setMinimumHeight(80)
         layout.addWidget(self._panel_scroll)
@@ -2598,7 +2604,7 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         self._sidebar_scroll.setWidgetResizable(True)
         self._sidebar_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
         self._sidebar_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self._sidebar_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._sidebar_scroll.setVerticalScrollBarPolicy(_VBAR_POLICY)
         self._sidebar_scroll.setMinimumWidth(290)
         self._sidebar_scroll.setMaximumWidth(380)   # ~360 content + scrollbar
         self._sidebar_scroll.setMinimumHeight(80)   # let the window shrink past it
