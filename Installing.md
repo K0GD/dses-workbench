@@ -348,7 +348,7 @@ Your settings and window geometry are kept outside the app folder, so updates ne
 
 The settings file is plain text and editable with any editor while the app is closed. To reset everything to defaults, either delete the file or use **Help → About → Restore Defaults…** in the running app.
 
-Window size and position are saved in the same `settings.ini`, in the `[window]` section (a base64 `geometry_b64` value). You don't need to touch it; deleting that line just makes the window open at its default size next time.
+Window size and position are saved in the same `settings.ini`, in the `[window]` section (plain `x` / `y` / `width` / `height` integers). You don't need to touch it; setting `width`/`height` to 0 (or deleting the lines) makes the window open at its default size next time.
 
 ### Backing up your settings
 
@@ -441,7 +441,7 @@ The settings INI is plain text and editable while the app is closed. Sections:
 - `[spectrum]` — FFT size, window, averaging, max/min hold, Y-axis range, grid, axis-label toggles, dark/light background, trace styling for each background.
 - `[waterfall]` — intensity range, colormap (per background), grid/axis-label toggles, row count.
 - `[ui]` — control-panel visibility.
-- `[window]` — `geometry_b64`, the saved window size/position (base64). Delete the line to reset to the default window size.
+- `[window]` — saved window position/size as `x` / `y` / `width` / `height`. Set `width`/`height` to 0 (or delete the lines) to reset to the default window size.
 - `[updates]` — `auto_check` (set to `false` to disable update notifications), plus internal book-keeping fields the program manages on its own.
 
 Missing keys are filled in from built-in defaults on next launch. The file is rewritten on close with a header comment explaining what it is.

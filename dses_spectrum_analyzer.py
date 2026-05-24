@@ -95,7 +95,6 @@ from gnuradio import uhd
 from argparse import ArgumentParser
 from datetime import datetime
 from pathlib import Path
-import base64
 import configparser
 import re
 import signal
@@ -212,9 +211,13 @@ DEFAULTS = {
         'control_panels_visible': True,
     },
     'window': {
-        # Main-window geometry as base64-encoded QWidget.saveGeometry() bytes.
-        # Stored here (not QSettings) so it persists reliably on macOS.
-        'geometry_b64': '',
+        # Main-window position/size as plain integers (human-readable and
+        # corruption-proof, unlike an opaque saveGeometry() blob). width/height
+        # of 0 means "not saved yet" → open at the default size.
+        'x':      0,
+        'y':      0,
+        'width':  0,
+        'height': 0,
     },
     'updates': {
         # Master switch — set to false to disable the auto-check entirely.
@@ -2693,14 +2696,17 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         # (e.g. a 14" MacBook Pro is shorter than 780 px of usable height once
         # the menu bar / Dock are accounted for).
         self.resize(1280, 780)
-        # Window geometry is stored in the INI (base64), not QSettings: the
-        # Qt-native store is unreliable on macOS (the org/app maps to a prefs
-        # domain that cfprefsd may not flush), whereas the plain-file INI saves
-        # reliably on every platform — controls already prove that.
+        # Restore window size/position from the INI as plain integers. (We use
+        # the INI, not QSettings: the Qt store is unreliable on macOS, while
+        # the plain-file INI saves reliably everywhere — controls prove it. And
+        # plain ints can't get mangled the way an opaque geometry blob can.)
         try:
-            geo_b64 = self._app_settings.get_str('window', 'geometry_b64')
-            if geo_b64:
-                self.restoreGeometry(QtCore.QByteArray(base64.b64decode(geo_b64)))
+            gw = self._app_settings.get_int('window', 'width')
+            gh = self._app_settings.get_int('window', 'height')
+            if gw > 0 and gh > 0:
+                self.resize(gw, gh)
+                self.move(self._app_settings.get_int('window', 'x'),
+                          self._app_settings.get_int('window', 'y'))
         except BaseException as exc:
             print(f"Qt GUI: Could not restore geometry: {str(exc)}", file=sys.stderr)
         # Clamp AFTER restoreGeometry: a geometry saved on a bigger display (or
@@ -3237,12 +3243,15 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
             self.move(x, y)
 
     def _save_geometry(self):
-        """Persist the window geometry into the INI (base64). Used by
-        closeEvent and the signal handler. The INI saves reliably on every
-        platform, unlike QSettings on macOS."""
+        """Persist the window position/size into the INI as plain integers.
+        Used by closeEvent and the signal handler. The INI saves reliably on
+        every platform, unlike QSettings on macOS."""
         try:
-            b64 = base64.b64encode(bytes(self.saveGeometry())).decode('ascii')
-            self._app_settings.set('window', 'geometry_b64', b64)
+            g = self.geometry()
+            self._app_settings.set('window', 'x', int(g.x()))
+            self._app_settings.set('window', 'y', int(g.y()))
+            self._app_settings.set('window', 'width', int(g.width()))
+            self._app_settings.set('window', 'height', int(g.height()))
             self._app_settings.save()
         except Exception as exc:
             print(f"Geometry save failed: {exc}", file=sys.stderr)
