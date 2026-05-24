@@ -305,6 +305,11 @@ class Settings:
                     and not self._cp.has_option(section, new)):
                 self._cp.set(section, new, self._cp.get(section, old))
                 self._cp.remove_option(section, old)
+        # Obsolete: window geometry was briefly stored as a base64
+        # saveGeometry() blob; it's now plain x/y/width/height. Drop the dead
+        # key so it doesn't linger in the file.
+        if self._cp.has_section('window') and self._cp.has_option('window', 'geometry_b64'):
+            self._cp.remove_option('window', 'geometry_b64')
 
     def _fill_missing_with_defaults(self):
         for section, kvs in DEFAULTS.items():
@@ -2692,28 +2697,11 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         self._recording_dir_button.clicked.connect(self._on_change_recording_dir)
         self._record_group_layout.addWidget(self._recording_dir_button)
 
-        # Open at a comfortable size, but never larger than the display fits
-        # (e.g. a 14" MacBook Pro is shorter than 780 px of usable height once
-        # the menu bar / Dock are accounted for).
+        # Default size; the saved size/position is applied later in showEvent,
+        # once every widget exists (applying it here, mid-construction, gets
+        # overwritten when the plots/controls are added afterward).
         self.resize(1280, 780)
-        # Restore window size/position from the INI as plain integers. (We use
-        # the INI, not QSettings: the Qt store is unreliable on macOS, while
-        # the plain-file INI saves reliably everywhere — controls prove it. And
-        # plain ints can't get mangled the way an opaque geometry blob can.)
-        try:
-            gw = self._app_settings.get_int('window', 'width')
-            gh = self._app_settings.get_int('window', 'height')
-            if gw > 0 and gh > 0:
-                self.resize(gw, gh)
-                self.move(self._app_settings.get_int('window', 'x'),
-                          self._app_settings.get_int('window', 'y'))
-        except BaseException as exc:
-            print(f"Qt GUI: Could not restore geometry: {str(exc)}", file=sys.stderr)
-        # Clamp AFTER restoreGeometry: a geometry saved on a bigger display (or
-        # from before the sidebar was made scrollable) can be taller than this
-        # screen, and a window can't be dragged shorter than the top of the
-        # display — so force it to fit here.
-        self._clamp_window_to_screen()
+        self._geometry_applied = False
         self.flowgraph_started = threading.Event()
 
         ##################################################
@@ -3222,6 +3210,28 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
             self._app_settings.save()
         except OSError as exc:
             print(f"Settings save failed: {exc}", file=sys.stderr)
+
+    def showEvent(self, event):
+        QtWidgets.QWidget.showEvent(self, event)
+        # Apply the saved size/position once, on first show — after every
+        # widget exists and the window is being realized, so the resize sticks
+        # (doing it during __init__ gets overwritten as later widgets are added).
+        if not self._geometry_applied:
+            self._geometry_applied = True
+            self._restore_geometry()
+            self._clamp_window_to_screen()
+
+    def _restore_geometry(self):
+        """Apply the saved window position/size (plain ints in the INI)."""
+        try:
+            gw = self._app_settings.get_int('window', 'width')
+            gh = self._app_settings.get_int('window', 'height')
+            if gw > 0 and gh > 0:
+                self.resize(gw, gh)
+                self.move(self._app_settings.get_int('window', 'x'),
+                          self._app_settings.get_int('window', 'y'))
+        except Exception as exc:
+            print(f"Geometry restore failed: {exc}", file=sys.stderr)
 
     def _clamp_window_to_screen(self):
         """Shrink and reposition the window so it fits entirely on its screen.
