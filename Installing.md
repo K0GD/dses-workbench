@@ -398,6 +398,15 @@ The OS doesn't see the B210. In order:
    ```
 
    If `uhd_find_devices` doesn't see it either, the problem is below our software — check the B210's LEDs and try a different USB cable.
+4. If `uhd_find_devices` reports a **firmware/image error** rather than "no devices" — e.g. `Could not load firmware`, `ihex_reader::read(): No EOF record found`, or a missing FPGA image — your Radioconda's UHD images are incomplete or corrupt (seen on some macOS installs). Download them once with UHD's own tool, then re-check:
+
+   ```text
+   Windows:  C:\ProgramData\radioconda\Library\bin\uhd_images_downloader.exe
+   Linux:    ~/radioconda/bin/uhd_images_downloader
+   macOS:    ~/radioconda/bin/uhd_images_downloader
+   ```
+
+   It fetches ~100 MB of firmware/FPGA images into Radioconda (needs internet). After it finishes, `uhd_find_devices` should detect the B210.
 
 ### Persistent "O" overflows at high sample rates
 
