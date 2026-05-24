@@ -68,11 +68,21 @@ pg.setConfigOption('imageAxisOrder', 'row-major')
 pg.setConfigOption('background', 'k')
 pg.setConfigOption('foreground', 'w')
 
-# macOS hides "as needed" scrollbars (overlay style) until you actively scroll,
-# so a scrollable panel looks like it has no scrollbar. Force scrollbars
-# always-on there; other platforms keep the tidier as-needed behavior.
-_VBAR_POLICY = (Qt.ScrollBarAlwaysOn if sys.platform == "darwin"
-                else Qt.ScrollBarAsNeeded)
+# Scrollbars: keep the tidy "as needed" policy everywhere. On macOS the native
+# scrollbar is a translucent overlay that fades out after a scroll gesture and
+# can't be grabbed (and "always on" only keeps the empty track visible, not the
+# thumb). Applying a stylesheet to the scrollbar forces Qt's non-native
+# rendering — a solid, persistent, grabbable bar that appears whenever content
+# overflows. Empty stylesheet on other platforms keeps their native look.
+_VBAR_POLICY = Qt.ScrollBarAsNeeded
+_SCROLLBAR_QSS = ("""
+QScrollBar:vertical { width: 14px; background: palette(mid); margin: 0px; }
+QScrollBar::handle:vertical { background: palette(dark); min-height: 28px;
+    border-radius: 6px; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+    background: transparent; }
+""" if sys.platform == "darwin" else "")
 
 import numpy as np
 from scipy.signal import windows as scipy_windows
@@ -612,6 +622,7 @@ class FftPlotWidget(QtWidgets.QWidget):
         self._panel_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
         self._panel_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._panel_scroll.setVerticalScrollBarPolicy(_VBAR_POLICY)
+        self._panel_scroll.verticalScrollBar().setStyleSheet(_SCROLLBAR_QSS)
         self._panel_scroll.setFixedWidth(248)   # 230 panel + room for scrollbar
         self._panel_scroll.setMinimumHeight(80)  # let the window shrink past it
         layout.addWidget(self._panel_scroll)
@@ -1074,6 +1085,7 @@ class WaterfallPlotWidget(QtWidgets.QWidget):
         self._panel_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
         self._panel_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._panel_scroll.setVerticalScrollBarPolicy(_VBAR_POLICY)
+        self._panel_scroll.verticalScrollBar().setStyleSheet(_SCROLLBAR_QSS)
         self._panel_scroll.setFixedWidth(248)
         self._panel_scroll.setMinimumHeight(80)
         layout.addWidget(self._panel_scroll)
@@ -2605,6 +2617,7 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         self._sidebar_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
         self._sidebar_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._sidebar_scroll.setVerticalScrollBarPolicy(_VBAR_POLICY)
+        self._sidebar_scroll.verticalScrollBar().setStyleSheet(_SCROLLBAR_QSS)
         self._sidebar_scroll.setMinimumWidth(290)
         self._sidebar_scroll.setMaximumWidth(380)   # ~360 content + scrollbar
         self._sidebar_scroll.setMinimumHeight(80)   # let the window shrink past it
