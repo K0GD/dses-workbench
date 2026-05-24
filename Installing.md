@@ -355,6 +355,8 @@ The launcher couldn't auto-detect a Radioconda install. Either:
 - Type the path when the launcher prompts you on first run, **or**
 - Set the `RADIOCONDA_ROOT` environment variable to the install root before launching.
 
+When you type the path, give the **install root** — the folder that contains `bin/python` (macOS/Linux) or `python.exe` (Windows), e.g. `~/radioconda` — **not** its `bin/` subfolder. A leading `~` is expanded to your home directory. On macOS/Linux, the launcher also accepts an already-activated conda environment, so if your shell prompt shows `(base)` for a Radioconda base env, just running the launcher from that shell is enough.
+
 ### "No UHD Devices Found"
 
 The OS doesn't see the B210. In order:

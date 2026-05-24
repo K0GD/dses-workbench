@@ -6,12 +6,17 @@ $ScriptDir  = $PSScriptRoot
 $MainScript = Join-Path $ScriptDir 'dses_spectrum_analyzer.py'
 $ConfigDir  = Join-Path $env:APPDATA 'DSES_Analyzer'
 $ConfigFile = Join-Path $ConfigDir 'radioconda_root.txt'
-$Marker     = 'Library\share\uhd\images\usrp_b210_fpga.bin'
 
 function Test-RadiocondaRoot([string]$Path) {
+    # A usable env is any conda/Radioconda prefix whose python can import
+    # GNU Radio. We deliberately do NOT require the B210 UHD FPGA image:
+    # this is a multi-radio app (SDRPlay, RTL-SDR, etc. need no UHD images),
+    # and some Radioconda builds don't ship the images by default.
     if (-not $Path) { return $false }
-    return (Test-Path (Join-Path $Path 'python.exe')) -and `
-           (Test-Path (Join-Path $Path $Marker))
+    $py = Join-Path $Path 'python.exe'
+    if (-not (Test-Path $py)) { return $false }
+    & $py -c "import gnuradio" 2>$null
+    return ($LASTEXITCODE -eq 0)
 }
 
 function Find-Radioconda {
@@ -66,7 +71,7 @@ if (-not $root) {
         exit 1
     }
     if (-not (Test-RadiocondaRoot $userPath)) {
-        Write-Host ("Invalid path: '{0}' does not contain python.exe and the B210 FPGA image." -f $userPath) -ForegroundColor Red
+        Write-Host ("Invalid path: '{0}' is not a GNU Radio environment (its python.exe can't 'import gnuradio')." -f $userPath) -ForegroundColor Red
         exit 1
     }
     if (-not (Test-Path $ConfigDir)) {

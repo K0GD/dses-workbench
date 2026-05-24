@@ -15,12 +15,17 @@ case "$(uname)" in
         ;;
 esac
 CONFIG_FILE="$CONFIG_DIR/radioconda_root"
-MARKER="share/uhd/images/usrp_b210_fpga.bin"
 
 is_radioconda() {
+    # A usable env is any conda/Radioconda prefix whose python can import
+    # GNU Radio. We deliberately do NOT require the B210 UHD FPGA image:
+    # this is a multi-radio app (SDRPlay, RTL-SDR, etc. need no UHD images),
+    # and some Radioconda builds don't ship the images until
+    # uhd_images_downloader is run.
     local p="${1:-}"
     [ -z "$p" ] && return 1
-    [ -x "$p/bin/python" ] && [ -f "$p/$MARKER" ]
+    [ -x "$p/bin/python" ] || return 1
+    "$p/bin/python" -c "import gnuradio" >/dev/null 2>&1
 }
 
 find_radioconda() {
@@ -68,14 +73,16 @@ if ! ROOT="$(find_radioconda)"; then
     echo "  - $CONFIG_FILE" >&2
     echo "  - conda on PATH" >&2
     echo >&2
-    printf 'Enter path to Radioconda install (blank to abort): '
+    printf 'Enter path to Radioconda install (e.g. ~/radioconda; blank to abort): '
     read -r USER_PATH
     if [ -z "$USER_PATH" ]; then
         echo "Aborted. Install Radioconda from https://github.com/radioconda/radioconda-installer/releases" >&2
         exit 1
     fi
+    # Expand a leading ~ — bash 'read' does not do tilde expansion itself.
+    USER_PATH="${USER_PATH/#\~/$HOME}"
     if ! is_radioconda "$USER_PATH"; then
-        echo "Invalid path: '$USER_PATH' does not contain bin/python and the B210 FPGA image." >&2
+        echo "Invalid path: '$USER_PATH' is not a GNU Radio environment (its bin/python can't 'import gnuradio')." >&2
         exit 1
     fi
     mkdir -p "$CONFIG_DIR"
