@@ -2674,7 +2674,11 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         self.sidebar_layout.addStretch(1)
 
         # QSettings is kept for window geometry only (Qt-native binary blob).
-        self.settings = QtCore.QSettings("gnuradio/flowgraphs", "dses_spectrum_analyzer")
+        # Org/app must be plain names: the old "gnuradio/flowgraphs" had a
+        # slash, which is a fine registry subpath on Windows but an invalid
+        # preferences domain on macOS — so geometry silently failed to save
+        # there (the INI settings, a plain file, were unaffected).
+        self.settings = QtCore.QSettings("DSES", "DSES_Analyzer")
 
         self.recording_dir = self._app_settings.get_str('recording', 'directory')
         if not self.recording_dir:
@@ -3232,7 +3236,7 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
     def closeEvent(self, event):
         # Keep QSettings purely for window geometry (binary blob, not
         # appropriate for the hand-editable INI).
-        self.settings = QtCore.QSettings("gnuradio/flowgraphs", "dses_spectrum_analyzer")
+        self.settings = QtCore.QSettings("DSES", "DSES_Analyzer")
         self.settings.setValue("geometry", self.saveGeometry())
         self.settings.sync()  # force the write (macOS prefs can lag)
         # Persist app settings to INI one more time on close to flush any
