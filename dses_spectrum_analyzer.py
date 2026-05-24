@@ -95,6 +95,7 @@ from gnuradio import uhd
 from argparse import ArgumentParser
 from datetime import datetime
 from pathlib import Path
+import base64
 import configparser
 import re
 import signal
@@ -209,6 +210,11 @@ DEFAULTS = {
     },
     'ui': {
         'control_panels_visible': True,
+    },
+    'window': {
+        # Main-window geometry as base64-encoded QWidget.saveGeometry() bytes.
+        # Stored here (not QSettings) so it persists reliably on macOS.
+        'geometry_b64': '',
     },
     'updates': {
         # Master switch — set to false to disable the auto-check entirely.
@@ -2612,8 +2618,8 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         self._overflow_monitor.start()
 
         # INI-backed settings (created early so initial variable values can
-        # come from it). Window geometry continues to use QSettings (binary
-        # blob — not appropriate for hand-editable INI).
+        # come from it). Window geometry is also stored here, base64-encoded
+        # in the [window] section (QSettings was unreliable on macOS).
         self._app_settings = Settings()
         # While True, control_changed handlers skip writes — used when
         # programmatically applying saved values back into the UI.
@@ -2673,13 +2679,6 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
 
         self.sidebar_layout.addStretch(1)
 
-        # QSettings is kept for window geometry only (Qt-native binary blob).
-        # Org/app must be plain names: the old "gnuradio/flowgraphs" had a
-        # slash, which is a fine registry subpath on Windows but an invalid
-        # preferences domain on macOS — so geometry silently failed to save
-        # there (the INI settings, a plain file, were unaffected).
-        self.settings = QtCore.QSettings("DSES", "DSES_Analyzer")
-
         self.recording_dir = self._app_settings.get_str('recording', 'directory')
         if not self.recording_dir:
             self.recording_dir = str(Path.home() / "Documents" / "DSES_SA_Recordings")
@@ -2694,10 +2693,14 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         # (e.g. a 14" MacBook Pro is shorter than 780 px of usable height once
         # the menu bar / Dock are accounted for).
         self.resize(1280, 780)
+        # Window geometry is stored in the INI (base64), not QSettings: the
+        # Qt-native store is unreliable on macOS (the org/app maps to a prefs
+        # domain that cfprefsd may not flush), whereas the plain-file INI saves
+        # reliably on every platform — controls already prove that.
         try:
-            geometry = self.settings.value("geometry")
-            if geometry:
-                self.restoreGeometry(geometry)
+            geo_b64 = self._app_settings.get_str('window', 'geometry_b64')
+            if geo_b64:
+                self.restoreGeometry(QtCore.QByteArray(base64.b64decode(geo_b64)))
         except BaseException as exc:
             print(f"Qt GUI: Could not restore geometry: {str(exc)}", file=sys.stderr)
         # Clamp AFTER restoreGeometry: a geometry saved on a bigger display (or
@@ -3233,14 +3236,20 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         if x != self.x() or y != self.y():
             self.move(x, y)
 
+    def _save_geometry(self):
+        """Persist the window geometry into the INI (base64). Used by
+        closeEvent and the signal handler. The INI saves reliably on every
+        platform, unlike QSettings on macOS."""
+        try:
+            b64 = base64.b64encode(bytes(self.saveGeometry())).decode('ascii')
+            self._app_settings.set('window', 'geometry_b64', b64)
+            self._app_settings.save()
+        except Exception as exc:
+            print(f"Geometry save failed: {exc}", file=sys.stderr)
+
     def closeEvent(self, event):
-        # Keep QSettings purely for window geometry (binary blob, not
-        # appropriate for the hand-editable INI).
-        self.settings = QtCore.QSettings("DSES", "DSES_Analyzer")
-        self.settings.setValue("geometry", self.saveGeometry())
-        self.settings.sync()  # force the write (macOS prefs can lag)
-        # Persist app settings to INI one more time on close to flush any
-        # tail-end edits that didn't auto-save.
+        # Save window geometry + flush any tail-end setting edits to the INI.
+        self._save_geometry()
         try:
             self._app_settings.save()
         except OSError as exc:
@@ -3573,9 +3582,7 @@ def main(top_block_cls=dses_spectrum_analyzer, options=None):
         # and settings here too — otherwise quitting from the terminal loses
         # the latest configuration.
         try:
-            tb.settings.setValue("geometry", tb.saveGeometry())
-            tb.settings.sync()  # force the write (macOS prefs can lag)
-            tb._app_settings.save()
+            tb._save_geometry()
         except Exception as exc:
             print(f"Settings save on signal failed: {exc}", file=sys.stderr)
         tb.stop()
