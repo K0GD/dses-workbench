@@ -2567,11 +2567,22 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         self.main_layout.addWidget(self.plots_splitter, 1)
 
         self.sidebar = QtWidgets.QWidget()
-        self.sidebar.setMinimumWidth(280)
-        self.sidebar.setMaximumWidth(360)
         self.sidebar_layout = QtWidgets.QVBoxLayout(self.sidebar)
         self.sidebar_layout.setContentsMargins(0, 0, 0, 0)
-        self.main_layout.addWidget(self.sidebar, 0)
+        # Put the controls column inside a scroll area so a tall stack of
+        # controls never forces the whole window taller than the display — it
+        # scrolls instead. Without this, on a 14" MacBook Pro the sidebar's
+        # natural height set a window minimum height larger than the screen,
+        # so the window couldn't be dragged shorter.
+        self._sidebar_scroll = QtWidgets.QScrollArea()
+        self._sidebar_scroll.setWidget(self.sidebar)
+        self._sidebar_scroll.setWidgetResizable(True)
+        self._sidebar_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        self._sidebar_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._sidebar_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._sidebar_scroll.setMinimumWidth(290)
+        self._sidebar_scroll.setMaximumWidth(380)   # ~360 content + scrollbar
+        self.main_layout.addWidget(self._sidebar_scroll, 0)
 
         self._tuning_group = QtWidgets.QGroupBox("Tuning")
         self._tuning_group_layout = QtWidgets.QVBoxLayout(self._tuning_group)
@@ -2604,7 +2615,16 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         self._recording_dir_button.clicked.connect(self._on_change_recording_dir)
         self._record_group_layout.addWidget(self._recording_dir_button)
 
-        self.resize(1280, 780)
+        # Open at a comfortable size, but never larger than the display will
+        # fit (e.g. a 14" MacBook Pro is shorter than 780 px of usable height
+        # once the menu bar / Dock are accounted for).
+        _w, _h = 1280, 780
+        _screen = QtWidgets.QApplication.primaryScreen()
+        if _screen is not None:
+            _avail = _screen.availableGeometry()
+            _w = max(900, min(_w, _avail.width() - 40))
+            _h = max(560, min(_h, _avail.height() - 60))
+        self.resize(_w, _h)
         try:
             geometry = self.settings.value("geometry")
             if geometry:
