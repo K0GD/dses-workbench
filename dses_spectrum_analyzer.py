@@ -598,7 +598,17 @@ class FftPlotWidget(QtWidgets.QWidget):
         layout.addWidget(toggle_wrap)
 
         self._panel = self._build_panel()
-        layout.addWidget(self._panel)
+        # Scroll the controls so a tall stack never forces the whole window
+        # taller than the screen — it scrolls within the panel instead.
+        self._panel_scroll = QtWidgets.QScrollArea()
+        self._panel_scroll.setWidget(self._panel)
+        self._panel_scroll.setWidgetResizable(True)
+        self._panel_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        self._panel_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._panel_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._panel_scroll.setFixedWidth(248)   # 230 panel + room for scrollbar
+        self._panel_scroll.setMinimumHeight(80)  # let the window shrink past it
+        layout.addWidget(self._panel_scroll)
 
     def _build_panel(self):
         panel = QtWidgets.QGroupBox("Spectrum Controls")
@@ -820,7 +830,7 @@ class FftPlotWidget(QtWidgets.QWidget):
         self.set_frequency_range(self._center_freq, self._samp_rate)
 
     def _on_toggle_panel(self, on):
-        self._panel.setVisible(on)
+        self._panel_scroll.setVisible(on)
         self._toggle_btn.setText("▸" if on else "◂")
 
     def _on_yrange_changed(self, _v):
@@ -1051,7 +1061,16 @@ class WaterfallPlotWidget(QtWidgets.QWidget):
         layout.addWidget(toggle_wrap)
 
         self._panel = self._build_panel()
-        layout.addWidget(self._panel)
+        # Scroll the controls (see FftPlotWidget) so the window can shrink.
+        self._panel_scroll = QtWidgets.QScrollArea()
+        self._panel_scroll.setWidget(self._panel)
+        self._panel_scroll.setWidgetResizable(True)
+        self._panel_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        self._panel_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._panel_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._panel_scroll.setFixedWidth(248)
+        self._panel_scroll.setMinimumHeight(80)
+        layout.addWidget(self._panel_scroll)
 
     def _build_panel(self):
         panel = QtWidgets.QGroupBox("Waterfall Controls")
@@ -1176,7 +1195,7 @@ class WaterfallPlotWidget(QtWidgets.QWidget):
             spin.blockSignals(True); spin.setValue(val); spin.blockSignals(False)
 
     def _on_toggle_panel(self, on):
-        self._panel.setVisible(on)
+        self._panel_scroll.setVisible(on)
         self._toggle_btn.setText("▸" if on else "◂")
 
     def _on_intensity_changed(self, _v):
@@ -2582,6 +2601,7 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         self._sidebar_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self._sidebar_scroll.setMinimumWidth(290)
         self._sidebar_scroll.setMaximumWidth(380)   # ~360 content + scrollbar
+        self._sidebar_scroll.setMinimumHeight(80)   # let the window shrink past it
         self.main_layout.addWidget(self._sidebar_scroll, 0)
 
         self._tuning_group = QtWidgets.QGroupBox("Tuning")
