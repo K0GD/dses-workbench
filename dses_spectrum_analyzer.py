@@ -1539,6 +1539,29 @@ def find_all_radios():
     return find_b200_uhd() + find_soapy_devices()
 
 
+def _bring_to_front(win):
+    """Raise/activate a top-level window so it opens in front. On macOS an app
+    launched from a terminal opens its windows behind the terminal until the
+    app is activated; this makes startup dialogs and the main window visible
+    immediately. It doesn't pin them on top afterward."""
+    try:
+        win.raise_()
+        win.activateWindow()
+    except Exception:
+        pass
+
+
+def _front_messagebox(parent, icon, title, text):
+    """Modal message box that comes to the front when shown (see
+    _bring_to_front). Returns the clicked StandardButton."""
+    box = QtWidgets.QMessageBox(icon, title, text,
+                                QtWidgets.QMessageBox.Ok, parent)
+    box.setWindowModality(Qt.ApplicationModal)
+    box.show()
+    _bring_to_front(box)
+    return box.exec()
+
+
 class DevicePickerDialog(QtWidgets.QDialog):
     """Modal dialog listing every attached SDR. selected_device() returns
     the picked device dict (with 'driver' and 'serial' keys); Cancel
@@ -1579,6 +1602,10 @@ class DevicePickerDialog(QtWidgets.QDialog):
         item = self._list.currentItem()
         return item.data(Qt.UserRole) if item else None
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        _bring_to_front(self)
+
 
 def resolve_device(saved_driver, saved_serial, parent=None):
     """Decide which SDR to open. Returns one of:
@@ -1596,8 +1623,8 @@ def resolve_device(saved_driver, saved_serial, parent=None):
     if not devices:
         sample = find_default_sample_path()
         if sample is None:
-            QtWidgets.QMessageBox.critical(
-                parent, "No radio found",
+            _front_messagebox(
+                parent, QtWidgets.QMessageBox.Critical, "No radio found",
                 "No supported SDR was detected (looked for UHD B200/B210 and "
                 "SoapySDR-recognised devices: SDRPlay, RTL-SDR, HackRF, "
                 "Airspy, BladeRF, Lime, PlutoSDR), and no bundled SigMF "
@@ -1607,8 +1634,8 @@ def resolve_device(saved_driver, saved_serial, parent=None):
                 f"'{SIGMF_SAMPLE_BASENAME}.sigmf-meta' alongside "
                 "dses_spectrum_analyzer.py to enable demo playback.")
             return None
-        QtWidgets.QMessageBox.information(
-            parent, "Playback mode",
+        _front_messagebox(
+            parent, QtWidgets.QMessageBox.Information, "Playback mode",
             "No radio detected — starting in SigMF playback mode.\n\n"
             f"File: {Path(sample).name}.sigmf-data\n\n"
             "The sample loops continuously. Sample rate, gain, and recording "
@@ -3528,6 +3555,7 @@ def main(top_block_cls=dses_spectrum_analyzer, options=None):
     tb.flowgraph_started.set()
 
     tb.show()
+    _bring_to_front(tb)  # open in front (esp. macOS launched from a terminal)
 
     def sig_handler(sig=None, frame=None):
         tb.stop()
