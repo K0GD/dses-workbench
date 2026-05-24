@@ -23,7 +23,7 @@ Each recipient performs **two installs**, in this order (plus a third optional s
    - **Primary:** <https://github.com/radioconda/radioconda-installer/releases>
    - **Backup:** <https://github.com/ryanvolz/radioconda/releases> (redirects to the primary)
 
-   Per-OS file names and steps are in §2 below. (§2)
+   Per-OS file names and steps are in §2 below. Then add three packages the app needs that Radioconda doesn't bundle — `pyside6`, `pyqtgraph`, `scipy` — with one `conda install` (§2.4). (§2)
 2. **Install this app**, which is just a small zip of Python and launcher scripts. (§3)
 3. **If using an SDRPlay receiver:** after the two installs above, do the extra SDRPlay setup in §3A (install the SDRplay API + the SoapySDRPlay module). It comes last because it copies a file from the app's zip into Radioconda's folders. Other supported radios need no extra setup.
 
@@ -126,6 +126,22 @@ Radioconda publishes builds for both Mac architectures — pick the one matching
    ```bash
    xattr -dr com.apple.quarantine ~/radioconda
    ```
+
+### 2.4 Add the packages the analyzer needs (all platforms)
+
+Stock Radioconda bundles GNU Radio, UHD, and SoapySDR, but **not** the GUI and plotting packages this app uses (`pyside6`, `pyqtgraph`, `scipy`). Install them once into Radioconda — this is a one-time step; future app updates don't repeat it.
+
+Open an **activated Radioconda shell**:
+- **Windows:** the **Anaconda Prompt (Radioconda)** shortcut in the Start menu.
+- **Linux / macOS:** any terminal whose prompt shows `(base)` (or run `source ~/radioconda/bin/activate`).
+
+Then run:
+
+```text
+conda install -c conda-forge pyside6 pyqtgraph scipy
+```
+
+Accept the prompt; conda downloads and installs the three packages. If the launcher later reports "Missing required packages," this is the step that was skipped.
 
 
 ## 3. Installing the DSES Spectrum Analyzer
@@ -356,6 +372,16 @@ The launcher couldn't auto-detect a Radioconda install. Either:
 - Set the `RADIOCONDA_ROOT` environment variable to the install root before launching.
 
 When you type the path, give the **install root** — the folder that contains `bin/python` (macOS/Linux) or `python.exe` (Windows), e.g. `~/radioconda` — **not** its `bin/` subfolder. A leading `~` is expanded to your home directory. On macOS/Linux, the launcher also accepts an already-activated conda environment, so if your shell prompt shows `(base)` for a Radioconda base env, just running the launcher from that shell is enough.
+
+### "Missing required packages (PySide6, pyqtgraph, and/or scipy)" — or `ModuleNotFoundError: No module named 'PySide6'`
+
+Radioconda was found, but the app's GUI/plotting packages aren't installed in it. Do the one-time install from §2.4 — open an activated Radioconda shell and run:
+
+```text
+conda install -c conda-forge pyside6 pyqtgraph scipy
+```
+
+Then launch again.
 
 ### "No UHD Devices Found"
 

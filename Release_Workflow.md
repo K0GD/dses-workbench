@@ -23,6 +23,8 @@ All development happens in the project-local conda environment at `./.conda`. CL
 
 The runtime is **Radioconda** (installed by each end user). The `./.conda` env mirrors a superset of what's needed for development plus the doc-build chain (`python-docx`, `pywin32`, `docx2pdf`).
 
+**Runtime dependencies beyond stock Radioconda:** the app imports `PySide6`, `pyqtgraph`, and `scipy`, which Radioconda does **not** bundle (it ships PyQt5 for GNU Radio's own qtgui). End users install them once with `conda install -c conda-forge pyside6 pyqtgraph scipy` — this is install-guide §2.4, and the launchers preflight-check for them and print that command if missing. If you ever add another third-party import to the app, add it to that list in: install guide §2.4, the launcher preflight checks (`launcher.sh` / `launcher.ps1`), and the §6 troubleshooting entry.
+
 To rebuild `./.conda` from scratch:
 
 ```text

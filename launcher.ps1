@@ -82,6 +82,18 @@ if (-not $root) {
 }
 
 $python = Join-Path $root 'python.exe'
+
+# Preflight: the app needs a few packages that stock Radioconda doesn't ship
+# (the GUI/plotting stack). Give a clear instruction instead of a traceback.
+& $python -c "import PySide6, pyqtgraph, scipy" 2>$null
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Missing required packages (PySide6, pyqtgraph, and/or scipy)." -ForegroundColor Red
+    Write-Host "Install them into Radioconda once, from the Anaconda Prompt (Radioconda):"
+    Write-Host "    conda install -c conda-forge pyside6 pyqtgraph scipy"
+    Write-Host "(see section 2.4 of the installation guide)."
+    exit 1
+}
+
 $argList = @($MainScript) + $args
 # Start the console minimized so it doesn't clutter the desktop — the Qt
 # window is what the user interacts with. We use python.exe (not pythonw.exe)

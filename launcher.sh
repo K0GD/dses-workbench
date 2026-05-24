@@ -90,5 +90,15 @@ if ! ROOT="$(find_radioconda)"; then
     ROOT="$USER_PATH"
 fi
 
+# Preflight: the app needs a few packages that stock Radioconda doesn't ship
+# (the GUI/plotting stack). Give a clear instruction instead of a traceback.
+if ! "$ROOT/bin/python" -c "import PySide6, pyqtgraph, scipy" >/dev/null 2>&1; then
+    echo "Missing required packages (PySide6, pyqtgraph, and/or scipy)." >&2
+    echo "Install them into Radioconda once, from a shell showing (base):" >&2
+    echo "    conda install -c conda-forge pyside6 pyqtgraph scipy" >&2
+    echo "(see section 2.4 of the installation guide)." >&2
+    exit 1
+fi
+
 cd "$SCRIPT_DIR"
 exec "$ROOT/bin/python" "$MAIN_SCRIPT" "$@"
