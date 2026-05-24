@@ -2615,22 +2615,21 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         self._recording_dir_button.clicked.connect(self._on_change_recording_dir)
         self._record_group_layout.addWidget(self._recording_dir_button)
 
-        # Open at a comfortable size, but never larger than the display will
-        # fit (e.g. a 14" MacBook Pro is shorter than 780 px of usable height
-        # once the menu bar / Dock are accounted for).
-        _w, _h = 1280, 780
-        _screen = QtWidgets.QApplication.primaryScreen()
-        if _screen is not None:
-            _avail = _screen.availableGeometry()
-            _w = max(900, min(_w, _avail.width() - 40))
-            _h = max(560, min(_h, _avail.height() - 60))
-        self.resize(_w, _h)
+        # Open at a comfortable size, but never larger than the display fits
+        # (e.g. a 14" MacBook Pro is shorter than 780 px of usable height once
+        # the menu bar / Dock are accounted for).
+        self.resize(1280, 780)
         try:
             geometry = self.settings.value("geometry")
             if geometry:
                 self.restoreGeometry(geometry)
         except BaseException as exc:
             print(f"Qt GUI: Could not restore geometry: {str(exc)}", file=sys.stderr)
+        # Clamp AFTER restoreGeometry: a geometry saved on a bigger display (or
+        # from before the sidebar was made scrollable) can be taller than this
+        # screen, and a window can't be dragged shorter than the top of the
+        # display — so force it to fit here.
+        self._clamp_window_to_screen()
         self.flowgraph_started = threading.Event()
 
         ##################################################
@@ -3139,6 +3138,25 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
             self._app_settings.save()
         except OSError as exc:
             print(f"Settings save failed: {exc}", file=sys.stderr)
+
+    def _clamp_window_to_screen(self):
+        """Shrink and reposition the window so it fits entirely on its screen.
+        Guards against a saved geometry (from a larger display or a pre-scroll
+        layout) leaving the window taller/wider than this display — which the
+        user can't fix by dragging once the title bar is above the screen top."""
+        screen = self.screen() or QtWidgets.QApplication.primaryScreen()
+        if screen is None:
+            return
+        avail = screen.availableGeometry()
+        w = min(self.width(), avail.width())
+        h = min(self.height(), avail.height())
+        if w != self.width() or h != self.height():
+            self.resize(w, h)
+        # Nudge fully on-screen if a saved position pushed it partly off.
+        x = max(avail.left(), min(self.x(), avail.right() - w + 1))
+        y = max(avail.top(), min(self.y(), avail.bottom() - h + 1))
+        if x != self.x() or y != self.y():
+            self.move(x, y)
 
     def closeEvent(self, event):
         # Keep QSettings purely for window geometry (binary blob, not
