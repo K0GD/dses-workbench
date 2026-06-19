@@ -1843,10 +1843,16 @@ Accepts engineering notation, e.g. <code>1.42G</code> or <code>408M</code>.</li>
 
 <h4>RX</h4>
 <ul>
-<li><b>Sample Rate</b>: per-radio. The combo shows the rates the connected
-radio actually supports (e.g. B210: 1–25 MHz; SDRPlay: 2–10 MHz; RTL-SDR:
+<li><b>Sample Rate</b>: per-radio. The combo shows validated quick-pick rates
+for the connected radio (e.g. B210: 0.625–25 MHz; SDRPlay: 2–10 MHz; RTL-SDR:
 0.25–3.2 MHz). Higher rate = wider spectrum but more disk usage when
 recording.</li>
+<li><b>Manual Rate (Hz)</b>: type any rate the SDR supports — useful for
+real-pulsar capture geometries that aren't in the preset list. The value is
+clamped to the device's reported min/max (hover for the range) and the radio
+snaps to the nearest rate it can actually deliver, which is then shown back.
+Accepts engineering notation (e.g. <code>24M</code>, <code>625k</code>). The
+combo clears when the active rate isn't one of the presets.</li>
 <li><b>RX Gain</b>: per-radio range and meaning. The slider's min/max
 matches what the driver reports (e.g. B210: 0–76 dB on the AD9361 gain
 table; SDRPlay: 0–48 dB, internally inverted so higher = stronger signal;
@@ -2323,6 +2329,19 @@ class RadioSource:
         change to take effect. Default: live setter is enough."""
         return False
 
+    def samp_rate_range(self):
+        """(min_hz, max_hz) the device will accept for a manual sample-rate
+        entry. Default: the span of the discrete `samp_rate_options`; hardware-
+        backed subclasses override with the device's real reported limits."""
+        opts = self.samp_rate_options or [1e6]
+        return (float(min(opts)), float(max(opts)))
+
+    def get_actual_samp_rate(self) -> float:
+        """The rate the device is really running, which can differ from the
+        requested value after the driver snaps to an achievable rate. Return
+        0.0 when unknown (the caller then keeps the requested value)."""
+        return 0.0
+
 
 class UhdB200Source(RadioSource):
     """Wraps `uhd.usrp_source` for B200-family devices (B200 / B210)."""
@@ -2422,6 +2441,8 @@ class UhdB200Source(RadioSource):
         return spec is not None and spec != self._current_subdev
 
     def set_samp_rate(self, hz: float) -> None:
+        # UHD snaps to the nearest achievable rate internally; read the result
+        # back with get_actual_samp_rate().
         self.block.set_samp_rate(hz)
 
     def set_center_freq(self, hz: float) -> None:
@@ -2434,6 +2455,23 @@ class UhdB200Source(RadioSource):
 
     def set_antenna(self, name: str) -> None:
         self._apply(name)
+
+    def samp_rate_range(self):
+        """B210's real, master-clock-derived rate limits, from UHD."""
+        try:
+            r = self.block.get_samp_rates()      # uhd.meta_range_t
+            lo, hi = float(r.start()), float(r.stop())
+            if hi > lo > 0:
+                return (lo, hi)
+        except Exception:
+            pass
+        return RadioSource.samp_rate_range(self)
+
+    def get_actual_samp_rate(self) -> float:
+        try:
+            return float(self.block.get_samp_rate())
+        except Exception:
+            return 0.0
 
 
 # Per-Soapy-driver default sample-rate lists and gain ranges. SDRPlay
@@ -2599,11 +2637,42 @@ class SoapyGenericSource(RadioSource):
         return slider_db
 
     def set_samp_rate(self, hz: float) -> None:
-        # Round to the nearest supported rate when we have a list.
-        if self.samp_rate_options:
-            hz = min(self.samp_rate_options,
-                     key=lambda r: abs(r - float(hz)))
-        self.block.set_sample_rate(0, hz)
+        # The UI clamps to samp_rate_range() (the driver's reported limits), so
+        # pass the request straight through and let SoapySDR settle on the
+        # nearest achievable rate; read it back with get_actual_samp_rate().
+        # (Previously this snapped to the discrete preset list, which defeated
+        # manual entry.)
+        try:
+            self.block.set_sample_rate(0, float(hz))
+        except Exception as exc:
+            print(f"Soapy set_sample_rate warning ({self._driver}): {exc}",
+                  file=sys.stderr)
+
+    def samp_rate_range(self):
+        """The driver's reported sample-rate limits, via SoapySDR."""
+        try:
+            rngs = self.block.get_sample_rate_range(0)
+            try:
+                items = list(rngs)
+            except TypeError:
+                items = [rngs]
+            mins, maxs = [], []
+            for rg in items:
+                mn = rg.minimum() if hasattr(rg, "minimum") else rg.start()
+                mx = rg.maximum() if hasattr(rg, "maximum") else rg.stop()
+                mins.append(float(mn))
+                maxs.append(float(mx))
+            if mins and maxs and max(maxs) > min(mins) > 0:
+                return (min(mins), max(maxs))
+        except Exception:
+            pass
+        return RadioSource.samp_rate_range(self)
+
+    def get_actual_samp_rate(self) -> float:
+        try:
+            return float(self.block.get_sample_rate(0))
+        except Exception:
+            return 0.0
 
     def set_center_freq(self, hz: float) -> None:
         self.block.set_frequency(0, hz)
@@ -2851,7 +2920,11 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
             title_device = self._source.display_label
         self.setWindowTitle(f"{APP_NAME}  —  v{APP_VERSION}  —  {title_device}")
 
-        # --- Sample-rate selector (device-aware options) ---
+        # --- Sample-rate selector: device-aware presets + manual entry ---
+        # The combo offers validated quick-pick rates; the Manual Rate box (like
+        # Manual Frequency) accepts any rate the SDR supports, clamped to the
+        # device's reported range and snapped by the driver to the nearest
+        # achievable. Real-pulsar geometries that aren't presets go here.
         self._samp_rate_options = sr_options
         self._samp_rate_labels = [_pretty_rate(r) for r in sr_options]
         self._samp_rate_tool_bar = QtWidgets.QToolBar(self)
@@ -2860,14 +2933,22 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         self._samp_rate_tool_bar.addWidget(self._samp_rate_combo_box)
         for _label in self._samp_rate_labels:
             self._samp_rate_combo_box.addItem(_label)
-        self._samp_rate_callback = lambda i: QtCore.QMetaObject.invokeMethod(
-            self._samp_rate_combo_box, "setCurrentIndex",
-            QtCore.Q_ARG("int", self._samp_rate_options.index(i)
-                         if i in self._samp_rate_options else 0))
-        self._samp_rate_callback(self.samp_rate)
         self._samp_rate_combo_box.currentIndexChanged.connect(
-            lambda i: self.set_samp_rate(self._samp_rate_options[i]))
+            self._on_samp_rate_combo)
         self._rx_group_layout.addWidget(self._samp_rate_tool_bar)
+
+        self._samp_rate_manual_tool_bar = QtWidgets.QToolBar(self)
+        self._samp_rate_manual_tool_bar.addWidget(
+            QtWidgets.QLabel("Manual Rate (Hz): "))
+        self._samp_rate_manual_line_edit = QtWidgets.QLineEdit()
+        self._samp_rate_manual_tool_bar.addWidget(self._samp_rate_manual_line_edit)
+        self._samp_rate_manual_line_edit.editingFinished.connect(
+            self._on_samp_rate_manual_edit)
+        self._rx_group_layout.addWidget(self._samp_rate_manual_tool_bar)
+        # Populate the manual box + combo selection from the opening rate, and
+        # show the device's real limits as a tooltip.
+        self._refresh_samp_rate_limits_tooltip()
+        self._sync_samp_rate_widgets()
 
         # --- Format selector: raw I/Q (SigMF) vs live filterbank (.fil) ---
         self._record_format_options = ['iq', 'fil']
@@ -3130,6 +3211,9 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         self._samp_rate_tool_bar.setEnabled(False)
         self._samp_rate_tool_bar.setToolTip("Disabled in playback mode "
                                              "(sample rate comes from the file).")
+        self._samp_rate_manual_tool_bar.setEnabled(False)
+        self._samp_rate_manual_tool_bar.setToolTip(
+            "Disabled in playback mode (sample rate comes from the file).")
         self._gain_win.setEnabled(False)
         self._gain_win.setToolTip("Disabled in playback mode.")
         self._record_tool_bar.setEnabled(False)
@@ -3462,16 +3546,70 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
     def get_samp_rate(self):
         return self.samp_rate
 
+    def _samp_rate_limits(self):
+        """(min_hz, max_hz) the current SDR accepts; falls back to the combo
+        span when there's no live source (e.g. playback)."""
+        if self._source is not None:
+            try:
+                lo, hi = self._source.samp_rate_range()
+                if hi > lo > 0:
+                    return float(lo), float(hi)
+            except Exception:
+                pass
+        opts = self._samp_rate_options or [self.samp_rate]
+        return float(min(opts)), float(max(opts))
+
+    def _refresh_samp_rate_limits_tooltip(self):
+        lo, hi = self._samp_rate_limits()
+        tip = (f"Any rate the SDR supports: {_pretty_rate(lo)} – "
+               f"{_pretty_rate(hi)}.\nOut-of-range values are clamped; the "
+               f"radio then snaps to the nearest rate it can deliver.")
+        self._samp_rate_manual_line_edit.setToolTip(tip)
+        self._samp_rate_manual_tool_bar.setToolTip(tip)
+
+    def _sync_samp_rate_widgets(self):
+        """Reflect the true current rate: the manual box always shows it, the
+        combo selects a matching preset or clears (-1) for a custom rate.
+        Signals are blocked so this never re-enters set_samp_rate."""
+        with _SignalBlocker(self._samp_rate_manual_line_edit):
+            self._samp_rate_manual_line_edit.setText(
+                eng_notation.num_to_str(self.samp_rate))
+        idx = -1
+        for k, r in enumerate(self._samp_rate_options):
+            if abs(r - self.samp_rate) <= max(1.0, r * 1e-6):
+                idx = k
+                break
+        with _SignalBlocker(self._samp_rate_combo_box):
+            self._samp_rate_combo_box.setCurrentIndex(idx)
+
+    def _on_samp_rate_combo(self, i):
+        if 0 <= i < len(self._samp_rate_options):
+            self.set_samp_rate(self._samp_rate_options[i])
+
+    def _on_samp_rate_manual_edit(self):
+        txt = str(self._samp_rate_manual_line_edit.text())
+        try:
+            hz = eng_notation.str_to_num(txt)
+        except Exception:
+            self._sync_samp_rate_widgets()   # bad input -> revert to current
+            return
+        self.set_samp_rate(hz)
+
     def set_samp_rate(self, samp_rate):
         if self._playback_mode or self._source is None:
             return  # rate is fixed by the playback file
-        self.samp_rate = samp_rate
-        self._samp_rate_callback(self.samp_rate)
+        lo, hi = self._samp_rate_limits()
+        req = max(lo, min(hi, float(samp_rate)))
+        self._source.set_samp_rate(req)
+        # Trust the rate the radio actually settled on (drivers snap), so the
+        # display, decimation, and .fil tsamp all reflect reality.
+        actual = self._source.get_actual_samp_rate()
+        self.samp_rate = float(actual) if actual and actual > 0 else req
+        self._sync_samp_rate_widgets()
         self._fft_plot.set_frequency_range(self.center_freq, self.samp_rate)
         self._waterfall_plot.set_frequency_range(self.center_freq, self.samp_rate)
         self._keep_one_in_n.set_n(self._decim_for(self.samp_rate))
-        self._source.set_samp_rate(self.samp_rate)
-        self._save_setting('rx', 'samp_rate_hz', float(samp_rate))
+        self._save_setting('rx', 'samp_rate_hz', float(self.samp_rate))
         # Stale overflow indicators from the old rate aren't meaningful any
         # more, and there's usually a small burst during retuning.
         self._overflow_widget.clear()
