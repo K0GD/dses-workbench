@@ -270,40 +270,58 @@ def configure_section(section):
         run.font.color.rgb = SUBTITLE_COLOR_RGB
 
 
-def add_table_of_contents(doc):
-    """Insert a Word TOC field that auto-populates from Heading 1-3 styles.
-    The field shows placeholder text until Word evaluates it — our
-    convert_docx_to_pdf() opens the doc, calls Fields.Update(), and only
-    then saves to PDF so the printed TOC is fully populated."""
-    # "Contents" heading — same banner style as other Heading 1s.
+def _toc_plain(title):
+    """Strip the small subset of inline markdown the headings use, for a clean
+    table-of-contents entry."""
+    t = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', title)   # [text](url) -> text
+    return t.replace('**', '').replace('`', '').strip()
+
+
+def collect_headings(lines):
+    """(level, title) for every ATX heading in the markdown, skipping fenced
+    code blocks so a `#` comment inside a code sample isn't mistaken for one."""
+    out = []
+    in_code = False
+    for ln in lines:
+        s = ln.strip()
+        if s.startswith('```'):
+            in_code = not in_code
+            continue
+        if in_code:
+            continue
+        if s.startswith('### '):
+            out.append((3, _toc_plain(s[4:])))
+        elif s.startswith('## '):
+            out.append((2, _toc_plain(s[3:])))
+        elif s.startswith('# '):
+            out.append((1, _toc_plain(s[2:])))
+    return out
+
+
+def add_table_of_contents(doc, headings):
+    """A static, pre-populated outline of the document's headings.
+
+    We deliberately do NOT use Word's TOC *field*: it renders as placeholder
+    text until an application re-evaluates it, and on macOS/Linux the
+    LibreOffice conversion path can't update it (and LibreOffice's embedded
+    Python is launch-constraint-blocked from scripting it). A static outline
+    renders identically and correctly in Word, LibreOffice, and any PDF viewer.
+    Trade-off: no live page numbers — the section numbers carried in the
+    heading text provide the structure instead."""
     p = doc.add_heading("Contents", level=1)
     set_paragraph_shading(p, H1_BG_HEX)
 
-    # The TOC field itself.
-    para = doc.add_paragraph()
-    run = para.add_run()
-    r = run._r
-    # <w:fldChar w:fldCharType="begin"/>
-    begin = OxmlElement('w:fldChar')
-    begin.set(qn('w:fldCharType'), 'begin')
-    r.append(begin)
-    # <w:instrText xml:space="preserve">TOC \o "1-3" \h \z \u</w:instrText>
-    instr = OxmlElement('w:instrText')
-    instr.set(qn('xml:space'), 'preserve')
-    instr.text = r'TOC \o "1-3" \h \z \u'  # H1-H3, hyperlinks, hide tab leader, use outline
-    r.append(instr)
-    # <w:fldChar w:fldCharType="separate"/>
-    sep = OxmlElement('w:fldChar')
-    sep.set(qn('w:fldCharType'), 'separate')
-    r.append(sep)
-    # Placeholder text shown until Word updates the field.
-    placeholder = OxmlElement('w:t')
-    placeholder.text = "(Right-click → Update Field, or run the build script to regenerate the PDF.)"
-    r.append(placeholder)
-    # <w:fldChar w:fldCharType="end"/>
-    end = OxmlElement('w:fldChar')
-    end.set(qn('w:fldCharType'), 'end')
-    r.append(end)
+    # Drop a leading level-1 entry (the document title, already on the cover).
+    entries = headings[1:] if (headings and headings[0][0] == 1) else headings
+    base = min((lv for lv, _ in entries), default=1)
+    for level, title in entries:
+        para = doc.add_paragraph()
+        para.paragraph_format.left_indent = Pt(18 * (level - base))
+        para.paragraph_format.space_after = Pt(2)
+        run = para.add_run(title)
+        run.font.size = Pt(11)
+        if level == base:
+            run.font.bold = True
 
     add_page_break(doc)
 
@@ -440,7 +458,7 @@ def md_to_docx(src_path: Path, dst_path: Path):
     configure_section(doc.sections[0])
     apply_heading_styles(doc)
     add_cover_page(doc)
-    add_table_of_contents(doc)
+    add_table_of_contents(doc, collect_headings(lines))
 
     # Style a Heading-1 paragraph so it gets the teal banner. We do this by
     # post-processing each Heading-1 paragraph after add_heading() rather
