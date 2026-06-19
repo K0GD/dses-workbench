@@ -10,6 +10,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 APP_NAME="DSES Spectrum Analyzer"
 LAUNCHER="$SCRIPT_DIR/launcher.sh"
+# Keep the bundle version in sync with the app (single source of truth).
+APP_VERSION="$(grep -oE '^APP_VERSION[[:space:]]*=[[:space:]]*"[^"]+"' \
+    "$SCRIPT_DIR/dses_spectrum_analyzer.py" 2>/dev/null \
+    | head -n1 | sed -E 's/.*"([^"]+)".*/\1/')"
+[ -z "$APP_VERSION" ] && APP_VERSION="1.0.0"
 PNG="$SCRIPT_DIR/icons/dses_sa.png"
 ICNS="$SCRIPT_DIR/icons/dses_sa.icns"
 DEST_DIR="$HOME/Desktop"
@@ -80,9 +85,9 @@ $ICON_KEY
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0.0</string>
+    <string>$APP_VERSION</string>
     <key>CFBundleVersion</key>
-    <string>1.0.0</string>
+    <string>$APP_VERSION</string>
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>LSBackgroundOnly</key>
