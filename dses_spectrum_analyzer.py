@@ -2714,7 +2714,17 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         QtWidgets.QWidget.__init__(self)
         self.setWindowTitle(f"{APP_NAME}  —  v{APP_VERSION}")
         try:
-            self.setWindowIcon(QtGui.QIcon.fromTheme('gnuradio-grc'))
+            # Prefer the bundled DSES icon (also what the macOS .app / Linux
+            # .desktop / Windows shortcut use); fall back to the GNU Radio
+            # theme icon if it isn't found next to this script.
+            icon_png = Path(__file__).resolve().parent / "icons" / "dses_sa.png"
+            icon = (QtGui.QIcon(str(icon_png)) if icon_png.is_file()
+                    else QtGui.QIcon.fromTheme('gnuradio-grc'))
+            self.setWindowIcon(icon)
+            # On macOS the Dock tile follows the application-wide icon.
+            app = QtWidgets.QApplication.instance()
+            if app is not None and not icon.isNull():
+                app.setWindowIcon(icon)
         except BaseException as exc:
             print(f"Qt GUI: Could not set Icon: {str(exc)}", file=sys.stderr)
 

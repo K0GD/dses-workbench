@@ -51,11 +51,14 @@ try {
     # --- Copy runtime files ---
     $files = @(
         'dses_spectrum_analyzer.py',
+        'sigproc_fil.py',
+        'iq_to_fil.py',
         'LICENSE',
         'launcher.bat',
         'launcher.ps1',
         'launcher.sh',
         'install-shortcut.ps1',
+        'install-shortcut.command',
         'dses-spectrum-analyzer.desktop',
         'environment.yml'
     )
@@ -66,7 +69,7 @@ try {
             Write-Warning "Missing (skipped): $f"
         }
     }
-    foreach ($f in @('icons\dses_sa.ico', 'icons\dses_sa.png')) {
+    foreach ($f in @('icons\dses_sa.ico', 'icons\dses_sa.png', 'icons\dses_sa.icns')) {
         if (Test-Path $f) { Copy-Item $f -Destination (Join-Path $stage 'icons') }
         else { Write-Warning "Missing (skipped): $f" }
     }

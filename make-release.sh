@@ -47,17 +47,21 @@ copy_if_present() {
 # Runtime files
 for f in \
     dses_spectrum_analyzer.py \
+    sigproc_fil.py \
+    iq_to_fil.py \
     LICENSE \
     launcher.bat \
     launcher.ps1 \
     launcher.sh \
     install-shortcut.ps1 \
+    install-shortcut.command \
     dses-spectrum-analyzer.desktop \
     environment.yml ; do
     copy_if_present "$f" "$stage/"
 done
 copy_if_present icons/dses_sa.ico "$stage/icons/"
 copy_if_present icons/dses_sa.png "$stage/icons/"
+copy_if_present icons/dses_sa.icns "$stage/icons/"
 
 # Pre-built SoapySDRPlay3 module for Windows (SDRplay support). Not on
 # conda-forge, so we ship it; install guide §1A says where to copy it.
