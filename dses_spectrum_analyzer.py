@@ -92,6 +92,11 @@ from gnuradio import eng_notation
 from gnuradio import gr
 from gnuradio import uhd
 
+# Shared, OS-neutral SIGPROC filterbank core (same module the offline
+# iq_to_fil converter and PulsarLab's engine use) — provides the live .fil
+# recording sink. Lives next to this script.
+import sigproc_fil
+
 from argparse import ArgumentParser
 from datetime import datetime
 from pathlib import Path
@@ -170,6 +175,15 @@ DEFAULTS = {
     'recording': {
         # Set at runtime from _default_recording_dir() if blank.
         'directory':       '',
+        # Recording format: 'iq' = raw I/Q to SigMF (the original mode, kept);
+        # 'fil' = live-channelized SIGPROC filterbank (.fil), written straight
+        # to disk so the giant raw I/Q is never stored.
+        'format':          'iq',
+        # .fil mode geometry: polyphase/FFT channel count and the number of
+        # power frames integrated per output sample (tsamp = nchans*integrate/
+        # samp_rate). Defaults match the validated lab L-band geometry.
+        'fil_nchans':      2048,
+        'fil_integrate':   1,
     },
     'spectrum': {
         'fft_size':        1024,
@@ -1852,8 +1866,19 @@ on click.</li>
 
 <h4>Recording</h4>
 <ul>
-<li><b>Folder</b>: where SigMF capture pairs (.sigmf-meta / .sigmf-data)
-land. Defaults to <code>~/Documents/DSES_SA_Recordings</code>.</li>
+<li><b>Folder</b>: where recordings land. Defaults to
+<code>~/Documents/DSES_SA_Recordings</code>.</li>
+<li><b>Format</b>: <i>Raw I/Q (SigMF)</i> writes full-rate complex samples to
+a SigMF <code>.sigmf-meta</code>/<code>.sigmf-data</code> pair — exact, but
+large (e.g. ~192&nbsp;MB/s at 24&nbsp;Msps). <i>Filterbank (.fil)</i>
+channelizes the stream live and writes a SIGPROC filterbank
+(<code>telescope_id&nbsp;12</code>) straight to disk, so the giant raw I/Q is
+never stored. The <code>.fil</code> is what PRESTO folds; it is produced by
+the same validated code as the offline <code>iq_to_fil.py</code> converter.</li>
+<li><b>Channels</b> / <b>Integrate</b> (filterbank only): the FFT channel
+count and how many power frames are summed per output sample, so
+<code>tsamp&nbsp;=&nbsp;channels&nbsp;&times;&nbsp;integrate&nbsp;/&nbsp;sample&nbsp;rate</code>.
+Locked while recording.</li>
 <li><b>Record</b>: <i>Stopped</i> / <i>Recording</i>. Recording always
 starts <i>Stopped</i> on launch.</li>
 </ul>
@@ -2692,6 +2717,13 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
             self.recording_dir = str(Path.home() / "Documents" / "DSES_SA_Recordings")
         os.makedirs(self.recording_dir, exist_ok=True)
 
+        # Recording format + .fil geometry (loaded from settings).
+        fmt = self._app_settings.get_str('recording', 'format').strip().lower()
+        self._record_format = fmt if fmt in ('iq', 'fil') else 'iq'
+        self._fil_nchans = max(2, int(self._app_settings.get_int('recording', 'fil_nchans')))
+        self._fil_integrate = max(1, int(self._app_settings.get_int('recording', 'fil_integrate')))
+        self._fil_sink = None  # current FilterbankSink, or None when not recording
+
         self._recording_dir_button = QtWidgets.QPushButton("Folder: " + self._elided_dir())
         self._recording_dir_button.setToolTip(self.recording_dir)
         self._recording_dir_button.clicked.connect(self._on_change_recording_dir)
@@ -2833,6 +2865,45 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
             lambda i: self.set_samp_rate(self._samp_rate_options[i]))
         self._rx_group_layout.addWidget(self._samp_rate_tool_bar)
 
+        # --- Format selector: raw I/Q (SigMF) vs live filterbank (.fil) ---
+        self._record_format_options = ['iq', 'fil']
+        self._record_format_labels = ['Raw I/Q (SigMF)', 'Filterbank (.fil)']
+        self._record_format_tool_bar = QtWidgets.QToolBar(self)
+        self._record_format_tool_bar.addWidget(QtWidgets.QLabel("Format: "))
+        self._record_format_combo = QtWidgets.QComboBox()
+        for _label in self._record_format_labels:
+            self._record_format_combo.addItem(_label)
+        self._record_format_combo.setCurrentIndex(
+            self._record_format_options.index(self._record_format))
+        self._record_format_combo.setToolTip(
+            "Raw I/Q: full-rate complex samples to a SigMF pair (large).\n"
+            "Filterbank: channelize live and write a SIGPROC .fil directly "
+            "(telescope_id 12) — the raw I/Q is never stored.")
+        self._record_format_combo.currentIndexChanged.connect(
+            lambda i: self.set_record_format(self._record_format_options[i]))
+        self._record_format_tool_bar.addWidget(self._record_format_combo)
+        self._record_group_layout.addWidget(self._record_format_tool_bar)
+
+        # --- .fil geometry (only meaningful in filterbank mode) ---
+        self._fil_geom_tool_bar = QtWidgets.QToolBar(self)
+        self._fil_geom_tool_bar.addWidget(QtWidgets.QLabel("Channels: "))
+        self._fil_nchans_spin = QtWidgets.QSpinBox()
+        self._fil_nchans_spin.setRange(2, 65536)
+        self._fil_nchans_spin.setValue(self._fil_nchans)
+        self._fil_nchans_spin.setToolTip(
+            "Filterbank channel count (FFT size). tsamp = nchans*integrate/samp_rate.")
+        self._fil_nchans_spin.valueChanged.connect(self.set_fil_nchans)
+        self._fil_geom_tool_bar.addWidget(self._fil_nchans_spin)
+        self._fil_geom_tool_bar.addWidget(QtWidgets.QLabel(" Integrate: "))
+        self._fil_integrate_spin = QtWidgets.QSpinBox()
+        self._fil_integrate_spin.setRange(1, 1_000_000)
+        self._fil_integrate_spin.setValue(self._fil_integrate)
+        self._fil_integrate_spin.setToolTip(
+            "Power frames summed per output sample (1 = no integration).")
+        self._fil_integrate_spin.valueChanged.connect(self.set_fil_integrate)
+        self._fil_geom_tool_bar.addWidget(self._fil_integrate_spin)
+        self._record_group_layout.addWidget(self._fil_geom_tool_bar)
+
         # --- Record selector ---
         self._record_options = [0, 1]
         self._record_labels = ['Stopped', 'Recording']
@@ -2855,6 +2926,9 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         self._recording_status.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self._recording_status.setWordWrap(True)
         self._record_group_layout.addWidget(self._recording_status)
+
+        # Grey out the .fil geometry row unless filterbank format is selected.
+        self._update_fil_geom_enabled()
 
         # --- Gain slider (device-aware range) ---
         gmin, gmax, gstep = gain_range_tuple
@@ -3056,6 +3130,8 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         self._gain_win.setToolTip("Disabled in playback mode.")
         self._record_tool_bar.setEnabled(False)
         self._record_tool_bar.setToolTip("Recording is disabled in playback mode.")
+        self._record_format_tool_bar.setEnabled(False)
+        self._fil_geom_tool_bar.setEnabled(False)
         self._recording_dir_button.setEnabled(False)
         if self._playback_path:
             self._recording_status.setText(
@@ -3411,7 +3487,106 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         else:
             self._stop_recording()
 
+    def _update_fil_geom_enabled(self):
+        """The .fil geometry row only applies in filterbank format, and must
+        not change mid-recording."""
+        editable = (self._record_format == 'fil') and not self.record
+        self._fil_geom_tool_bar.setEnabled(editable)
+
+    def get_record_format(self):
+        return self._record_format
+
+    def set_record_format(self, fmt):
+        """Switch between raw-I/Q (SigMF) and live-filterbank (.fil) recording.
+        Disallowed mid-recording — stop first."""
+        fmt = 'fil' if str(fmt).lower() == 'fil' else 'iq'
+        if fmt == self._record_format:
+            return
+        if self.record:
+            # Revert the combo to the active format; can't switch while live.
+            QtWidgets.QMessageBox.information(
+                self, "Stop recording first",
+                "Stop the current recording before changing the format.")
+            with _SignalBlocker(self._record_format_combo):
+                self._record_format_combo.setCurrentIndex(
+                    self._record_format_options.index(self._record_format))
+            return
+        self._record_format = fmt
+        with _SignalBlocker(self._record_format_combo):
+            self._record_format_combo.setCurrentIndex(
+                self._record_format_options.index(fmt))
+        self._save_setting('recording', 'format', fmt)
+        self._update_fil_geom_enabled()
+
+    def set_fil_nchans(self, n):
+        self._fil_nchans = max(2, int(n))
+        self._save_setting('recording', 'fil_nchans', self._fil_nchans)
+
+    def set_fil_integrate(self, n):
+        self._fil_integrate = max(1, int(n))
+        self._save_setting('recording', 'fil_integrate', self._fil_integrate)
+
     def _start_recording(self):
+        """Begin recording in the selected format. Filterbank (.fil) channelizes
+        live and writes a SIGPROC file directly; raw I/Q goes to a SigMF pair."""
+        if self._playback_mode or self.uhd_usrp_source_0 is None:
+            return  # nothing real to record from
+        self._update_fil_geom_enabled()  # lock geometry while live
+        if self._record_format == 'fil':
+            self._start_fil_recording()
+        else:
+            self._start_sigmf_recording()
+
+    def _start_fil_recording(self):
+        """Splice a live FilterbankSink into the running flowgraph: it
+        channelizes the SDR stream and writes a SIGPROC .fil (telescope_id 12)
+        straight to disk, using the shared sigproc_fil core."""
+        if self._fil_sink is not None:
+            return  # already recording
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        path = os.path.join(self.recording_dir,
+                            f"DSES_Spectrum_Analyzer_{ts}.fil")
+        try:
+            sink = sigproc_fil.FilterbankSink(
+                path, nchans=self._fil_nchans, samp_rate=self.samp_rate,
+                center_freq_mhz=self.center_freq / 1e6,
+                tstart_mjd=sigproc_fil.unix_to_mjd(time.time()),
+                integrate=self._fil_integrate, source_name="capture")
+        except Exception as exc:
+            QtWidgets.QMessageBox.critical(
+                self, "Recording failed to start",
+                f"Could not create filterbank writer:\n\n{exc}")
+            self.record = 0
+            self._record_callback(0)
+            self._update_fil_geom_enabled()
+            return
+        try:
+            self.lock()
+            try:
+                self.connect((self.uhd_usrp_source_0, 0), (sink, 0))
+            finally:
+                self.unlock()
+        except Exception as exc:
+            QtWidgets.QMessageBox.critical(
+                self, "Recording failed to start",
+                f"Could not splice filterbank sink into flowgraph:\n\n{exc}")
+            try:
+                sink.close()
+            except Exception:
+                pass
+            self.record = 0
+            self._record_callback(0)
+            self._update_fil_geom_enabled()
+            return
+        self._fil_sink = sink
+        self._fil_sink_path = path
+        tsamp_ms = self._fil_nchans * self._fil_integrate / self.samp_rate * 1e3
+        self._recording_status.setText(
+            f"Recording → {os.path.basename(path)} "
+            f"({self._fil_nchans} ch, tsamp {tsamp_ms:.4g} ms)")
+        self._recording_status.setToolTip(path)
+
+    def _start_sigmf_recording(self):
         """Construct a fresh SigMF sink with a timestamped filename and
         splice it into the running flowgraph via top_block.lock()/unlock()."""
         if self._playback_mode or self.uhd_usrp_source_0 is None:
@@ -3460,6 +3635,41 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         self._recording_status.setToolTip(f"{base}.sigmf-data")
 
     def _stop_recording(self):
+        """Pull whichever recording sink is active out of the flowgraph and
+        finalize its file."""
+        if self._fil_sink is not None:
+            self._stop_fil_recording()
+        else:
+            self._stop_sigmf_recording()
+        self._update_fil_geom_enabled()  # geometry editable again once stopped
+
+    def _stop_fil_recording(self):
+        """Disconnect the FilterbankSink and close it so the .fil is flushed."""
+        sink = self._fil_sink
+        if sink is None:
+            return
+        self._fil_sink = None
+        try:
+            self.lock()
+            try:
+                self.disconnect((self.uhd_usrp_source_0, 0), (sink, 0))
+            finally:
+                self.unlock()
+        except Exception as exc:
+            print(f"Recording disconnect failed: {exc}", file=sys.stderr)
+        try:
+            sink.close()  # flush + close the .fil
+        except Exception as exc:
+            print(f"Filterbank close failed: {exc}", file=sys.stderr)
+        path = getattr(self, '_fil_sink_path', '')
+        if path:
+            self._recording_status.setText(f"Saved → {os.path.basename(path)}")
+            self._recording_status.setToolTip(path)
+        else:
+            self._recording_status.setText("Idle")
+            self._recording_status.setToolTip("")
+
+    def _stop_sigmf_recording(self):
         """Pull the SigMF sink out of the flowgraph and drop the Python
         reference so its destructor finalizes the data file."""
         sink = self._sigmf_sink
@@ -3504,7 +3714,7 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         # lock/unlock) does not rebind the live streamer. So we tear down and
         # rebuild the source block on a receiver change.
         if self._source.antenna_needs_restart(name):
-            if self._sigmf_sink is not None:
+            if self._sigmf_sink is not None or self._fil_sink is not None:
                 QtWidgets.QMessageBox.information(
                     self, "Stop recording first",
                     "Switching between receiver A and receiver B restarts the "
