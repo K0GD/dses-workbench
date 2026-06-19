@@ -43,3 +43,6 @@ desktop.ini
 
 # Microsoft Word lock files (created while a .docx is open in Word)
 ~$*
+
+# DOCX intermediates (throwaway; build_doc.py makes the .pdf deliverables)
+*.docx

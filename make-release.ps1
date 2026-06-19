@@ -15,7 +15,7 @@
 #   dses-spectrum-analyzer.desktop - Linux desktop file (template)
 #   icons\dses_sa.ico / dses_sa.png - icons
 #   environment.yml               - reference for env reproducibility
-#   Installing.docx               - install / update guide (if built)
+#   DSES_RFI_..._Installation.pdf - install / update guide (if built)
 #
 # Excluded: .conda\, .git\, .vscode\, __pycache__, CLAUDE.md,
 #           icons\generate-icon.py, make-release.*, settings files.
@@ -85,7 +85,7 @@ try {
     # is a developer-side intermediate and stays out of the bundle).
     foreach ($doc in @('DSES_RFI_Spectrum_Analyzer_Installation.pdf')) {
         if (Test-Path $doc) { Copy-Item $doc -Destination $stage }
-        else { Write-Warning "Missing (skipped): $doc - run build_install_docx.py first" }
+        else { Write-Warning "Missing (skipped): $doc - run build_doc.py first" }
     }
     # Default SigMF playback sample - ships so users without any SDR
     # attached can still launch and see live spectrum. Large (~500+ MB).

@@ -1,14 +1,16 @@
-"""Convert Installing.md → DSES-styled DOCX + PDF.
+"""Build a DSES-styled PDF from a Markdown source (e.g. Installing.md).
 
-Produces both:
-    DSES_RFI_Spectrum_Analyzer_Installation.docx   (editable source)
-    DSES_RFI_Spectrum_Analyzer_Installation.pdf    (the deliverable)
+The deliverable is the PDF:
+    DSES_RFI_Spectrum_Analyzer_Installation.pdf
 
-The DOCX is built with python-docx and styled to match the DSES house
-template (margins, title color, Heading 1 white-on-teal banner, Heading 3
-dark-teal, page header with "DSES" + subtitle, footer with date + page
-number). The PDF is produced by docx2pdf, which drives Microsoft Word via
-COM — this gives a faithful conversion of the styled .docx.
+Internally the document is rendered to a temporary .docx (python-docx, styled
+to match the DSES house template — margins, title color, Heading 1
+white-on-teal banner, Heading 3 dark-teal, page header with "DSES" + subtitle,
+footer with date + page number) and then converted to PDF. The .docx is a
+throwaway intermediate — it is written to a temp file and removed after the
+PDF is built, unless you pass --docx to keep it. PDF conversion uses
+LibreOffice on macOS/Linux and Microsoft Word on Windows (see
+convert_docx_to_pdf).
 
 Handles the Markdown subset used in Installing.md:
     # / ## / ###       — headings
@@ -112,7 +114,6 @@ def _smartify_line(line: str, dq_state: dict) -> str:
 # Defaults for the install guide; CLI options can override. Used as module-
 # level constants because the cover-page / header builders read them.
 SRC = Path("Installing.md")
-DST_DOCX = Path("DSES_RFI_Spectrum_Analyzer_Installation.docx")
 DST_PDF  = Path("DSES_RFI_Spectrum_Analyzer_Installation.pdf")
 DOC_TITLE    = "DSES Spectrum Analyzer"
 DOC_SUBTITLE = "Installation Guide"
@@ -669,8 +670,9 @@ def main():
         description="Build a DSES-styled DOCX + PDF from a Markdown source.")
     ap.add_argument('src', nargs='?', default=str(SRC),
                     help=f"Markdown source (default: {SRC})")
-    ap.add_argument('--docx', default=str(DST_DOCX),
-                    help=f"DOCX output path (default: {DST_DOCX})")
+    ap.add_argument('--docx', default=None,
+                    help="Keep the intermediate DOCX at this path (default: a "
+                         "temp file, removed after the PDF is built).")
     ap.add_argument('--pdf', default=str(DST_PDF),
                     help=f"PDF output path (default: {DST_PDF})")
     ap.add_argument('--title', default=DOC_TITLE,
@@ -683,20 +685,35 @@ def main():
     DOC_SUBTITLE = args.subtitle
 
     src = Path(args.src)
-    docx_out = Path(args.docx)
     pdf_out = Path(args.pdf)
     if not src.exists():
         print(f"Source not found: {src}", file=sys.stderr)
         sys.exit(1)
+
+    # The DOCX is a throwaway intermediate: write it to a temp file and remove
+    # it after the PDF is built, unless --docx asked to keep it somewhere.
+    import tempfile
+    keep_docx = args.docx is not None
+    if keep_docx:
+        docx_out = Path(args.docx)
+    else:
+        docx_out = Path(tempfile.gettempdir()) / f"{pdf_out.stem}.docx"
+
     md_to_docx(src, docx_out)
     try:
         convert_docx_to_pdf(docx_out, pdf_out)
     except Exception as exc:
         print(f"PDF conversion failed: {type(exc).__name__}: {exc}",
               file=sys.stderr)
-        print("The .docx was still produced; you can open it in Word and "
-              "use File → Save As → PDF manually.", file=sys.stderr)
+        print(f"The intermediate DOCX is at {docx_out}; open it in "
+              "LibreOffice/Word and export to PDF manually.", file=sys.stderr)
         sys.exit(2)
+    finally:
+        if not keep_docx:
+            try:
+                docx_out.unlink()
+            except OSError:
+                pass
 
 
 if __name__ == '__main__':

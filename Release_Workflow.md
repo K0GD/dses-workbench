@@ -21,7 +21,7 @@ All development happens in the project-local conda environment at `./.conda`. CL
 - Dependency changes go in `environment.yml`. No global installs, no shell rc edits.
 - The Qt binding is **PySide6** (commercial Qt license + LGPL friendlier for distribution). Never import from `PyQt5` / `PyQt6`.
 
-The runtime is **Radioconda** (installed by each end user). The `./.conda` env mirrors a superset of what's needed for development plus the doc-build chain (`python-docx`, `pywin32`, `docx2pdf`).
+The runtime is **Radioconda** (installed by each end user). The `./.conda` env adds what's needed for development plus the doc-build chain — `python-docx` to render the styled DOCX, and **LibreOffice** (a system install, not conda) to convert it to PDF on macOS/Linux (Windows uses Microsoft Word via `pywin32`).
 
 **Runtime dependencies beyond stock Radioconda:** the app imports `PySide6`, `pyqtgraph`, and `scipy`, which Radioconda does **not** bundle (it ships PyQt5 for GNU Radio's own qtgui). End users install them once with `conda install -c conda-forge pyside6 pyqtgraph scipy` — this is install-guide §2.4, and the launchers preflight-check for them and print that command if missing. If you ever add another third-party import to the app, add it to that list in: install guide §2.4, the launcher preflight checks (`launcher.sh` / `launcher.ps1`), and the §6 troubleshooting entry.
 
@@ -54,11 +54,11 @@ conda env update --prefix ./.conda -f environment.yml --prune
 | `environment.yml` | Conda env spec (dev). |
 | `Installing.md` | Source for the user-facing install guide. |
 | `Release_Workflow.md` | This document. |
-| `build_install_docx.py` | Builds both `.docx` and `.pdf` from a Markdown source. CLI-parameterized (`--title`, `--subtitle`, `--docx`, `--pdf`). |
+| `build_doc.py` | Builds the styled `.pdf` from a Markdown source (rendering a throwaway temp DOCX on the way). CLI-parameterized (`--title`, `--subtitle`, `--pdf`; `--docx` keeps the intermediate). |
 | `make-release.ps1` / `.sh` | Stages the runtime files into `dist/dses-spectrum-analyzer-<version>/` and zips them. |
 | `CLAUDE.md` | Project ground rules for Claude Code sessions. Not shipped. |
 
-Not part of the release bundle: `.conda/`, `.git/`, `.vscode/`, `dist/`, `CLAUDE.md`, `Installing.md`, `Release_Workflow.md`, `build_install_docx.py`, `make-release.{ps1,sh}`, `icons/generate-icon.py`.
+Not part of the release bundle: `.conda/`, `.git/`, `.vscode/`, `dist/`, `CLAUDE.md`, `Installing.md`, `Release_Workflow.md`, `build_doc.py`, `make-release.{ps1,sh}`, `icons/generate-icon.py`.
 
 
 ## 3. Distribution host
@@ -102,22 +102,18 @@ Note the version in the commit message.
 **Bump the §3 download link.** Installing.md §3 has a direct, version-stamped download URL (`…/dses-spectrum-analyzer-<version>.zip`). Update that version to the release you're publishing before rebuilding the PDF. (The folder is also browsable — see §3 of this document — so a slightly stale link isn't fatal, but keep it current.)
 
 ```text
-.conda\python.exe build_install_docx.py
+./.conda/bin/python build_doc.py
 ```
 
-That reads `Installing.md` and produces:
-
-- `DSES_RFI_Spectrum_Analyzer_Installation.docx` (intermediate; editable in Word for spot-checks)
-- `DSES_RFI_Spectrum_Analyzer_Installation.pdf` (the deliverable)
+That reads `Installing.md` and produces `DSES_RFI_Spectrum_Analyzer_Installation.pdf` (the deliverable). The styled DOCX it renders on the way is written to a temp file and removed automatically; pass `--docx <path>` if you want to keep it for a spot-check.
 
 Skip this step if you didn't change install-relevant behavior, but err on the side of rebuilding so the version stamps inside the PDF stay current.
 
 ### 4.4 Rebuild this document (optional)
 
 ```text
-.conda\python.exe build_install_docx.py Release_Workflow.md ^
-    --docx DSES_RFI_Spectrum_Analyzer_Release_Workflow.docx ^
-    --pdf  DSES_RFI_Spectrum_Analyzer_Release_Workflow.pdf ^
+./.conda/bin/python build_doc.py Release_Workflow.md \
+    --pdf DSES_RFI_Spectrum_Analyzer_Release_Workflow.pdf \
     --subtitle "Release Workflow"
 ```
 
@@ -293,7 +289,7 @@ dses-spectrum-analyzer-<version>/
 
 The `sdrplay/` payload is sourced from `vendor/windows/` in the repo. SDRplay users on Windows copy the DLL into Radioconda per Installing.md §3A.2; everyone else ignores it (Linux/macOS get the module from their package manager).
 
-`Release_Workflow.md`, the matching PDF, `CLAUDE.md`, `Installing.md`, `build_install_docx.py`, the `make-release.*` scripts themselves, the conda env, `.git`, and IDE configs are all excluded by name.
+`Release_Workflow.md`, the matching PDF, `CLAUDE.md`, `Installing.md`, `build_doc.py`, the `make-release.*` scripts themselves, the conda env, `.git`, and IDE configs are all excluded by name.
 
 ### 7.2 Where the SigMF sample comes from
 
@@ -318,21 +314,21 @@ To replace it with a different recording entirely:
 
 | Tool | Used for | Installed via |
 |---|---|---|
-| `python-docx` | Build the styled DOCX from Markdown. | `environment.yml` (conda-forge) |
-| `pywin32` | Drive Word via COM to update fields and SaveAs PDF. | `environment.yml` (conda-forge, Windows-only) |
-| `docx2pdf` | Listed in `environment.yml` as a fallback; not used by the current build script. | `environment.yml` (pip section) |
+| `python-docx` | Render the styled (temp) DOCX from Markdown. | `environment.yml` (conda-forge) |
+| **LibreOffice** | Convert the DOCX → PDF on macOS/Linux (headless `soffice`). | system install (macOS: `brew install --cask libreoffice`) |
+| `pywin32` | Windows alternative: drive Microsoft Word via COM for the DOCX → PDF step. | `environment.yml` (conda-forge, Windows-only) |
 
-All three are dev-only — they don't ship and the runtime (Radioconda) doesn't need them.
+`python-docx` is dev-only and doesn't ship; the runtime (Radioconda) doesn't need it. The PDF step uses whichever engine is present — LibreOffice on macOS/Linux, Word on Windows (see `convert_docx_to_pdf` in `build_doc.py`).
 
-The build script (`build_install_docx.py`) accepts CLI options so the same code produces both this document and the install guide:
+The build script (`build_doc.py`) accepts CLI options so the same code produces both this document and the install guide:
 
 ```text
-.conda\python.exe build_install_docx.py [source.md] \
-    [--docx OUT.docx] [--pdf OUT.pdf] \
+./.conda/bin/python build_doc.py [source.md] \
+    [--pdf OUT.pdf] [--docx KEEP_DOCX_PATH] \
     [--title "Cover Title"] [--subtitle "Cover Subtitle"]
 ```
 
-Defaults match the install-guide build, so a bare `build_install_docx.py` invocation builds `Installing.md` → `DSES_RFI_Spectrum_Analyzer_Installation.{docx,pdf}` with `Installation Guide` as subtitle.
+Defaults match the install-guide build, so a bare `build_doc.py` invocation builds `Installing.md` → `DSES_RFI_Spectrum_Analyzer_Installation.pdf` with `Installation Guide` as subtitle. The intermediate DOCX is a temp file, removed after the PDF is written (pass `--docx` to keep it).
 
 ### 7.4 Multi-radio architecture
 
