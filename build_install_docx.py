@@ -116,7 +116,7 @@ DST_DOCX = Path("DSES_RFI_Spectrum_Analyzer_Installation.docx")
 DST_PDF  = Path("DSES_RFI_Spectrum_Analyzer_Installation.pdf")
 DOC_TITLE    = "DSES Spectrum Analyzer"
 DOC_SUBTITLE = "Installation Guide"
-DOC_VERSION  = "v1.0.0"
+DOC_VERSION  = "v1.1.0"
 DOC_AUTHOR   = "Richard M Hambly (K0GD)"
 DOC_ORG      = "DSES"
 
@@ -551,7 +551,60 @@ def _kill_stale_invisible_word():
                 pass
 
 
+def _find_soffice():
+    """Locate a LibreOffice/OpenOffice headless binary, or None."""
+    import shutil
+    for name in ("soffice", "libreoffice"):
+        p = shutil.which(name)
+        if p:
+            return p
+    # Common macOS install location (not on PATH by default).
+    mac = Path("/Applications/LibreOffice.app/Contents/MacOS/soffice")
+    if mac.is_file():
+        return str(mac)
+    return None
+
+
+def _convert_docx_to_pdf_soffice(soffice: str, docx_path: Path, pdf_path: Path):
+    """macOS/Linux PDF path: convert via LibreOffice headless.
+
+    Note: LibreOffice does not re-evaluate Word's TOC *field* the way Word
+    does, so the table of contents may render with its placeholder text. The
+    body, headings, page numbers and styling come through fine. For a fully
+    populated TOC, build on Windows with Word (the path below) or open the
+    .docx in Word once and Save As PDF."""
+    import subprocess
+    outdir = pdf_path.resolve().parent
+    subprocess.run([soffice, "--headless", "--convert-to", "pdf",
+                    "--outdir", str(outdir), str(docx_path.resolve())],
+                   check=True, capture_output=True, text=True)
+    produced = outdir / (docx_path.stem + ".pdf")
+    if produced != pdf_path.resolve():
+        produced.replace(pdf_path)
+    print(f"Wrote {pdf_path} ({pdf_path.stat().st_size // 1024} KB) via LibreOffice")
+
+
 def convert_docx_to_pdf(docx_path: Path, pdf_path: Path):
+    """Convert the DOCX to PDF using the best available engine:
+
+      * Windows + Microsoft Word -> Word via pywin32 (updates the TOC/PAGE
+        fields properly; the preferred, fully-correct path);
+      * otherwise (macOS/Linux)  -> LibreOffice headless, if installed.
+
+    Raises if neither is available so the caller can fall back to shipping
+    the .docx and asking for a manual Save-As-PDF."""
+    if sys.platform == "win32":
+        return _convert_docx_to_pdf_word(docx_path, pdf_path)
+    soffice = _find_soffice()
+    if soffice:
+        return _convert_docx_to_pdf_soffice(soffice, docx_path, pdf_path)
+    raise RuntimeError(
+        "No PDF engine found. On Windows install Microsoft Word; on "
+        "macOS/Linux install LibreOffice (macOS: `brew install --cask "
+        "libreoffice`) and re-run, or open the .docx and Save As PDF.")
+
+
+def _convert_docx_to_pdf_word(docx_path: Path, pdf_path: Path):
     """Open the DOCX in Word, update every field (TOC + PAGE), then save
     as PDF. Direct pywin32 instead of docx2pdf so we control the field-
     update step — without it the TOC stays as the placeholder text.

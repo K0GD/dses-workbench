@@ -1,6 +1,6 @@
 # DSES Spectrum Analyzer — Installation Guide
 
-**Version 1.0.0**
+**Version 1.1.0**
 Author: Richard M Hambly (K0GD) — rick@cnssys.com
 License: GPL-3.0-or-later
 
@@ -148,14 +148,14 @@ Accept the prompt; conda downloads and installs the three packages. If the launc
 
 Download the application from the distribution site. You can either use the direct links below, or browse the folder <https://gpstime.com/sw_distribution/b210_sa/> and pick the newest `dses-spectrum-analyzer-*.zip`:
 
-- **Application (zip):** <https://gpstime.com/sw_distribution/b210_sa/dses-spectrum-analyzer-1.0.0.zip>
+- **Application (zip):** <https://gpstime.com/sw_distribution/b210_sa/dses-spectrum-analyzer-1.1.0.zip>
 - **This guide (PDF):** <https://gpstime.com/sw_distribution/b210_sa/DSES_RFI_Spectrum_Analyzer_Installation.pdf>
 
-The zip is roughly 60 MB — it includes a short sample recording so the program can run in playback mode when no radio is attached. (Replace `1.0.0` in the link with a newer version number if a later release has been published.)
+The zip is roughly 60 MB — it includes a short sample recording so the program can run in playback mode when no radio is attached. (Replace `1.1.0` in the link with a newer version number if a later release has been published.)
 
 ### 3.1 Windows 11
 
-1. Extract the zip anywhere you have write permission. A common choice is `Documents\DSES-Spectrum-Analyzer`. The extracted folder will be `dses-spectrum-analyzer-1.0.0\` and will contain `dses_spectrum_analyzer.py`, `launcher.bat`, `launcher.ps1`, `install-shortcut.ps1`, `LICENSE`, the `icons\` folder, and this guide.
+1. Extract the zip anywhere you have write permission. A common choice is `Documents\DSES-Spectrum-Analyzer`. The extracted folder will be `dses-spectrum-analyzer-1.1.0\` and will contain `dses_spectrum_analyzer.py`, `launcher.bat`, `launcher.ps1`, `install-shortcut.ps1`, `LICENSE`, the `icons\` folder, and this guide.
 2. Double-click **`launcher.bat`** to start the application.
 3. The first time you run it, the launcher searches for Radioconda in this order: the `RADIOCONDA_ROOT` environment variable, any currently-activated conda env, `%LOCALAPPDATA%\radioconda`, `C:\ProgramData\radioconda`, `%USERPROFILE%\radioconda`, a cached config file, then `conda info --base` if `conda` is on PATH. If none of these find a working install, you'll get a prompt asking for the path; type it in and the launcher remembers it for next time.
 4. (Optional) Create a desktop shortcut (with the app's pulsar icon) by running **`install-shortcut.ps1`**. The reliable way — which works regardless of your PowerShell execution policy — is to open PowerShell in the extracted folder and run:
@@ -174,12 +174,12 @@ After the first run, the app's window opens with the spectrum and waterfall plot
 
    ```bash
    mkdir -p ~/Applications && cd ~/Applications
-   unzip ~/Downloads/dses-spectrum-analyzer-1.0.0.zip
-   cd dses-spectrum-analyzer-1.0.0
+   unzip ~/Downloads/dses-spectrum-analyzer-1.1.0.zip
+   cd dses-spectrum-analyzer-1.1.0
    chmod +x launcher.sh
    ```
 
-   The extracted `dses-spectrum-analyzer-1.0.0/` folder contains `dses_spectrum_analyzer.py`, `launcher.sh`, `dses-spectrum-analyzer.desktop`, `LICENSE`, the `icons/` folder, and this guide. (Avoid system locations like `/opt` unless you extract with `sudo` — keeping it in your home directory avoids permission issues.)
+   The extracted `dses-spectrum-analyzer-1.1.0/` folder contains `dses_spectrum_analyzer.py`, `launcher.sh`, `dses-spectrum-analyzer.desktop`, `LICENSE`, the `icons/` folder, and this guide. (Avoid system locations like `/opt` unless you extract with `sudo` — keeping it in your home directory avoids permission issues.)
 
 2. Launch:
 
@@ -204,20 +204,28 @@ The steps are the same as Linux. Extract it into your personal **`~/Applications
 
 ```bash
 mkdir -p ~/Applications && cd ~/Applications
-unzip ~/Downloads/dses-spectrum-analyzer-1.0.0.zip
-cd dses-spectrum-analyzer-1.0.0
+unzip ~/Downloads/dses-spectrum-analyzer-1.1.0.zip
+cd dses-spectrum-analyzer-1.1.0
 chmod +x launcher.sh
 ./launcher.sh
 ```
 
 Keeping it under your home directory (rather than the system `/Applications`) avoids permission prompts and Gatekeeper friction.
 
+**(Optional) Create a Desktop icon.** Run **`install-shortcut.command`** to build a double-clickable **DSES Spectrum Analyzer.app** on your Desktop, using the app's pulsar icon. Launching it starts the analyzer with no Terminal window. In Finder, right-click `install-shortcut.command` → **Open** (the first run may need Gatekeeper approval — see below), or from a terminal:
+
+```bash
+bash install-shortcut.command
+```
+
+It prints `Created: …/Desktop/DSES Spectrum Analyzer.app`. Re-run it any time you move the extracted folder (the app remembers the location it was built from). The first time you double-click the new `.app`, macOS may warn about an app from an unidentified developer — right-click it → **Open** once, or approve it under **System Settings → Privacy & Security → Open Anyway**. Startup logs go to `~/Library/Logs/DSES_Spectrum_Analyzer.log` if you ever need to troubleshoot a launch.
+
 On Apple Silicon, **make sure** you installed the `arm64` build of Radioconda. Mixing an `x86_64` Radioconda with a native `arm64` Python or Qt will produce confusing errors at startup. There is no Rosetta-only step required if both halves match the CPU.
 
 If the Finder warns about an unidentified developer when running `launcher.sh`, clear the quarantine attribute on the unzipped folder:
 
 ```bash
-xattr -dr com.apple.quarantine dses-spectrum-analyzer-1.0.0
+xattr -dr com.apple.quarantine dses-spectrum-analyzer-1.1.0
 ```
 
 
@@ -290,7 +298,7 @@ When you launch the spectrum analyzer with an RSP attached, it appears in the de
 
 Regardless of OS, before declaring the install good:
 
-- The window title bar reads `DSES Spectrum Analyzer — v1.0.0 — <radio model> — <serial>` (e.g. `… — USRP B210 — 3273A91` or `… — RSP1B — 240513BE60`). The version number must match the bundle you installed; the radio portion confirms which device is being used.
+- The window title bar reads `DSES Spectrum Analyzer — v1.1.0 — <radio model> — <serial>` (e.g. `… — USRP B210 — 3273A91` or `… — RSP1B — 240513BE60`). The version number must match the bundle you installed; the radio portion confirms which device is being used.
 - Pull up **Help → User Guide** from the menu bar. The guide should open.
 - Pull up **Help → About**. The author, version, license, and the path to the settings file should be readable.
 - The spectrum plot should show live data (not a flat line at −140 dB). If it's flat, the radio isn't streaming — see Troubleshooting §6.
@@ -429,8 +437,19 @@ The GR flow graph is running but no samples are arriving. Usual causes:
 ### macOS: "developer cannot be verified"
 
 ```bash
-xattr -dr com.apple.quarantine /path/to/dses-spectrum-analyzer-1.0.0
+xattr -dr com.apple.quarantine /path/to/dses-spectrum-analyzer-1.1.0
 ```
+
+For the optional Desktop **`.app`** icon (built by `install-shortcut.command`), the same warning can appear the first time you double-click it — right-click the app → **Open** once, or approve it in **System Settings → Privacy & Security → Open Anyway**. You only need to do this once per machine.
+
+### macOS: harmless startup messages in the terminal
+
+When launched from a terminal on macOS, the app prints a few benign lines that are **not** errors and can be ignored:
+
+- `objc[...]: Class QT_ROOT_LEVEL_POOL... is implemented in both ...libQt6Core... and ...libQt5Core...` — Radioconda ships both Qt5 (for GNU Radio's own GUI blocks) and Qt6/PySide6 (what this app uses); both libraries are present in the process. The app forces the PySide6 backend, so this is cosmetic.
+- `[ERROR] SoapySDR::loadModule(...) dlopen() failed` — SoapySDR probing a path that isn't a module. Harmless; the B210 is driven through UHD, not SoapySDR.
+
+The app launches and runs normally despite these. (When started from the Desktop `.app`, they go to `~/Library/Logs/DSES_Spectrum_Analyzer.log` instead of the screen.)
 
 ### Settings won't persist
 
@@ -526,14 +545,17 @@ If no SDR is attached, the program looks next to the application file for `sampl
 
 #### RX
 
-- **Sample Rate**: per-radio. The combo shows the rates the connected radio actually supports (e.g. B210: 1–25 MHz; SDRPlay: 2–10 MHz; RTL-SDR: 0.25–3.2 MHz). Higher rate = wider spectrum but more disk usage when recording.
+- **Sample Rate**: per-radio. The combo shows validated quick-pick rates for the connected radio (e.g. B210: 0.625–25 MHz; SDRPlay: 2–10 MHz; RTL-SDR: 0.25–3.2 MHz). Higher rate = wider spectrum but more disk usage when recording.
+- **Manual Rate (Hz)**: type any rate the SDR supports — useful for real-pulsar capture geometries that aren't in the preset list (e.g. the 24 MHz Haswell geometry, or the 625 kHz / 1.25 MHz lab-simulator rates). The value is clamped to the device's reported min/max (hover for the range) and the radio snaps to the nearest rate it can actually deliver, which is then shown back. Accepts engineering notation, e.g. `24M` or `625k`. The combo clears when the active rate isn't one of the presets.
 - **RX Gain**: per-radio range and meaning. The slider's min/max matches what the driver reports (e.g. B210: 0–76 dB on the AD9361 gain table; SDRPlay: 0–48 dB, internally inverted so higher = stronger signal; RTL-SDR: 0–49.6 dB). AGC, if the driver defaults it on, is disabled at startup so the slider always takes effect.
 - **Antenna**: appears only when the open radio has more than one RF input. For a B210 this lists all four physical connectors as `A : RX2`, `A : TX/RX`, `B : RX2`, `B : TX/RX` — receiver A and receiver B, each with its two SMA ports — and switching includes hopping between the two receivers. An RSPduo lists its two tuners. Pick the connector your cable is actually plugged into; the choice is remembered per radio. Single-port radios (most RTL dongles, the RSP1B) don't show this control.
 - **Device**: shows the currently-open radio and re-opens the picker on click.
 
 #### Recording
 
-- **Folder**: where SigMF capture pairs (.sigmf-meta / .sigmf-data) land. Defaults to `~/Documents/DSES_SA_Recordings`.
+- **Folder**: where recordings land. Defaults to `~/Documents/DSES_SA_Recordings`.
+- **Format**: *Raw I/Q (SigMF)* writes full-rate complex samples to a SigMF `.sigmf-meta`/`.sigmf-data` pair — exact, but large (e.g. ~192 MB/s at 24 Msps). *Filterbank (.fil)* channelizes the stream live and writes a SIGPROC filterbank (`telescope_id 12`) straight to disk, so the giant raw I/Q is never stored. The `.fil` is what PRESTO folds, and it is produced by the same validated code as the offline `iq_to_fil.py` converter.
+- **Channels** / **Integrate** (filterbank only): the FFT channel count and how many power frames are summed per output sample, so `tsamp = channels × integrate / sample rate`. Locked while recording. (Lab simulator: 1024 ch at 625 kHz → 1.6384 ms; Haswell geometry: 256 ch at 24 MHz with Integrate ≈ 16 → ~171 µs.)
 - **Record**: *Stopped* / *Recording*. Recording always starts *Stopped* on launch.
 
 ### Spectrum (top plot)
