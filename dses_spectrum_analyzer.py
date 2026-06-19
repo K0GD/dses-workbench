@@ -2713,20 +2713,26 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         gr.top_block.__init__(self, f"{APP_NAME} v{APP_VERSION}", catch_exceptions=True)
         QtWidgets.QWidget.__init__(self)
         self.setWindowTitle(f"{APP_NAME}  —  v{APP_VERSION}")
-        try:
-            # Prefer the bundled DSES icon (also what the macOS .app / Linux
-            # .desktop / Windows shortcut use); fall back to the GNU Radio
-            # theme icon if it isn't found next to this script.
-            icon_png = Path(__file__).resolve().parent / "icons" / "dses_sa.png"
-            icon = (QtGui.QIcon(str(icon_png)) if icon_png.is_file()
-                    else QtGui.QIcon.fromTheme('gnuradio-grc'))
-            self.setWindowIcon(icon)
-            # On macOS the Dock tile follows the application-wide icon.
-            app = QtWidgets.QApplication.instance()
-            if app is not None and not icon.isNull():
-                app.setWindowIcon(icon)
-        except BaseException as exc:
-            print(f"Qt GUI: Could not set Icon: {str(exc)}", file=sys.stderr)
+        # Set the window/Dock icon to the bundled DSES pulsar on Windows/Linux.
+        #
+        # macOS is deliberately EXCLUDED: this process has BOTH Qt5 (pulled in
+        # by GNU Radio's qtgui blocks) and Qt6 (PySide6) loaded, and setting a
+        # raster icon there runs Qt6's setWindowIcon into Qt5's macOS bitmap
+        # path (qt_mac_bitmapInfoForImage / QImage::format) and SIGSEGVs. The
+        # old themed icon never crashed only because QIcon.fromTheme() is empty
+        # on macOS. On macOS the Dock icon comes from the .app bundle's .icns
+        # (install-shortcut.command) instead, so we simply skip it here.
+        if sys.platform != 'darwin':
+            try:
+                icon_png = Path(__file__).resolve().parent / "icons" / "dses_sa.png"
+                icon = (QtGui.QIcon(str(icon_png)) if icon_png.is_file()
+                        else QtGui.QIcon.fromTheme('gnuradio-grc'))
+                self.setWindowIcon(icon)
+                app = QtWidgets.QApplication.instance()
+                if app is not None and not icon.isNull():
+                    app.setWindowIcon(icon)
+            except BaseException as exc:
+                print(f"Qt GUI: Could not set Icon: {str(exc)}", file=sys.stderr)
 
         # Start stderr capture BEFORE the USRP source is built so we catch
         # any overflow indicators emitted during stream startup.
