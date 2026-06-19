@@ -2327,7 +2327,11 @@ class RadioSource:
 class UhdB200Source(RadioSource):
     """Wraps `uhd.usrp_source` for B200-family devices (B200 / B210)."""
 
-    samp_rate_options = [1e6, 2e6, 4e6, 5e6, 8e6, 10e6, 16e6, 20e6, 25e6]
+    # 0.625 and 1.25 MHz are the validated DSES lab simulator geometries
+    # (UHF 625 kHz / L-band 1.25 MHz) — needed so a live .fil capture matches
+    # the proven offline tsamp; the B210 supports rates well below 1 MHz.
+    samp_rate_options = [0.625e6, 1e6, 1.25e6, 2e6, 4e6, 5e6, 8e6, 10e6,
+                         16e6, 20e6, 25e6]
     gain_range = (0.0, 76.0, 1.0)
 
     def __init__(self, serial: str, samp_rate: float, center_freq: float,
