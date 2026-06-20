@@ -117,7 +117,7 @@ SRC = Path("Installing.md")
 DST_PDF  = Path("DSES_RFI_Spectrum_Analyzer_Installation.pdf")
 DOC_TITLE    = "DSES Spectrum Analyzer"
 DOC_SUBTITLE = "Installation Guide"
-DOC_VERSION  = "v1.1.0"
+DOC_VERSION  = "v1.1.1"
 DOC_AUTHOR   = "Richard M Hambly (K0GD)"
 DOC_ORG      = "DSES"
 
