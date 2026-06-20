@@ -97,6 +97,12 @@ from gnuradio import uhd
 # recording sink. Lives next to this script.
 import sigproc_fil
 
+# In-app upgrade helper (download/verify/extract/install). OS-neutral core; the
+# Qt install dialog + per-OS shortcut/relaunch live here in the app.
+import updater
+import shutil
+import subprocess
+
 from argparse import ArgumentParser
 from datetime import datetime
 from pathlib import Path
@@ -2254,6 +2260,7 @@ class UpdateNotificationDialog(QtWidgets.QDialog):
     close. Emits `dismissed_for_version(version)` if the user clicks Skip."""
 
     dismissed_for_version = Signal(str)
+    install_requested = Signal(str, str)  # download_url, latest_version
 
     def __init__(self, latest_version, download_url, release_notes,
                  current_version, parent=None):
@@ -2295,28 +2302,39 @@ class UpdateNotificationDialog(QtWidgets.QDialog):
             layout.addWidget(url_lbl)
 
         btns = QtWidgets.QHBoxLayout()
-        # Primary action: open the guide (the "read me first" step).
+        # Primary action: download + install in-app (the automated path).
+        install_btn = QtWidgets.QPushButton("Install Update…")
+        install_btn.setEnabled(bool(download_url))
+        install_btn.setDefault(True)
+        install_btn.clicked.connect(self._on_install)
+        btns.addWidget(install_btn)
+
+        # The cautious path: read the guide, or grab the zip to apply by hand.
         guide_btn = QtWidgets.QPushButton("Read the Guide (PDF)")
         guide_btn.setEnabled(bool(self._guide_url))
-        guide_btn.setDefault(True)
         guide_btn.clicked.connect(self._on_guide)
         btns.addWidget(guide_btn)
 
-        dl_btn = QtWidgets.QPushButton("Download Update (.zip)")
+        dl_btn = QtWidgets.QPushButton("Download .zip")
         dl_btn.setEnabled(bool(download_url))
         dl_btn.clicked.connect(self._on_open)
         btns.addWidget(dl_btn)
+
+        btns.addStretch(1)
 
         skip_btn = QtWidgets.QPushButton("Skip This Version")
         skip_btn.clicked.connect(self._on_skip)
         btns.addWidget(skip_btn)
 
-        btns.addStretch(1)
-
         remind_btn = QtWidgets.QPushButton("Remind Me Later")
         remind_btn.clicked.connect(self.close)
         btns.addWidget(remind_btn)
         layout.addLayout(btns)
+
+    def _on_install(self):
+        if self._url:
+            self.install_requested.emit(self._url, self._latest)
+            self.close()
 
     def _on_guide(self):
         if self._guide_url:
@@ -2329,6 +2347,191 @@ class UpdateNotificationDialog(QtWidgets.QDialog):
     def _on_skip(self):
         self.dismissed_for_version.emit(self._latest)
         self.close()
+
+
+def _create_desktop_shortcut(install_dir, version_label):
+    """Best-effort: run the OS's install-shortcut helper from `install_dir`,
+    naming the shortcut with `version_label` so a new install gets its own icon
+    instead of overwriting an existing one. Failures are non-fatal."""
+    install_dir = Path(install_dir)
+    try:
+        if sys.platform == 'darwin':
+            subprocess.run(['bash', str(install_dir / 'install-shortcut.command'),
+                            version_label], cwd=str(install_dir),
+                           check=False, capture_output=True, text=True)
+        elif sys.platform == 'win32':
+            subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass',
+                            '-File', str(install_dir / 'install-shortcut.ps1'),
+                            '-Suffix', version_label], cwd=str(install_dir),
+                           check=False, capture_output=True, text=True)
+        else:
+            _make_linux_desktop_entry(install_dir, version_label)
+    except Exception as exc:
+        print(f"Desktop shortcut creation failed: {exc}", file=sys.stderr)
+
+
+def _make_linux_desktop_entry(install_dir, version_label):
+    """Write a versioned .desktop file into ~/.local/share/applications from the
+    bundled template (Linux 'desktop shortcut')."""
+    tmpl = Path(install_dir) / 'dses-spectrum-analyzer.desktop'
+    if not tmpl.is_file():
+        return
+    text = (tmpl.read_text(encoding='utf-8')
+            .replace('__INSTALL_DIR__', str(install_dir))
+            .replace('Name=DSES Spectrum Analyzer',
+                     f'Name=DSES Spectrum Analyzer {version_label}'))
+    dest_dir = Path.home() / '.local' / 'share' / 'applications'
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    (dest_dir / f'dses-spectrum-analyzer-{version_label}.desktop').write_text(
+        text, encoding='utf-8')
+
+
+def _relaunch(install_dir):
+    """Start a fresh instance via the platform launcher, detached from this one
+    (so this process can exit and the new one survives)."""
+    install_dir = Path(install_dir)
+    try:
+        if sys.platform == 'win32':
+            subprocess.Popen(['cmd', '/c', 'start', '', 'launcher.bat'],
+                             cwd=str(install_dir),
+                             creationflags=(getattr(subprocess, 'DETACHED_PROCESS', 0)
+                                            | getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0)))
+        else:
+            subprocess.Popen(['bash', str(install_dir / 'launcher.sh')],
+                             cwd=str(install_dir), start_new_session=True)
+    except Exception as exc:
+        print(f"Relaunch failed: {exc}", file=sys.stderr)
+
+
+class UpdateInstaller(QtCore.QObject):
+    """Runs download -> verify -> extract -> install on a background thread and
+    reports progress/result via signals (delivered to the GUI thread)."""
+
+    progress = Signal(int, int)        # bytes_done, bytes_total (0 = unknown)
+    status = Signal(str)               # human status line
+    done = Signal(bool, str, str)      # success, message, install_path
+
+    def __init__(self, download_url, mode, dest, make_shortcut, version_label,
+                 parent=None):
+        super().__init__(parent)
+        self._url = download_url
+        self._mode = mode              # 'in_place' | 'new_copy'
+        self._dest = Path(dest)        # in_place: current dir; new_copy: parent
+        self._make_shortcut = make_shortcut
+        self._version = version_label
+
+    def start(self):
+        threading.Thread(target=self._run, name="update-installer",
+                         daemon=True).start()
+
+    def _run(self):
+        import tempfile
+        tmp = Path(tempfile.mkdtemp(prefix="dses_update_"))
+        try:
+            self.status.emit("Downloading update…")
+            zip_path = tmp / "update.zip"
+            updater.download(self._url, zip_path,
+                             progress=lambda g, t: self.progress.emit(g, t))
+            self.status.emit("Verifying download…")
+            updater.verify(zip_path, updater.sha256_url_for(self._url))
+            self.status.emit("Extracting…")
+            root = updater.extract_release(zip_path, tmp / "x")
+            if self._mode == 'in_place':
+                self.status.emit("Installing over the current version…")
+                updater.install_in_place(root, self._dest)
+                self.done.emit(True, "Update installed over the current version.",
+                               str(self._dest))
+            else:
+                self.status.emit("Installing a new copy…")
+                new_dir = updater.install_new_copy(root, self._dest)
+                if self._make_shortcut:
+                    self.status.emit("Creating desktop shortcut…")
+                    _create_desktop_shortcut(new_dir, self._version)
+                self.done.emit(True, f"Installed a new copy at:\n{new_dir}",
+                               str(new_dir))
+        except Exception as exc:
+            self.done.emit(False, f"{type(exc).__name__}: {exc}", "")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+class InstallUpdateDialog(QtWidgets.QDialog):
+    """Asks WHERE to install: over the current install, or as a new copy in a
+    chosen folder (with an optional desktop shortcut for that version)."""
+
+    def __init__(self, current_dir, new_version, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Install Update")
+        self.setModal(True)
+        self.setMinimumWidth(540)
+        self._current_dir = Path(current_dir)
+        self._new_parent = Path.home()
+
+        lay = QtWidgets.QVBoxLayout(self)
+        lay.addWidget(QtWidgets.QLabel(
+            f"<h3>Install version {new_version}</h3>"
+            "<p>The download is checksum-verified before anything is changed.</p>"))
+
+        self._rb_overwrite = QtWidgets.QRadioButton(
+            "Update this installation (replace the current version)")
+        self._rb_overwrite.setChecked(True)
+        lay.addWidget(self._rb_overwrite)
+        cur_lbl = QtWidgets.QLabel(f"&nbsp;&nbsp;&nbsp;&nbsp;<code>{self._current_dir}</code>")
+        cur_lbl.setWordWrap(True)
+        cur_lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        lay.addWidget(cur_lbl)
+
+        self._rb_new = QtWidgets.QRadioButton(
+            "Install a new copy and keep the current version")
+        lay.addWidget(self._rb_new)
+
+        row = QtWidgets.QHBoxLayout()
+        row.addSpacing(24)
+        row.addWidget(QtWidgets.QLabel("Into:"))
+        self._folder_lbl = QtWidgets.QLabel(str(self._new_parent))
+        self._folder_lbl.setEnabled(False)
+        row.addWidget(self._folder_lbl, 1)
+        self._folder_btn = QtWidgets.QPushButton("Choose Folder…")
+        self._folder_btn.setEnabled(False)
+        self._folder_btn.clicked.connect(self._choose_folder)
+        row.addWidget(self._folder_btn)
+        lay.addLayout(row)
+
+        self._shortcut_cb = QtWidgets.QCheckBox(
+            "Add a desktop shortcut for this version")
+        self._shortcut_cb.setChecked(True)
+        self._shortcut_cb.setEnabled(False)
+        shortcut_row = QtWidgets.QHBoxLayout()
+        shortcut_row.addSpacing(24)
+        shortcut_row.addWidget(self._shortcut_cb)
+        shortcut_row.addStretch(1)
+        lay.addLayout(shortcut_row)
+
+        self._rb_new.toggled.connect(self._on_mode_toggle)
+
+        bb = QtWidgets.QDialogButtonBox()
+        bb.addButton("Install", QtWidgets.QDialogButtonBox.AcceptRole)
+        bb.addButton(QtWidgets.QDialogButtonBox.Cancel)
+        bb.accepted.connect(self.accept)
+        bb.rejected.connect(self.reject)
+        lay.addWidget(bb)
+
+    def _on_mode_toggle(self, new_on):
+        for w in (self._folder_lbl, self._folder_btn, self._shortcut_cb):
+            w.setEnabled(new_on)
+
+    def _choose_folder(self):
+        d = QtWidgets.QFileDialog.getExistingDirectory(
+            self, "Install into folder", str(self._new_parent))
+        if d:
+            self._new_parent = Path(d)
+            self._folder_lbl.setText(d)
+
+    def result_choice(self):
+        """Return (mode, dest, make_shortcut)."""
+        if self._rb_new.isChecked():
+            return ('new_copy', self._new_parent, self._shortcut_cb.isChecked())
+        return ('in_place', self._current_dir, False)
 
 
 # === Radio source abstraction ===
@@ -3371,6 +3574,7 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
             return
         dlg = UpdateNotificationDialog(latest, url, notes, APP_VERSION, parent=self)
         dlg.dismissed_for_version.connect(self._on_update_dismissed)
+        dlg.install_requested.connect(self._install_update)
         dlg.show()  # non-modal
         # Keep a reference so it isn't garbage-collected when this slot returns.
         self._update_dialog = dlg
@@ -3382,6 +3586,65 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
             self._app_settings.save()
         except OSError:
             pass
+
+    @Slot(str, str)
+    def _install_update(self, download_url, latest_version):
+        """Ask where to install, then download/verify/extract/install on a
+        background thread with a progress dialog."""
+        if not download_url:
+            return
+        install_dir = Path(__file__).resolve().parent
+        choose = InstallUpdateDialog(install_dir, latest_version, parent=self)
+        if choose.exec() != QtWidgets.QDialog.Accepted:
+            return
+        mode, dest, make_shortcut = choose.result_choice()
+
+        prog = QtWidgets.QProgressDialog("Preparing…", "", 0, 0, self)
+        prog.setWindowTitle("Installing Update")
+        prog.setCancelButton(None)          # no mid-install cancel — it's destructive
+        prog.setWindowModality(Qt.WindowModal)
+        prog.setMinimumDuration(0)
+        prog.setAutoClose(False)
+        prog.setAutoReset(False)
+
+        installer = UpdateInstaller(download_url, mode, dest, make_shortcut,
+                                    latest_version, parent=self)
+
+        def on_progress(done_bytes, total_bytes):
+            if total_bytes > 0:
+                prog.setMaximum(total_bytes)
+                prog.setValue(done_bytes)
+            else:
+                prog.setRange(0, 0)  # indeterminate
+        installer.status.connect(prog.setLabelText)
+        installer.progress.connect(on_progress)
+        installer.done.connect(
+            lambda ok, msg, path: self._on_install_done(ok, msg, mode, install_dir, prog))
+        # Keep a reference so the installer/dialog survive this slot.
+        self._installer = installer
+        self._install_progress = prog
+        prog.show()
+        installer.start()
+
+    def _on_install_done(self, ok, msg, mode, install_dir, prog):
+        prog.close()
+        if not ok:
+            QtWidgets.QMessageBox.critical(
+                self, "Update failed",
+                f"{msg}\n\nYour current installation was left unchanged.")
+            return
+        if mode == 'in_place':
+            r = QtWidgets.QMessageBox.question(
+                self, "Update installed",
+                "The update was installed over the current version.\n\n"
+                "Restart now to use it?",
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                QtWidgets.QMessageBox.Yes)
+            if r == QtWidgets.QMessageBox.Yes:
+                _relaunch(install_dir)
+                self.close()  # closeEvent saves settings + stops the flowgraph
+        else:
+            QtWidgets.QMessageBox.information(self, "Update installed", msg)
 
     def _check_for_updates_manual(self):
         """Help → Check for Updates… handler. Wires the no_update /

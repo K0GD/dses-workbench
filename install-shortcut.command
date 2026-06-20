@@ -3,12 +3,25 @@
 # Analyzer. Double-click in Finder, or run from a terminal. Run once per Mac;
 # re-run after moving the project or refreshing the icon.
 #
-# It builds a small "DSES Spectrum Analyzer.app" wrapper (no Terminal window)
-# on your Desktop that launches launcher.sh, with the bundled pulsar icon.
+# It builds a "DSES Spectrum Analyzer.app" wrapper (no Terminal window) on your
+# Desktop that launches launcher.sh, with the bundled pulsar icon.
+#
+# Optional argument: a name suffix (usually a version). With it the bundle is
+# named "DSES Spectrum Analyzer <suffix>" with a distinct bundle id, so a
+# second install gets its own Desktop icon instead of overwriting the first.
+# Used by the in-app updater's "install a new copy" path.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SUFFIX="${1:-}"
 APP_NAME="DSES Spectrum Analyzer"
+BUNDLE_ID="science.dses.spectrum-analyzer"
+if [ -n "$SUFFIX" ]; then
+    APP_NAME="DSES Spectrum Analyzer $SUFFIX"
+    # Sanitize the suffix for the reverse-DNS bundle id (alnum + dots only).
+    _idsfx="$(printf '%s' "$SUFFIX" | tr -c 'A-Za-z0-9.' '-')"
+    BUNDLE_ID="science.dses.spectrum-analyzer.$_idsfx"
+fi
 LAUNCHER="$SCRIPT_DIR/launcher.sh"
 # Keep the bundle version in sync with the app (single source of truth).
 APP_VERSION="$(grep -oE '^APP_VERSION[[:space:]]*=[[:space:]]*"[^"]+"' \
@@ -78,7 +91,7 @@ cat > "$APP/Contents/Info.plist" <<EOF
     <key>CFBundleDisplayName</key>
     <string>$APP_NAME</string>
     <key>CFBundleIdentifier</key>
-    <string>science.dses.spectrum-analyzer</string>
+    <string>$BUNDLE_ID</string>
     <key>CFBundleExecutable</key>
     <string>launch</string>
 $ICON_KEY

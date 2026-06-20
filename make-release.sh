@@ -49,6 +49,7 @@ for f in \
     dses_spectrum_analyzer.py \
     sigproc_fil.py \
     iq_to_fil.py \
+    updater.py \
     LICENSE \
     launcher.bat \
     launcher.ps1 \

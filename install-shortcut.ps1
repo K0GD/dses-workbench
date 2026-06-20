@@ -1,9 +1,15 @@
 # install-shortcut.ps1 - create a desktop shortcut to the DSES Spectrum Analyzer.
 # Run once per Windows machine. Re-run after generating an icon to refresh it.
+#
+# Optional -Suffix (usually a version): names the shortcut "DSES Spectrum
+# Analyzer <suffix>" so a second install gets its own icon instead of
+# overwriting the first. Used by the in-app updater's "install a new copy" path.
+param([string]$Suffix = '')
 $ErrorActionPreference = 'Stop'
 
 $ScriptDir    = $PSScriptRoot
 $ShortcutName = 'DSES Spectrum Analyzer'
+if ($Suffix) { $ShortcutName = "DSES Spectrum Analyzer $Suffix" }
 $DesktopPath  = [Environment]::GetFolderPath('Desktop')
 $ShortcutPath = Join-Path $DesktopPath "$ShortcutName.lnk"
 $PsLauncher   = Join-Path $ScriptDir 'launcher.ps1'
