@@ -3013,20 +3013,28 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         self._record_group_layout.addWidget(self._record_format_tool_bar)
 
         # --- .fil geometry (only meaningful in filterbank mode) ---
-        self._fil_geom_tool_bar = QtWidgets.QToolBar(self)
-        self._fil_geom_tool_bar.addWidget(QtWidgets.QLabel("Channels: "))
+        # A plain two-row grid, NOT a QToolBar. A QToolBar collapses any widget
+        # that doesn't fit the available width into an overflow ("»") menu, and
+        # in the narrow sidebar — especially once its vertical scrollbar appears
+        # and steals ~17px — the Integrate spin box would drop into that overflow
+        # and look like a blank field (Windows). A grid stacks the two labelled
+        # rows and always shows both spin boxes regardless of sidebar width.
+        self._fil_geom_widget = QtWidgets.QWidget(self)
+        _fil_geom_grid = QtWidgets.QGridLayout(self._fil_geom_widget)
+        _fil_geom_grid.setContentsMargins(0, 0, 0, 0)
+        _fil_geom_grid.addWidget(QtWidgets.QLabel("Channels:"), 0, 0)
         self._fil_nchans_spin = _make_int_spinbox(
             2, 65536, self._fil_nchans,
             "Filterbank channel count (FFT size). tsamp = nchans*integrate/samp_rate.")
         self._fil_nchans_spin.valueChanged.connect(self.set_fil_nchans)
-        self._fil_geom_tool_bar.addWidget(self._fil_nchans_spin)
-        self._fil_geom_tool_bar.addWidget(QtWidgets.QLabel(" Integrate: "))
+        _fil_geom_grid.addWidget(self._fil_nchans_spin, 0, 1)
+        _fil_geom_grid.addWidget(QtWidgets.QLabel("Integrate:"), 1, 0)
         self._fil_integrate_spin = _make_int_spinbox(
             1, 65536, self._fil_integrate,
             "Power frames summed per output sample (1 = no integration).")
         self._fil_integrate_spin.valueChanged.connect(self.set_fil_integrate)
-        self._fil_geom_tool_bar.addWidget(self._fil_integrate_spin)
-        self._record_group_layout.addWidget(self._fil_geom_tool_bar)
+        _fil_geom_grid.addWidget(self._fil_integrate_spin, 1, 1)
+        self._record_group_layout.addWidget(self._fil_geom_widget)
 
         # --- Record selector ---
         self._record_options = [0, 1]
@@ -3258,7 +3266,7 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         self._record_tool_bar.setEnabled(False)
         self._record_tool_bar.setToolTip("Recording is disabled in playback mode.")
         self._record_format_tool_bar.setEnabled(False)
-        self._fil_geom_tool_bar.setEnabled(False)
+        self._fil_geom_widget.setEnabled(False)
         self._recording_dir_button.setEnabled(False)
         if self._playback_path:
             self._recording_status.setText(
@@ -3672,7 +3680,7 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         """The .fil geometry row only applies in filterbank format, and must
         not change mid-recording."""
         editable = (self._record_format == 'fil') and not self.record
-        self._fil_geom_tool_bar.setEnabled(editable)
+        self._fil_geom_widget.setEnabled(editable)
 
     def get_record_format(self):
         return self._record_format
