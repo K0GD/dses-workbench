@@ -116,6 +116,9 @@ APP_COPYRIGHT   = "Copyright © 2026 Richard M Hambly (K0GD)"
 APP_LICENSE     = "GPL-3.0-or-later"
 APP_DESCRIPTION = ("Spectrum analyzer for the Ettus USRP B210 and other SDRs, "
                    "designed for pulsar RFI investigation.")
+# Standalone install/upgrade guide PDF — lives next to the release zips on the
+# distribution server. The update dialog points users here *before* the zip.
+GUIDE_PDF_BASENAME = "DSES_RFI_Spectrum_Analyzer_Installation.pdf"
 
 
 # === Window function table (drop-in for gnuradio.fft.window) ===
@@ -2234,10 +2237,21 @@ class UpdateChecker(QtCore.QObject):
             self.no_update.emit(latest)
 
 
+def _guide_url_from_download(download_url):
+    """Derive the install/upgrade guide PDF URL from a release zip URL: the
+    guide sits next to the zips in the same server folder. Returns "" if the
+    download URL is empty/unusable."""
+    download_url = (download_url or "").strip()
+    if "/" not in download_url:
+        return ""
+    folder = download_url.rsplit("/", 1)[0]
+    return f"{folder}/{GUIDE_PDF_BASENAME}"
+
+
 class UpdateNotificationDialog(QtWidgets.QDialog):
-    """Non-modal: tells the user a new version is available and offers to
-    open the download page, skip this version, or just close. Emits
-    `dismissed_for_version(version)` if the user clicks Skip."""
+    """Non-modal: tells the user a new version is available. It steers them to
+    the install/upgrade *guide* first, then offers the download zip, skip, or
+    close. Emits `dismissed_for_version(version)` if the user clicks Skip."""
 
     dismissed_for_version = Signal(str)
 
@@ -2247,15 +2261,24 @@ class UpdateNotificationDialog(QtWidgets.QDialog):
         # Non-modal so the user can keep using the app.
         self.setModal(False)
         self.setWindowTitle("Update Available")
-        self.setMinimumWidth(480)
+        self.setMinimumWidth(500)
 
         self._latest = latest_version
         self._url = download_url
+        self._guide_url = _guide_url_from_download(download_url)
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.addWidget(QtWidgets.QLabel(
             f"<h3>Version {latest_version} is available.</h3>"
             f"<p>You're running version {current_version}.</p>"))
+
+        # Steer the user to the guide BEFORE the zip: the zip is not a
+        # double-click installer — it must be applied per the guide.
+        layout.addWidget(QtWidgets.QLabel(
+            "<p><b>Read the installation &amp; upgrade guide first.</b> The "
+            "download is a <code>.zip</code> of program files, not an "
+            "installer — the guide explains how to apply it safely (where to "
+            "unzip, what to replace, and not to reinstall Radioconda).</p>"))
 
         if release_notes:
             notes = QtWidgets.QTextEdit()
@@ -2272,10 +2295,17 @@ class UpdateNotificationDialog(QtWidgets.QDialog):
             layout.addWidget(url_lbl)
 
         btns = QtWidgets.QHBoxLayout()
-        open_btn = QtWidgets.QPushButton("Open Download Page")
-        open_btn.setEnabled(bool(download_url))
-        open_btn.clicked.connect(self._on_open)
-        btns.addWidget(open_btn)
+        # Primary action: open the guide (the "read me first" step).
+        guide_btn = QtWidgets.QPushButton("Read the Guide (PDF)")
+        guide_btn.setEnabled(bool(self._guide_url))
+        guide_btn.setDefault(True)
+        guide_btn.clicked.connect(self._on_guide)
+        btns.addWidget(guide_btn)
+
+        dl_btn = QtWidgets.QPushButton("Download Update (.zip)")
+        dl_btn.setEnabled(bool(download_url))
+        dl_btn.clicked.connect(self._on_open)
+        btns.addWidget(dl_btn)
 
         skip_btn = QtWidgets.QPushButton("Skip This Version")
         skip_btn.clicked.connect(self._on_skip)
@@ -2287,6 +2317,10 @@ class UpdateNotificationDialog(QtWidgets.QDialog):
         remind_btn.clicked.connect(self.close)
         btns.addWidget(remind_btn)
         layout.addLayout(btns)
+
+    def _on_guide(self):
+        if self._guide_url:
+            QtGui.QDesktopServices.openUrl(QtCore.QUrl(self._guide_url))
 
     def _on_open(self):
         if self._url:
