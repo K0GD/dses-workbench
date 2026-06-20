@@ -94,10 +94,30 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
+# SDRplay receivers need the "SDRplay API Service" running. It often isn't
+# started at boot, so SDRplay users otherwise have to start it by hand each
+# time. Start it best-effort here. Non-fatal: users of the B210 / RTL-SDR /
+# etc. don't have this service, and a non-elevated shell may lack rights to
+# start it — in which case we print the one-time permanent fix.
+$sdr = Get-Service -DisplayName '*SDRplay*' -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($sdr -and $sdr.Status -ne 'Running') {
+    try {
+        Start-Service -InputObject $sdr -ErrorAction Stop
+        Write-Host ("Started the SDRplay API service ({0})." -f $sdr.Name)
+    } catch {
+        Write-Host ("SDRplay API service ({0}) isn't running and couldn't be auto-started." -f $sdr.Name) -ForegroundColor Yellow
+        Write-Host  "  If you use an SDRplay receiver, make it start automatically (one-time, in an" -ForegroundColor Yellow
+        Write-Host  "  Administrator PowerShell):" -ForegroundColor Yellow
+        Write-Host ("    Set-Service '{0}' -StartupType Automatic; Start-Service '{0}'" -f $sdr.Name) -ForegroundColor Yellow
+    }
+}
+
 $argList = @($MainScript) + $args
-# Start the console minimized so it doesn't clutter the desktop — the Qt
-# window is what the user interacts with. We use python.exe (not pythonw.exe)
-# on purpose: the app's overflow monitor redirects FD 2 (stderr), which needs
-# a real console allocated; a minimized console keeps FD 2 valid and the logs
-# reachable from the taskbar, whereas pythonw.exe has no console at all.
+# Start the console minimized so it doesn't clutter the desktop. The Qt window
+# is what the user interacts with, and it un-minimizes itself on launch (see
+# _bring_to_front) — Qt's first window would otherwise inherit this minimized
+# show-state, so only the console stays minimized. We use python.exe (not
+# pythonw.exe) on purpose: the app's overflow monitor redirects FD 2 (stderr),
+# which needs a real console allocated; a minimized console keeps FD 2 valid
+# and the logs reachable from the taskbar, whereas pythonw.exe has no console.
 Start-Process -FilePath $python -ArgumentList $argList -WorkingDirectory $ScriptDir -WindowStyle Minimized

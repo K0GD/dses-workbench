@@ -1571,12 +1571,39 @@ def _bring_to_front(win):
     """Raise/activate a top-level window so it opens in front. On macOS an app
     launched from a terminal opens its windows behind the terminal until the
     app is activated; this makes startup dialogs and the main window visible
-    immediately. It doesn't pin them on top afterward."""
+    immediately. It doesn't pin them on top afterward.
+
+    Also clears an inherited *minimized* state: the Windows launcher starts the
+    process with its console minimized to keep it out of the way, and Qt's
+    first top-level window inherits that show-state — so without this the
+    spectrum window itself would open minimized. Only the console should stay
+    minimized; the GUI should be visible."""
     try:
+        if win.windowState() & Qt.WindowMinimized:
+            win.setWindowState(win.windowState() & ~Qt.WindowMinimized)
         win.raise_()
         win.activateWindow()
     except Exception:
         pass
+
+
+def _make_int_spinbox(lo, hi, value, tooltip):
+    """A QSpinBox that reliably shows its initial value on every platform.
+
+    Windows quirk: when setValue() is a no-op because `value` already equals
+    the range minimum (a fresh spinbox's default 0 is clamped up to the minimum
+    by setRange), the embedded line edit is never refreshed and the field
+    renders BLANK — while macOS shows it fine. Force the editor text so the
+    value is always visible. (This is the Integrate field, whose default is 1 =
+    its minimum.)"""
+    s = QtWidgets.QSpinBox()
+    s.setRange(lo, hi)
+    s.setValue(value)
+    le = s.lineEdit()
+    if le is not None:
+        le.setText(s.textFromValue(s.value()))
+    s.setToolTip(tooltip)
+    return s
 
 
 def _front_messagebox(parent, icon, title, text):
@@ -2988,18 +3015,14 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         # --- .fil geometry (only meaningful in filterbank mode) ---
         self._fil_geom_tool_bar = QtWidgets.QToolBar(self)
         self._fil_geom_tool_bar.addWidget(QtWidgets.QLabel("Channels: "))
-        self._fil_nchans_spin = QtWidgets.QSpinBox()
-        self._fil_nchans_spin.setRange(2, 65536)
-        self._fil_nchans_spin.setValue(self._fil_nchans)
-        self._fil_nchans_spin.setToolTip(
+        self._fil_nchans_spin = _make_int_spinbox(
+            2, 65536, self._fil_nchans,
             "Filterbank channel count (FFT size). tsamp = nchans*integrate/samp_rate.")
         self._fil_nchans_spin.valueChanged.connect(self.set_fil_nchans)
         self._fil_geom_tool_bar.addWidget(self._fil_nchans_spin)
         self._fil_geom_tool_bar.addWidget(QtWidgets.QLabel(" Integrate: "))
-        self._fil_integrate_spin = QtWidgets.QSpinBox()
-        self._fil_integrate_spin.setRange(1, 1_000_000)
-        self._fil_integrate_spin.setValue(self._fil_integrate)
-        self._fil_integrate_spin.setToolTip(
+        self._fil_integrate_spin = _make_int_spinbox(
+            1, 65536, self._fil_integrate,
             "Power frames summed per output sample (1 = no integration).")
         self._fil_integrate_spin.valueChanged.connect(self.set_fil_integrate)
         self._fil_geom_tool_bar.addWidget(self._fil_integrate_spin)
