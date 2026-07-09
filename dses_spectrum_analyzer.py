@@ -86,6 +86,7 @@ QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
 
 import numpy as np
 from scipy.signal import windows as scipy_windows
+from scipy.ndimage import median_filter
 
 from gnuradio import blocks
 from gnuradio import eng_notation
@@ -208,6 +209,8 @@ DEFAULTS = {
         'avg_alpha':       0.1,     # ~19-frame integration by default (was 1.0 = none)
         'power_avg':       False,   # dB (video) averaging; True = linear-power (radiometric)
         'smooth_bins':     0,       # spectral smoothing off (harms narrow lines)
+        'baseline_mode':   'off',   # 'off' | 'reference' (ON/OFF) | 'flatten' (median)
+        'flatten_bins':    151,     # median window for the Flatten bandpass estimate
         'max_hold':        False,
         'min_hold':        False,
         'y_min':           -140.0,
@@ -464,7 +467,8 @@ class SpectrumProcessor(QObject):
     def __init__(self, sink, fft_size=1024, window_name="blackman-harris",
                  update_hz=10.0, normalize=False, dc_suppress=True,
                  unit='relative', gain_db=0.0, cal_offset_db=0.0,
-                 power_avg=False, smooth_bins=0, parent=None):
+                 power_avg=False, smooth_bins=0,
+                 baseline_mode='off', flatten_bins=151, parent=None):
         super().__init__(parent)
         self._sink = sink
         self._fft_size = int(fft_size)
@@ -480,6 +484,12 @@ class SpectrumProcessor(QObject):
         # smoothing: display-only boxcar over N bins (0 = off).
         self._power_avg = bool(power_avg)
         self._smooth_bins = max(0, int(smooth_bins))
+        # Baseline / bandpass removal (display-only): 'off', 'reference'
+        # (subtract a stored OFF-source spectrum → ON/OFF), or 'flatten'
+        # (subtract a wide-median bandpass estimate). Flattens the floor to ~0.
+        self._baseline_mode = baseline_mode if baseline_mode in ('off', 'reference', 'flatten') else 'off'
+        self._reference = None          # stored OFF-source base-dB spectrum
+        self._flatten_bins = max(3, int(flatten_bins))
         self._recompute_window_norm()
         self._avg_alpha = 1.0
         self._max_on = False
@@ -513,6 +523,7 @@ class SpectrumProcessor(QObject):
         self._sink.set_capacity(max(8192, self._fft_size * 2))
         self._recompute_window_norm()
         self._avg = self._max = self._min = None
+        self._reference = None          # different bin count invalidates the OFF ref
 
     @Slot(str)
     def set_window(self, name):
@@ -559,6 +570,27 @@ class SpectrumProcessor(QObject):
     @Slot(int)
     def set_smooth_bins(self, n):
         self._smooth_bins = max(0, int(n))
+
+    @Slot(str)
+    def set_baseline_mode(self, mode):
+        if mode in ('off', 'reference', 'flatten'):
+            self._baseline_mode = mode
+
+    @Slot(int)
+    def set_flatten_bins(self, n):
+        self._flatten_bins = max(3, int(n))
+
+    @Slot()
+    def store_reference(self):
+        """Capture the current averaged spectrum as the OFF-source reference for
+        ON/OFF display. Store it in the base-dB domain (pre-unit-offset) so it
+        cancels the bandpass regardless of the display unit."""
+        if self._avg is not None:
+            self._reference = self._base_db(self._avg)
+
+    @Slot()
+    def clear_reference(self):
+        self._reference = None
 
     @Slot()
     def reset_averaging(self):
@@ -645,14 +677,34 @@ class SpectrumProcessor(QObject):
             self._to_display(self._min, off) if self._min_on else None,
         )
 
+    def _base_db(self, arr):
+        """Base-dB (pre-unit-offset) view of an averaging-state array."""
+        return 10.0 * np.log10(arr + 1e-20) if self._power_avg else np.asarray(arr)
+
     def _to_display(self, arr, off):
         """Convert an averaging-state array to the emitted dB trace: linear→dB
-        when power-averaging, then optional spectral smoothing, then the unit
-        offset (a constant, so it commutes with smoothing)."""
+        (if power-averaging) → baseline/bandpass removal → spectral smoothing →
+        the unit offset (a constant, so it commutes with the earlier steps)."""
         if arr is None:
             return None
-        db = 10.0 * np.log10(arr + 1e-20) if self._power_avg else arr
+        db = self._apply_baseline(self._base_db(arr).copy())
         return self._smooth(db) + off
+
+    def _apply_baseline(self, db):
+        """Remove the instrument bandpass so a weak line stands proud of ~0.
+        'reference' subtracts a stored OFF-source spectrum (ON/OFF, dB); 'flatten'
+        subtracts a wide running median (narrow lines survive a wide median)."""
+        if self._baseline_mode == 'reference':
+            ref = self._reference
+            if ref is not None and len(ref) == len(db):
+                return db - ref
+            return db                       # no valid reference stored yet
+        if self._baseline_mode == 'flatten':
+            w = self._flatten_bins
+            w = w if (w % 2 == 1) else w + 1
+            w = min(w, len(db) - 1 if len(db) > 3 else 3)
+            return db - median_filter(db, size=w, mode='reflect')
+        return db
 
     def _smooth(self, db):
         """Optional frequency-domain (across-bin) boxcar smoothing of the display
@@ -708,6 +760,9 @@ class FftPlotWidget(QtWidgets.QWidget):
     request_cal_offset = Signal(float)   # dB, for dBm mode
     request_power_avg = Signal(bool)     # average in linear power vs dB
     request_smooth = Signal(int)         # spectral smoothing width in bins
+    request_baseline_mode = Signal(str)  # 'off' | 'reference' | 'flatten'
+    request_store_reference = Signal()   # capture OFF-source reference
+    request_flatten_bins = Signal(int)   # median width for 'flatten'
     # Fires on every user-driven control change; args: (settings_key, value).
     # The main window listens once and persists to the INI.
     control_changed = Signal(str, object)
@@ -947,6 +1002,48 @@ class FftPlotWidget(QtWidgets.QWidget):
         g.addWidget(min_reset, 1, 1)
         v.addWidget(hold_group)
 
+        # Baseline / bandpass-removal group (radio-astronomy: flatten the
+        # instrument bandpass so a weak line stands proud of ~0).
+        base_group = QtWidgets.QGroupBox("Baseline")
+        bf = QtWidgets.QFormLayout(base_group)
+        bf.setContentsMargins(4, 4, 4, 4)
+        self._baseline_combo = QtWidgets.QComboBox()
+        for _label, _code in (("Off", "off"),
+                              ("Reference (ON/OFF)", "reference"),
+                              ("Flatten (median)", "flatten")):
+            self._baseline_combo.addItem(_label, _code)
+        self._baseline_combo.setToolTip(
+            "Remove the instrument bandpass shape so a faint line pops off a flat "
+            "zero.\n"
+            "• Reference — point OFF-source, click Store, then go ON-source; the "
+            "display becomes ON−OFF (dB).\n"
+            "• Flatten — subtract a wide running-median estimate of the bandpass "
+            "(no OFF needed); wide enough that narrow lines survive.")
+        self._baseline_combo.currentIndexChanged.connect(self._on_baseline_changed)
+        bf.addRow("Mode:", self._baseline_combo)
+
+        self._store_ref_btn = QtWidgets.QPushButton("Store reference (OFF)")
+        self._store_ref_btn.setToolTip(
+            "Capture the current averaged spectrum as the OFF-source reference. "
+            "Average heavily first so the reference is clean.")
+        self._store_ref_btn.clicked.connect(self.request_store_reference.emit)
+        self._store_ref_btn.setEnabled(False)
+        bf.addRow(self._store_ref_btn)
+
+        self._flatten_spin = QtWidgets.QSpinBox()
+        self._flatten_spin.setRange(3, 2001)
+        self._flatten_spin.setSingleStep(2)
+        self._flatten_spin.setToolTip(
+            "Median window (bins) for Flatten mode. Make it several times WIDER "
+            "than any line you want to keep, but narrower than the bandpass "
+            "curvature.")
+        self._flatten_spin.setEnabled(False)
+        self._flatten_spin.valueChanged.connect(self.request_flatten_bins.emit)
+        self._flatten_spin.valueChanged.connect(
+            lambda n: self.control_changed.emit('flatten_bins', n))
+        bf.addRow("Flatten width:", self._flatten_spin)
+        v.addWidget(base_group)
+
         # Y-axis group
         y_group = QtWidgets.QGroupBox("Y-Axis")
         yf = QtWidgets.QFormLayout(y_group)
@@ -1165,6 +1262,21 @@ class FftPlotWidget(QtWidgets.QWidget):
         with _SignalBlocker(self._cal_spin):
             self._cal_spin.setValue(float(v))
         self.request_cal_offset.emit(float(v))
+
+    def _on_baseline_changed(self, _i):
+        mode = self._baseline_combo.currentData() or 'off'
+        self._store_ref_btn.setEnabled(mode == 'reference')
+        self._flatten_spin.setEnabled(mode == 'flatten')
+        self.request_baseline_mode.emit(mode)
+        self.control_changed.emit('baseline_mode', mode)
+        # Baseline-removed traces hover near 0 dB; auto-fit Y for them and
+        # restore the configured fixed range when switching back to Off.
+        if self._linear:
+            return
+        if mode == 'off':
+            self._plot.setYRange(self._ymin_spin.value(), self._ymax_spin.value())
+        else:
+            self._plot.enableAutoRange(axis='y')
 
     # --- Cursor read-out (frequency / level under the mouse) ----------------
 
@@ -1391,6 +1503,7 @@ class FftPlotWidget(QtWidgets.QWidget):
         with _SignalBlocker(self._fft_size_combo, self._window_combo, self._norm_check,
                             self._dc_check, self._unit_combo, self._cal_spin,
                             self._avg_slider, self._power_avg_check, self._smooth_spin,
+                            self._baseline_combo, self._flatten_spin,
                             self._max_check,
                             self._min_check, self._ymin_spin, self._ymax_spin,
                             self._grid_check, self._labels_check, self._dark_bg_check,
@@ -1413,6 +1526,10 @@ class FftPlotWidget(QtWidgets.QWidget):
             self._avg_value_lbl.setText(self._fmt_avg(_av))
             self._power_avg_check.setChecked(settings.get_bool(section, 'power_avg'))
             self._smooth_spin.setValue(settings.get_int(section, 'smooth_bins'))
+            bidx = self._baseline_combo.findData(settings.get_str(section, 'baseline_mode'))
+            if bidx >= 0:
+                self._baseline_combo.setCurrentIndex(bidx)
+            self._flatten_spin.setValue(settings.get_int(section, 'flatten_bins'))
             self._max_check.setChecked(settings.get_bool(section, 'max_hold'))
             self._min_check.setChecked(settings.get_bool(section, 'min_hold'))
             self._ymin_spin.setValue(settings.get_float(section, 'y_min'))
@@ -1430,6 +1547,9 @@ class FftPlotWidget(QtWidgets.QWidget):
         self._plot.showGrid(x=self._grid_check.isChecked(), y=self._grid_check.isChecked(), alpha=0.3)
         self._y_unit = self._unit_combo.currentData() or 'relative'
         self._cal_spin.setEnabled(self._y_unit == 'dbm')
+        _bmode = self._baseline_combo.currentData() or 'off'
+        self._store_ref_btn.setEnabled(_bmode == 'reference')
+        self._flatten_spin.setEnabled(_bmode == 'flatten')
         self._on_labels_toggled(self._labels_check.isChecked())
         # Apply the saved scale mode (sets label, spinbox-enable, Y range).
         self._on_linear_scale_toggled(self._linear_check.isChecked())
@@ -1448,6 +1568,8 @@ class FftPlotWidget(QtWidgets.QWidget):
         self.request_cal_offset.emit(self._cal_spin.value())
         self.request_power_avg.emit(self._power_avg_check.isChecked())
         self.request_smooth.emit(self._smooth_spin.value())
+        self.request_baseline_mode.emit(self._baseline_combo.currentData() or 'off')
+        self.request_flatten_bins.emit(self._flatten_spin.value())
         self.request_average.emit(self._avg_slider.value() / 1000.0)
         self.request_max_hold.emit(self._max_check.isChecked())
         self.request_min_hold.emit(self._min_check.isChecked())
@@ -3774,6 +3896,9 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         self._fft_plot.request_cal_offset.connect(self._processor.set_cal_offset_db)
         self._fft_plot.request_power_avg.connect(self._processor.set_power_avg)
         self._fft_plot.request_smooth.connect(self._processor.set_smooth_bins)
+        self._fft_plot.request_baseline_mode.connect(self._processor.set_baseline_mode)
+        self._fft_plot.request_store_reference.connect(self._processor.store_reference)
+        self._fft_plot.request_flatten_bins.connect(self._processor.set_flatten_bins)
 
         # Keep the two control panels' visibility in lock-step so the spectrum
         # and waterfall plot regions stay equal-width. setChecked is a no-op
