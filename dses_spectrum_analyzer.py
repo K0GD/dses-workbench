@@ -637,7 +637,7 @@ class FftPlotWidget(QtWidgets.QWidget):
         self._plot.setLabel('bottom', 'Frequency', units='Hz')
         self._plot.showGrid(x=True, y=True, alpha=0.3)
         self._plot.setYRange(self._y_min, self._y_max)
-        _apply_plot_theme(self._plot, "Spectrum", self._dark_bg)
+        _apply_plot_theme(self._plot, self._plot_title(), self._dark_bg)
         self._curve = self._plot.plot(
             pen=_make_pen(self._line_color, self._line_width, self._line_alpha),
             name=self._line_label)
@@ -658,6 +658,22 @@ class FftPlotWidget(QtWidgets.QWidget):
         self._plot.addItem(self._readout, ignoreBounds=True)   # don't drive autorange
         self._plot.scene().sigMouseMoved.connect(self._on_plot_mouse_moved)
         self._plot.viewport().installEventFilter(self)         # hide on mouse-leave
+
+        # Frozen markers: left-click freezes marker A, right-click freezes B
+        # (re-clicking moves that one), middle-click clears both. With both set,
+        # the B label also shows the A->B difference in frequency and level.
+        self._frozen = {'A': None, 'B': None}                  # data (x, y) or None
+        self._freeze_dots = pg.ScatterPlotItem(size=14, pxMode=True, symbol='+')
+        self._freeze_dots.setZValue(1001)
+        self._plot.addItem(self._freeze_dots, ignoreBounds=True)
+        self._label_a = pg.TextItem(color=(255, 215, 0), anchor=(0, 1))   # gold  = A
+        self._label_b = pg.TextItem(color=(0, 220, 255), anchor=(0, 1))   # cyan  = B
+        for _lab in (self._label_a, self._label_b):
+            _lab.setZValue(1001)
+            _lab.setVisible(False)
+            self._plot.addItem(_lab, ignoreBounds=True)
+        self._plot.setMenuEnabled(False)   # free the right button for marker B
+        self._plot.scene().sigMouseClicked.connect(self._on_plot_clicked)
 
         layout.addWidget(self._plot, 1)
 
@@ -710,6 +726,8 @@ class FftPlotWidget(QtWidgets.QWidget):
             lambda _i: self.request_fft_size.emit(self._fft_size_combo.currentData()))
         self._fft_size_combo.currentIndexChanged.connect(
             lambda _i: self.control_changed.emit('fft_size', self._fft_size_combo.currentData()))
+        self._fft_size_combo.currentIndexChanged.connect(
+            lambda _i: self._refresh_title())   # RBW depends on the FFT size
         f.addRow("Size:", self._fft_size_combo)
 
         self._window_combo = QtWidgets.QComboBox()
@@ -892,6 +910,7 @@ class FftPlotWidget(QtWidgets.QWidget):
         self._samp_rate = float(bandwidth)
         self._plot.setXRange(center_freq - bandwidth / 2.0,
                              center_freq + bandwidth / 2.0, padding=0)
+        self._refresh_title()   # RBW depends on the sample rate
 
     def set_y_axis(self, y_min, y_max):
         self._y_min = float(y_min); self._y_max = float(y_max)
@@ -968,13 +987,17 @@ class FftPlotWidget(QtWidgets.QWidget):
         pt = vb.mapSceneToView(scene_pos)
         x, y = pt.x(), pt.y()
         self._readout.setText(self._format_readout(x, y))
-        # Anchor toward the plot interior so the text stays on-screen at edges.
-        (x0, x1), (y0, y1) = vb.viewRange()
-        ax = 1.0 if x > (x0 + x1) / 2.0 else 0.0
-        ay = 0.0 if y > (y0 + y1) / 2.0 else 1.0
-        self._readout.setAnchor((ax, ay))
+        self._readout.setAnchor(self._edge_anchor(x, y))
         self._readout.setPos(x, y)
         self._readout.setVisible(True)
+
+    def _edge_anchor(self, x, y):
+        """Anchor a label toward the plot interior so it stays on-screen when
+        the point is near an edge."""
+        (x0, x1), (y0, y1) = self._plot.getPlotItem().getViewBox().viewRange()
+        ax = 1.0 if x > (x0 + x1) / 2.0 else 0.0
+        ay = 0.0 if y > (y0 + y1) / 2.0 else 1.0
+        return (ax, ay)
 
     def eventFilter(self, obj, event):
         # Hide the read-out when the pointer leaves the plot's viewport.
@@ -982,6 +1005,77 @@ class FftPlotWidget(QtWidgets.QWidget):
                 and obj is self._plot.viewport()):
             self._readout.setVisible(False)
         return super().eventFilter(obj, event)
+
+    # --- Frozen markers (left = A, right = B, middle = clear) ---------------
+
+    def _format_marker(self, tag, xy):
+        return f"{tag}  {self._format_readout(xy[0], xy[1])}"
+
+    def _format_delta(self, a, b):
+        """A->B difference: signed Δfrequency and Δlevel."""
+        df = b[0] - a[0]
+        dy = b[1] - a[1]
+        df_str = ("+" if df >= 0 else "") + self._format_freq(df)
+        dy_str = f"{dy:+.4g}" if self._linear else f"{dy:+.2f} dB"
+        return f"Δ  {df_str}, {dy_str}"
+
+    def _place_label(self, label, xy):
+        label.setAnchor(self._edge_anchor(*xy))
+        label.setPos(*xy)
+
+    def _on_plot_clicked(self, ev):
+        """Left = freeze marker A, right = freeze marker B, middle = clear."""
+        vb = self._plot.getPlotItem().getViewBox()
+        if ev.double() or not vb.sceneBoundingRect().contains(ev.scenePos()):
+            return
+        btn = ev.button()
+        if btn == Qt.MiddleButton:
+            self._frozen['A'] = self._frozen['B'] = None
+        elif btn in (Qt.LeftButton, Qt.RightButton):
+            pt = vb.mapSceneToView(ev.scenePos())
+            self._frozen['A' if btn == Qt.LeftButton else 'B'] = (pt.x(), pt.y())
+        else:
+            return
+        self._update_frozen()
+        ev.accept()
+
+    def _update_frozen(self):
+        """Redraw the frozen A/B markers, labels, and the A->B delta."""
+        a, b = self._frozen['A'], self._frozen['B']
+        spots = []
+        if a is not None:
+            spots.append({'pos': a, 'pen': pg.mkPen((255, 215, 0), width=2)})
+            self._label_a.setText(self._format_marker('A', a))
+            self._place_label(self._label_a, a)
+        self._label_a.setVisible(a is not None)
+        if b is not None:
+            spots.append({'pos': b, 'pen': pg.mkPen((0, 220, 255), width=2)})
+            text = self._format_marker('B', b)
+            if a is not None:
+                text += "\n" + self._format_delta(a, b)
+            self._label_b.setText(text)
+            self._place_label(self._label_b, b)
+        self._label_b.setVisible(b is not None)
+        self._freeze_dots.setData(spots)
+
+    # --- Plot title with the resolution bandwidth -------------------------
+
+    def _plot_title(self):
+        """Title text including the current FFT resolution bandwidth — the bin
+        spacing = sample_rate / FFT size. Safe to call before the control panel
+        (and its FFT-size combo) exists."""
+        n = self._fft_size_combo.currentData() if hasattr(self, '_fft_size_combo') else None
+        try:
+            n = int(n)
+        except (TypeError, ValueError):
+            n = 1024
+        rbw = self._samp_rate / n if n else 0.0
+        return f"Spectrum — RBW {self._format_freq(rbw)}"
+
+    def _refresh_title(self):
+        """Re-apply the title (e.g. after the FFT size or sample rate changes),
+        keeping the current theme's foreground colour."""
+        self._plot.setTitle(self._plot_title(), color='w' if self._dark_bg else 'k')
 
     def _on_linear_scale_toggled(self, on):
         self._linear = bool(on)
@@ -1000,7 +1094,7 @@ class FftPlotWidget(QtWidgets.QWidget):
         # Save the live trace styling into the OLD slot before switching.
         self._snapshot_trace_to_slot(self._dark_bg)
         self._dark_bg = bool(on)
-        _apply_plot_theme(self._plot, "Spectrum", self._dark_bg)
+        _apply_plot_theme(self._plot, self._plot_title(), self._dark_bg)
         # Pull the NEW slot's trace styling back into the live fields and UI.
         self._restore_trace_from_slot(self._dark_bg)
 
@@ -1118,7 +1212,7 @@ class FftPlotWidget(QtWidgets.QWidget):
         self._on_labels_toggled(self._labels_check.isChecked())
         # Apply the saved scale mode (sets label, spinbox-enable, Y range).
         self._on_linear_scale_toggled(self._linear_check.isChecked())
-        _apply_plot_theme(self._plot, "Spectrum", self._dark_bg)
+        _apply_plot_theme(self._plot, self._plot_title(), self._dark_bg)
         # Populate the Trace controls + pen from whichever slot is active.
         self._restore_trace_from_slot(self._dark_bg)
 
