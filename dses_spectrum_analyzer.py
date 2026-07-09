@@ -199,6 +199,9 @@ DEFAULTS = {
         'window':          'blackman-harris',
         'normalize_window': False,
         'dc_suppress':     True,   # hide the zero-IF center-DC spike by default
+        'y_unit':          'relative',  # 'relative' | 'dbfs' | 'dbm'
+        # dBm calibration is stored PER DEVICE in the [calibration] section
+        # (keyed by driver+serial), not here — radios differ in absolute scale.
         'avg_alpha':       1.0,
         'max_hold':        False,
         'min_hold':        False,
@@ -361,6 +364,16 @@ class Settings:
     def get_bool(self, section, key):
         return self._cp.get(section, key).strip().lower() in ('true', 'yes', '1', 'on')
 
+    def get_float_or(self, section, key, default):
+        """Read a float from a possibly-absent section/key (e.g. the dynamic
+        per-device [calibration] section, which isn't in DEFAULTS)."""
+        if self._cp.has_option(section, key):
+            try:
+                return float(self._cp.get(section, key))
+            except ValueError:
+                return default
+        return default
+
     def set(self, section, key, value):
         if not self._cp.has_section(section):
             self._cp.add_section(section)
@@ -444,7 +457,8 @@ class SpectrumProcessor(QObject):
     frame_ready = Signal(object, object, object)  # avg_db, max_db|None, min_db|None
 
     def __init__(self, sink, fft_size=1024, window_name="blackman-harris",
-                 update_hz=10.0, normalize=False, dc_suppress=True, parent=None):
+                 update_hz=10.0, normalize=False, dc_suppress=True,
+                 unit='relative', gain_db=0.0, cal_offset_db=0.0, parent=None):
         super().__init__(parent)
         self._sink = sink
         self._fft_size = int(fft_size)
@@ -452,6 +466,10 @@ class SpectrumProcessor(QObject):
         self._window = WINDOWS[window_name](self._fft_size).astype(np.float64)
         self._normalize = bool(normalize)
         self._dc_suppress = bool(dc_suppress)
+        self._unit = unit if unit in ('relative', 'dbfs', 'dbm') else 'relative'
+        self._gain_db = float(gain_db)
+        self._cal_offset_db = float(cal_offset_db)
+        self._recompute_window_norm()
         self._avg_alpha = 1.0
         self._max_on = False
         self._min_on = False
@@ -465,11 +483,22 @@ class SpectrumProcessor(QObject):
         self._timer.timeout.connect(self._tick)
         self._timer.start()
 
+    def _recompute_window_norm(self):
+        """Cache the window's coherent-gain sum (for dBFS scaling) and its
+        noise-equivalent bandwidth in bins (to reproduce the legacy 'relative'
+        reference as an offset from dBFS)."""
+        w = self._window
+        wsum = float(np.sum(w))
+        self._wsum = wsum if wsum else 1.0
+        wpow = float(np.sum(w * w)) or 1.0
+        self._enbw = (self._fft_size * wpow) / (self._wsum * self._wsum)
+
     @Slot(int)
     def set_fft_size(self, n):
         self._fft_size = int(n)
         self._window = WINDOWS[self._window_name](self._fft_size).astype(np.float64)
         self._sink.set_capacity(max(8192, self._fft_size * 2))
+        self._recompute_window_norm()
         self._avg_db = self._max_db = self._min_db = None
 
     @Slot(str)
@@ -478,6 +507,7 @@ class SpectrumProcessor(QObject):
             return
         self._window_name = name
         self._window = WINDOWS[name](self._fft_size).astype(np.float64)
+        self._recompute_window_norm()
 
     @Slot(float)
     def set_average_alpha(self, alpha):
@@ -512,6 +542,31 @@ class SpectrumProcessor(QObject):
     def set_dc_suppress(self, on):
         self._dc_suppress = bool(on)
 
+    @Slot(str)
+    def set_unit(self, unit):
+        if unit in ('relative', 'dbfs', 'dbm'):
+            self._unit = unit
+
+    @Slot(float)
+    def set_gain_db(self, g):
+        """Current RX front-end gain (dB), used to keep dBm gain-independent."""
+        self._gain_db = float(g)
+
+    @Slot(float)
+    def set_cal_offset_db(self, c):
+        self._cal_offset_db = float(c)
+
+    def _display_offset(self):
+        """Constant dB shift from the dBFS base to the selected display unit."""
+        if self._unit == 'dbm':
+            # dBm ≈ dBFS − front-end gain + a calibration constant (approx).
+            return self._cal_offset_db - self._gain_db
+        if self._unit == 'dbfs':
+            return 0.0
+        # 'relative' (legacy): full-scale reference when the window is
+        # normalized, otherwise the noise-power reference used historically.
+        return 0.0 if self._normalize else -10.0 * np.log10(self._enbw)
+
     def set_update_hz(self, hz):
         self._timer.setInterval(max(20, int(1000.0 / float(hz))))
 
@@ -528,19 +583,17 @@ class SpectrumProcessor(QObject):
             samples = samples - samples.mean()
         windowed = samples * self._window
         spec = np.fft.fftshift(np.fft.fft(windowed))
-        if self._normalize:
-            wsum = np.sum(self._window) or 1.0
-            power = (np.abs(spec) ** 2) / (wsum * wsum)
-        else:
-            wpow = np.sum(self._window ** 2) or 1.0
-            power = (np.abs(spec) ** 2) / (n * wpow)
-        db = 10.0 * np.log10(power + 1e-20)
+        # Base scale is dBFS: |X|² / (Σw)²  →  a full-scale tone reads 0 dBFS.
+        # The selected display unit (relative / dBFS / dBm) is a constant offset
+        # applied at emit time, so averaging and hold stay unit-independent.
+        power = (np.abs(spec) ** 2) / (self._wsum * self._wsum)
+        dbfs = 10.0 * np.log10(power + 1e-20)
 
         if self._avg_db is None or len(self._avg_db) != n:
-            self._avg_db = db.copy()
+            self._avg_db = dbfs.copy()
         else:
             a = self._avg_alpha
-            self._avg_db = a * db + (1.0 - a) * self._avg_db
+            self._avg_db = a * dbfs + (1.0 - a) * self._avg_db
 
         if self._max_on:
             if self._max_db is None or len(self._max_db) != n:
@@ -553,10 +606,11 @@ class SpectrumProcessor(QObject):
             else:
                 np.minimum(self._min_db, self._avg_db, out=self._min_db)
 
+        off = self._display_offset()
         self.frame_ready.emit(
-            self._avg_db,
-            self._max_db if self._max_on else None,
-            self._min_db if self._min_on else None,
+            self._avg_db + off,
+            (self._max_db + off) if (self._max_on and self._max_db is not None) else None,
+            (self._min_db + off) if (self._min_on and self._min_db is not None) else None,
         )
 
 
@@ -597,6 +651,8 @@ class FftPlotWidget(QtWidgets.QWidget):
     request_reset_min = Signal()
     request_window_normalized = Signal(bool)
     request_dc_suppress = Signal(bool)
+    request_unit = Signal(str)           # 'relative' | 'dbfs' | 'dbm'
+    request_cal_offset = Signal(float)   # dB, for dBm mode
     # Fires on every user-driven control change; args: (settings_key, value).
     # The main window listens once and persists to the INI.
     control_changed = Signal(str, object)
@@ -608,6 +664,7 @@ class FftPlotWidget(QtWidgets.QWidget):
         self._y_min = -140.0
         self._y_max = 10.0
         self._linear = False      # False = dB (log) scale, True = linear amplitude
+        self._y_unit = 'relative' # 'relative' | 'dbfs' | 'dbm' (dB-scale unit)
         self._labels_on = True    # axis-label visibility (mirrors the checkbox)
         self._dark_bg = True
         # Per-background trace styling. The Trace controls in the panel show
@@ -795,6 +852,36 @@ class FftPlotWidget(QtWidgets.QWidget):
         y_group = QtWidgets.QGroupBox("Y-Axis")
         yf = QtWidgets.QFormLayout(y_group)
         yf.setContentsMargins(4, 4, 4, 4)
+
+        self._unit_combo = QtWidgets.QComboBox()
+        for _label, _code in (("Relative dB", "relative"), ("dBFS", "dbfs"),
+                              ("dBm (approx)", "dbm")):
+            self._unit_combo.addItem(_label, _code)
+        self._unit_combo.setToolTip(
+            "Vertical scale:\n"
+            "• Relative dB — historical uncalibrated reference.\n"
+            "• dBFS — dB below the ADC full scale (device-independent).\n"
+            "• dBm (approx) — dBFS − RX gain + the calibration offset below. "
+            "Approximate on uncalibrated SDRs; set the offset against a known "
+            "source.")
+        self._unit_combo.currentIndexChanged.connect(self._on_unit_changed)
+        yf.addRow("Units:", self._unit_combo)
+
+        self._cal_spin = QtWidgets.QDoubleSpinBox()
+        self._cal_spin.setRange(-300.0, 300.0)
+        self._cal_spin.setDecimals(1)
+        self._cal_spin.setSingleStep(1.0)
+        self._cal_spin.setSuffix(" dB")
+        self._cal_spin.setToolTip(
+            "Calibration offset added when Units = dBm. Feed a known-level "
+            "signal and adjust until the reading matches its true dBm; changing "
+            "the RX gain afterwards is compensated automatically.")
+        self._cal_spin.setEnabled(False)   # only meaningful in dBm mode
+        self._cal_spin.valueChanged.connect(self.request_cal_offset.emit)
+        self._cal_spin.valueChanged.connect(
+            lambda v: self.control_changed.emit('cal_offset_db', v))
+        yf.addRow("Cal offset:", self._cal_spin)
+
         self._ymin_spin = QtWidgets.QDoubleSpinBox()
         self._ymin_spin.setRange(-300, 100); self._ymin_spin.setValue(self._y_min)
         self._ymin_spin.valueChanged.connect(self._on_yrange_changed)
@@ -950,13 +1037,35 @@ class FftPlotWidget(QtWidgets.QWidget):
         self._plot.setLabel('bottom', 'Frequency' if on else '', units='Hz' if on else '')
 
     def _update_y_label(self):
-        """Set the left-axis label to match the scale mode + label visibility."""
+        """Set the left-axis label to match the scale mode + unit + visibility."""
         if not self._labels_on:
             self._plot.setLabel('left', '', units='')
         elif self._linear:
             self._plot.setLabel('left', 'Magnitude (linear)', units='')
+        elif self._y_unit == 'dbfs':
+            self._plot.setLabel('left', 'Power', units='dBFS')
+        elif self._y_unit == 'dbm':
+            self._plot.setLabel('left', 'Power (approx)', units='dBm')
         else:
             self._plot.setLabel('left', 'Relative Gain', units='dB')
+
+    def _y_unit_suffix(self):
+        """dB-scale unit label used by the cursor read-out and markers."""
+        return {'dbfs': 'dBFS', 'dbm': 'dBm'}.get(self._y_unit, 'dB')
+
+    def _on_unit_changed(self, _i):
+        self._y_unit = self._unit_combo.currentData() or 'relative'
+        self._cal_spin.setEnabled(self._y_unit == 'dbm')
+        self.request_unit.emit(self._y_unit)
+        self.control_changed.emit('y_unit', self._y_unit)
+        self._update_y_label()
+
+    def set_cal_offset_value(self, v):
+        """Set the dBm calibration offset programmatically (per-device restore)
+        without re-saving it as a user edit."""
+        with _SignalBlocker(self._cal_spin):
+            self._cal_spin.setValue(float(v))
+        self.request_cal_offset.emit(float(v))
 
     # --- Cursor read-out (frequency / level under the mouse) ----------------
 
@@ -976,7 +1085,8 @@ class FftPlotWidget(QtWidgets.QWidget):
     def _format_readout(self, x_hz, y):
         freq = self._format_freq(x_hz)
         # In linear mode the y axis is a unitless magnitude, not dB.
-        return f"{freq}, {y:.4g}" if self._linear else f"{freq}, {y:.2f} dB"
+        return (f"{freq}, {y:.4g}" if self._linear
+                else f"{freq}, {y:.2f} {self._y_unit_suffix()}")
 
     def _on_plot_mouse_moved(self, scene_pos):
         """Update the red cursor read-out as the mouse moves over the plot."""
@@ -1016,7 +1126,7 @@ class FftPlotWidget(QtWidgets.QWidget):
         df = b[0] - a[0]
         dy = b[1] - a[1]
         df_str = ("+" if df >= 0 else "") + self._format_freq(df)
-        dy_str = f"{dy:+.4g}" if self._linear else f"{dy:+.2f} dB"
+        dy_str = f"{dy:+.4g}" if self._linear else f"{dy:+.2f} {self._y_unit_suffix()}"
         return f"Δ  {df_str}, {dy_str}"
 
     def _place_label(self, label, xy):
@@ -1180,7 +1290,8 @@ class FftPlotWidget(QtWidgets.QWidget):
             slot['label'] = settings.get_str(section, f'trace_label_{which}')
 
         with _SignalBlocker(self._fft_size_combo, self._window_combo, self._norm_check,
-                            self._dc_check, self._avg_slider, self._max_check,
+                            self._dc_check, self._unit_combo, self._cal_spin,
+                            self._avg_slider, self._max_check,
                             self._min_check, self._ymin_spin, self._ymax_spin,
                             self._grid_check, self._labels_check, self._dark_bg_check,
                             self._width_spin, self._alpha_slider, self._label_edit,
@@ -1191,6 +1302,11 @@ class FftPlotWidget(QtWidgets.QWidget):
             self._window_combo.setCurrentText(settings.get_str(section, 'window'))
             self._norm_check.setChecked(settings.get_bool(section, 'normalize_window'))
             self._dc_check.setChecked(settings.get_bool(section, 'dc_suppress'))
+            uidx = self._unit_combo.findData(settings.get_str(section, 'y_unit'))
+            if uidx >= 0:
+                self._unit_combo.setCurrentIndex(uidx)
+            # The dBm calibration offset is per-device: the main window restores
+            # it from the [calibration] section via set_cal_offset_value().
             a = settings.get_float(section, 'avg_alpha')
             self._avg_slider.setValue(int(round(max(0.001, min(1.0, a)) * 1000)))
             self._avg_value_lbl.setText(f"{a:.3f}")
@@ -1209,6 +1325,8 @@ class FftPlotWidget(QtWidgets.QWidget):
         self._labels_on = self._labels_check.isChecked()
         self._plot.setYRange(self._ymin_spin.value(), self._ymax_spin.value())
         self._plot.showGrid(x=self._grid_check.isChecked(), y=self._grid_check.isChecked(), alpha=0.3)
+        self._y_unit = self._unit_combo.currentData() or 'relative'
+        self._cal_spin.setEnabled(self._y_unit == 'dbm')
         self._on_labels_toggled(self._labels_check.isChecked())
         # Apply the saved scale mode (sets label, spinbox-enable, Y range).
         self._on_linear_scale_toggled(self._linear_check.isChecked())
@@ -1223,6 +1341,8 @@ class FftPlotWidget(QtWidgets.QWidget):
         self.request_window.emit(self._window_combo.currentText())
         self.request_window_normalized.emit(self._norm_check.isChecked())
         self.request_dc_suppress.emit(self._dc_check.isChecked())
+        self.request_unit.emit(self._y_unit)
+        self.request_cal_offset.emit(self._cal_spin.value())
         self.request_average.emit(self._avg_slider.value() / 1000.0)
         self.request_max_hold.emit(self._max_check.isChecked())
         self.request_min_hold.emit(self._min_check.isChecked())
@@ -3533,7 +3653,7 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
 
         self._processor = SpectrumProcessor(
             self._sample_sink, fft_size=1024, window_name="blackman-harris",
-            update_hz=10.0, parent=self)
+            update_hz=10.0, gain_db=float(self.gain), parent=self)
         self._processor.frame_ready.connect(self._fft_plot.on_frame)
         self._processor.frame_ready.connect(self._waterfall_plot.on_frame)
         self._fft_plot.request_fft_size.connect(self._processor.set_fft_size)
@@ -3545,6 +3665,8 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         self._fft_plot.request_reset_min.connect(self._processor.reset_min_hold)
         self._fft_plot.request_window_normalized.connect(self._processor.set_window_normalized)
         self._fft_plot.request_dc_suppress.connect(self._processor.set_dc_suppress)
+        self._fft_plot.request_unit.connect(self._processor.set_unit)
+        self._fft_plot.request_cal_offset.connect(self._processor.set_cal_offset_db)
 
         # Keep the two control panels' visibility in lock-step so the spectrum
         # and waterfall plot regions stay equal-width. setChecked is a no-op
@@ -3557,8 +3679,7 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
 
         # Per-plot setting persistence. Each widget emits control_changed
         # (settings_key, value); we route to the appropriate INI section.
-        self._fft_plot.control_changed.connect(
-            lambda k, v: self._save_setting('spectrum', k, v))
+        self._fft_plot.control_changed.connect(self._on_spectrum_control_changed)
         self._waterfall_plot.control_changed.connect(
             lambda k, v: self._save_setting('waterfall', k, v))
 
@@ -3886,6 +4007,9 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         # Push the values into the processor explicitly (signals were blocked
         # while we set the UI to avoid the save round-trip).
         self._fft_plot.emit_settings_to_processor()
+        # Restore THIS radio's dBm calibration offset (per-device, keyed by
+        # driver+serial) on top of the generic spectrum settings.
+        self._fft_plot.set_cal_offset_value(self._load_cal_offset())
 
     def _save_setting(self, section, key, value):
         if self._applying_settings:
@@ -3895,6 +4019,31 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
             self._app_settings.save()
         except OSError as exc:
             print(f"Settings save failed: {exc}", file=sys.stderr)
+
+    def _cal_device_key(self):
+        """Stable [calibration] key for the current radio (driver+serial), or
+        None in playback mode where there is no real device to calibrate."""
+        if self._playback_mode or not self._device_driver:
+            return None
+        return f"{self._device_driver}__{self._device_serial or ''}"
+
+    def _load_cal_offset(self):
+        """This radio's saved dBm calibration offset (0.0 if never set)."""
+        key = self._cal_device_key()
+        if key is None:
+            return 0.0
+        return self._app_settings.get_float_or('calibration', key, 0.0)
+
+    def _on_spectrum_control_changed(self, key, value):
+        """Route spectrum control changes to the INI. The dBm calibration
+        offset is per-device (keyed by driver+serial); everything else lives in
+        the shared [spectrum] section."""
+        if key == 'cal_offset_db':
+            dev = self._cal_device_key()
+            if dev is not None:
+                self._save_setting('calibration', dev, float(value))
+            return
+        self._save_setting('spectrum', key, value)
 
     def showEvent(self, event):
         QtWidgets.QWidget.showEvent(self, event)
@@ -4365,6 +4514,8 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
             return  # no gain knob in playback mode
         self.gain = gain
         self._source.set_gain(self.gain)
+        # Keep the dBm scale gain-independent (display-only; no effect on 'relative').
+        self._processor.set_gain_db(float(gain))
         self._save_setting('rx', 'gain_db', float(gain))
 
     def set_antenna(self, name):
