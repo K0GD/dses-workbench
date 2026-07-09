@@ -139,7 +139,9 @@ WINDOWS = {
 }
 # Larger sizes give finer RBW (= sample_rate / N) and a lower per-bin noise
 # floor (~3 dB per doubling) — the real lever for weak-signal / deep-space work.
-# The plot enables pyqtgraph downsampling so drawing the big curves stays cheap.
+# The max here MUST be <= CHUNK_SIZE (the flowgraph vector the sample sink holds)
+# so latest(n) always has n *contiguous* samples for a clean FFT. The plot
+# downsamples the long curves so drawing stays cheap.
 FFT_SIZES = [256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536]
 
 
@@ -406,7 +408,12 @@ class Settings:
         self.save()
 
 
-CHUNK_SIZE = 8192  # Must be >= max FFT size in FFT_SIZES below.
+# The flowgraph groups samples into CHUNK_SIZE-sample vectors (stream_to_vector)
+# and the sample sink keeps the most recent one. It MUST be >= the largest FFT
+# in FFT_SIZES so a full-length FFT gets that many *contiguous* samples. At the
+# sample rates this tool uses (~2-25 MHz) a 65536-sample vector is only ~3-33 ms
+# of data, so the display still refreshes at ~10 Hz.
+CHUNK_SIZE = 65536  # must be >= max(FFT_SIZES)
 
 
 class SampleBufferSink(gr.sync_block):
