@@ -634,6 +634,18 @@ class FftPlotWidget(QtWidgets.QWidget):
             pen=_make_pen(QtGui.QColor(220, 50, 50), 1, 1.0), name="Min hold")
         self._max_curve.hide()
         self._min_curve.hide()
+
+        # Cursor read-out: red text showing the frequency + level wherever the
+        # mouse is over the plot, like the GNU Radio qtgui freq sink. The values
+        # are just the cursor's x/y in data coordinates (not the nearest sample),
+        # so the operator traces a signal by moving along it. Requested by Dan L.
+        self._readout = pg.TextItem(color=(255, 60, 60), anchor=(0, 1))
+        self._readout.setZValue(1000)                          # above the traces
+        self._readout.setVisible(False)
+        self._plot.addItem(self._readout, ignoreBounds=True)   # don't drive autorange
+        self._plot.scene().sigMouseMoved.connect(self._on_plot_mouse_moved)
+        self._plot.viewport().installEventFilter(self)         # hide on mouse-leave
+
         layout.addWidget(self._plot, 1)
 
         self._toggle_btn = QtWidgets.QToolButton()
@@ -903,6 +915,50 @@ class FftPlotWidget(QtWidgets.QWidget):
             self._plot.setLabel('left', 'Magnitude (linear)', units='')
         else:
             self._plot.setLabel('left', 'Relative Gain', units='dB')
+
+    # --- Cursor read-out (frequency / level under the mouse) ----------------
+
+    @staticmethod
+    def _format_freq(hz):
+        """Frequency string with the unit chosen by magnitude (the x axis is in
+        absolute Hz, so this normally reads out in MHz)."""
+        a = abs(hz)
+        if a >= 1e9:
+            return f"{hz / 1e9:.6f} GHz"
+        if a >= 1e6:
+            return f"{hz / 1e6:.5f} MHz"
+        if a >= 1e3:
+            return f"{hz / 1e3:.3f} kHz"
+        return f"{hz:.1f} Hz"
+
+    def _format_readout(self, x_hz, y):
+        freq = self._format_freq(x_hz)
+        # In linear mode the y axis is a unitless magnitude, not dB.
+        return f"{freq}, {y:.4g}" if self._linear else f"{freq}, {y:.2f} dB"
+
+    def _on_plot_mouse_moved(self, scene_pos):
+        """Update the red cursor read-out as the mouse moves over the plot."""
+        vb = self._plot.getPlotItem().getViewBox()
+        if not vb.sceneBoundingRect().contains(scene_pos):
+            self._readout.setVisible(False)          # over the axes/margins
+            return
+        pt = vb.mapSceneToView(scene_pos)
+        x, y = pt.x(), pt.y()
+        self._readout.setText(self._format_readout(x, y))
+        # Anchor toward the plot interior so the text stays on-screen at edges.
+        (x0, x1), (y0, y1) = vb.viewRange()
+        ax = 1.0 if x > (x0 + x1) / 2.0 else 0.0
+        ay = 0.0 if y > (y0 + y1) / 2.0 else 1.0
+        self._readout.setAnchor((ax, ay))
+        self._readout.setPos(x, y)
+        self._readout.setVisible(True)
+
+    def eventFilter(self, obj, event):
+        # Hide the read-out when the pointer leaves the plot's viewport.
+        if (event.type() == QtCore.QEvent.Type.Leave
+                and obj is self._plot.viewport()):
+            self._readout.setVisible(False)
+        return super().eventFilter(obj, event)
 
     def _on_linear_scale_toggled(self, on):
         self._linear = bool(on)
