@@ -136,7 +136,10 @@ WINDOWS = {
     "blackman-harris": scipy_windows.blackmanharris,
     "flat-top":        scipy_windows.flattop,
 }
-FFT_SIZES = [256, 512, 1024, 2048, 4096, 8192]
+# Larger sizes give finer RBW (= sample_rate / N) and a lower per-bin noise
+# floor (~3 dB per doubling) — the real lever for weak-signal / deep-space work.
+# The plot enables pyqtgraph downsampling so drawing the big curves stays cheap.
+FFT_SIZES = [256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536]
 
 
 def _pretty_rate(hz: float) -> str:
@@ -202,7 +205,9 @@ DEFAULTS = {
         'y_unit':          'relative',  # 'relative' | 'dbfs' | 'dbm'
         # dBm calibration is stored PER DEVICE in the [calibration] section
         # (keyed by driver+serial), not here — radios differ in absolute scale.
-        'avg_alpha':       1.0,
+        'avg_alpha':       0.1,     # ~19-frame integration by default (was 1.0 = none)
+        'power_avg':       False,   # dB (video) averaging; True = linear-power (radiometric)
+        'smooth_bins':     0,       # spectral smoothing off (harms narrow lines)
         'max_hold':        False,
         'min_hold':        False,
         'y_min':           -140.0,
@@ -458,7 +463,8 @@ class SpectrumProcessor(QObject):
 
     def __init__(self, sink, fft_size=1024, window_name="blackman-harris",
                  update_hz=10.0, normalize=False, dc_suppress=True,
-                 unit='relative', gain_db=0.0, cal_offset_db=0.0, parent=None):
+                 unit='relative', gain_db=0.0, cal_offset_db=0.0,
+                 power_avg=False, smooth_bins=0, parent=None):
         super().__init__(parent)
         self._sink = sink
         self._fft_size = int(fft_size)
@@ -469,13 +475,20 @@ class SpectrumProcessor(QObject):
         self._unit = unit if unit in ('relative', 'dbfs', 'dbm') else 'relative'
         self._gain_db = float(gain_db)
         self._cal_offset_db = float(cal_offset_db)
+        # Averaging domain: linear power (radiometrically correct, unbiased) or
+        # dB/log ("video" averaging, reads ~2.5 dB low for noise). Spectral
+        # smoothing: display-only boxcar over N bins (0 = off).
+        self._power_avg = bool(power_avg)
+        self._smooth_bins = max(0, int(smooth_bins))
         self._recompute_window_norm()
         self._avg_alpha = 1.0
         self._max_on = False
         self._min_on = False
-        self._avg_db = None
-        self._max_db = None
-        self._min_db = None
+        # Averaging state holds POWER when _power_avg else dB. Converted to dB
+        # (and smoothed) only at emit time.
+        self._avg = None
+        self._max = None
+        self._min = None
         self._sink.set_capacity(max(8192, self._fft_size * 2))
 
         self._timer = QTimer(self)
@@ -499,7 +512,7 @@ class SpectrumProcessor(QObject):
         self._window = WINDOWS[self._window_name](self._fft_size).astype(np.float64)
         self._sink.set_capacity(max(8192, self._fft_size * 2))
         self._recompute_window_norm()
-        self._avg_db = self._max_db = self._min_db = None
+        self._avg = self._max = self._min = None
 
     @Slot(str)
     def set_window(self, name):
@@ -518,21 +531,40 @@ class SpectrumProcessor(QObject):
     def set_max_hold(self, on):
         self._max_on = bool(on)
         if not on:
-            self._max_db = None
+            self._max = None
 
     @Slot(bool)
     def set_min_hold(self, on):
         self._min_on = bool(on)
         if not on:
-            self._min_db = None
+            self._min = None
 
     @Slot()
     def reset_max_hold(self):
-        self._max_db = None
+        self._max = None
 
     @Slot()
     def reset_min_hold(self):
-        self._min_db = None
+        self._min = None
+
+    @Slot(bool)
+    def set_power_avg(self, on):
+        """Average in linear power (True, unbiased/radiometric) or dB (False,
+        legacy). Switching resets the average since the state domain changes."""
+        on = bool(on)
+        if on != self._power_avg:
+            self._power_avg = on
+            self._avg = self._max = self._min = None
+
+    @Slot(int)
+    def set_smooth_bins(self, n):
+        self._smooth_bins = max(0, int(n))
+
+    @Slot()
+    def reset_averaging(self):
+        """Drop the running average + holds — call on any retune / sample-rate
+        change so a long integration doesn't smear across the new frequency axis."""
+        self._avg = self._max = self._min = None
 
     @Slot(bool)
     def set_window_normalized(self, on):
@@ -584,34 +616,55 @@ class SpectrumProcessor(QObject):
         windowed = samples * self._window
         spec = np.fft.fftshift(np.fft.fft(windowed))
         # Base scale is dBFS: |X|² / (Σw)²  →  a full-scale tone reads 0 dBFS.
-        # The selected display unit (relative / dBFS / dBm) is a constant offset
-        # applied at emit time, so averaging and hold stay unit-independent.
         power = (np.abs(spec) ** 2) / (self._wsum * self._wsum)
-        dbfs = 10.0 * np.log10(power + 1e-20)
+        # Average in the chosen domain. Linear power is the unbiased estimator of
+        # mean power (correct for radiometry / weak-signal integration); dB/log
+        # averaging is ~28% jaggier and reads ~2.5 dB low for noise.
+        val = power if self._power_avg else 10.0 * np.log10(power + 1e-20)
 
-        if self._avg_db is None or len(self._avg_db) != n:
-            self._avg_db = dbfs.copy()
+        a = self._avg_alpha
+        if self._avg is None or len(self._avg) != n:
+            self._avg = val.copy()
         else:
-            a = self._avg_alpha
-            self._avg_db = a * dbfs + (1.0 - a) * self._avg_db
-
+            self._avg = a * val + (1.0 - a) * self._avg
         if self._max_on:
-            if self._max_db is None or len(self._max_db) != n:
-                self._max_db = self._avg_db.copy()
+            if self._max is None or len(self._max) != n:
+                self._max = self._avg.copy()
             else:
-                np.maximum(self._max_db, self._avg_db, out=self._max_db)
+                np.maximum(self._max, self._avg, out=self._max)
         if self._min_on:
-            if self._min_db is None or len(self._min_db) != n:
-                self._min_db = self._avg_db.copy()
+            if self._min is None or len(self._min) != n:
+                self._min = self._avg.copy()
             else:
-                np.minimum(self._min_db, self._avg_db, out=self._min_db)
+                np.minimum(self._min, self._avg, out=self._min)
 
         off = self._display_offset()
         self.frame_ready.emit(
-            self._avg_db + off,
-            (self._max_db + off) if (self._max_on and self._max_db is not None) else None,
-            (self._min_db + off) if (self._min_on and self._min_db is not None) else None,
+            self._to_display(self._avg, off),
+            self._to_display(self._max, off) if self._max_on else None,
+            self._to_display(self._min, off) if self._min_on else None,
         )
+
+    def _to_display(self, arr, off):
+        """Convert an averaging-state array to the emitted dB trace: linear→dB
+        when power-averaging, then optional spectral smoothing, then the unit
+        offset (a constant, so it commutes with smoothing)."""
+        if arr is None:
+            return None
+        db = 10.0 * np.log10(arr + 1e-20) if self._power_avg else arr
+        return self._smooth(db) + off
+
+    def _smooth(self, db):
+        """Optional frequency-domain (across-bin) boxcar smoothing of the display
+        trace. Reflect-padded so band edges aren't fabricated. Trades resolution
+        for a thinner floor — off (0/1) by default; harms narrow lines."""
+        k = self._smooth_bins
+        if k <= 1:
+            return db
+        w = k if (k % 2 == 1) else k + 1        # odd window
+        pad = w // 2
+        kernel = np.ones(w, dtype=np.float64) / w
+        return np.convolve(np.pad(db, pad, mode='reflect'), kernel, mode='valid')
 
 
 def _make_pen(color, width, alpha):
@@ -653,6 +706,8 @@ class FftPlotWidget(QtWidgets.QWidget):
     request_dc_suppress = Signal(bool)
     request_unit = Signal(str)           # 'relative' | 'dbfs' | 'dbm'
     request_cal_offset = Signal(float)   # dB, for dBm mode
+    request_power_avg = Signal(bool)     # average in linear power vs dB
+    request_smooth = Signal(int)         # spectral smoothing width in bins
     # Fires on every user-driven control change; args: (settings_key, value).
     # The main window listens once and persists to the INI.
     control_changed = Signal(str, object)
@@ -704,6 +759,12 @@ class FftPlotWidget(QtWidgets.QWidget):
             pen=_make_pen(QtGui.QColor(220, 50, 50), 1, 1.0), name="Min hold")
         self._max_curve.hide()
         self._min_curve.hide()
+        # Keep large FFTs (up to 65536-pt) cheap to draw: downsample to the
+        # visible pixel columns using peak mode (preserves narrow peaks) and clip
+        # to the view. Without this, three long curves at 10 Hz bog the GUI.
+        for _c in (self._curve, self._max_curve, self._min_curve):
+            _c.setDownsampling(auto=True, method='peak')
+            _c.setClipToView(True)
 
         # Cursor read-out: red text showing the frequency + level wherever the
         # mouse is over the plot, like the GNU Radio qtgui freq sink. The values
@@ -762,6 +823,12 @@ class FftPlotWidget(QtWidgets.QWidget):
         self._panel_scroll.setMinimumHeight(80)  # let the window shrink past it
         layout.addWidget(self._panel_scroll)
 
+    @staticmethod
+    def _fmt_avg(slider_val):
+        """'α (≈N)' where N = effective frames averaged by the EMA = (2-α)/α."""
+        a = max(1, int(slider_val)) / 1000.0
+        return f"{a:.3f} (≈{(2.0 - a) / a:.0f})"
+
     def _build_panel(self):
         panel = QtWidgets.QGroupBox("Spectrum Controls")
         # Fixed width (matched on the waterfall panel) so the spectrum and
@@ -815,15 +882,47 @@ class FftPlotWidget(QtWidgets.QWidget):
         self._avg_slider = QtWidgets.QSlider(Qt.Horizontal)
         self._avg_slider.setRange(1, 1000)
         self._avg_slider.setValue(1000)
+        self._avg_slider.setToolTip(
+            "Exponential averaging. Lower α = heavier integration = a smoother, "
+            "less jaggy noise floor (at the cost of slower response). The ≈N is "
+            "the effective number of frames averaged. This is the main control "
+            "for a clean floor in weak-signal work.")
         self._avg_slider.valueChanged.connect(lambda v: self.request_average.emit(v / 1000.0))
         self._avg_slider.valueChanged.connect(
             lambda v: self.control_changed.emit('avg_alpha', v / 1000.0))
-        self._avg_value_lbl = QtWidgets.QLabel("1.000")
-        self._avg_slider.valueChanged.connect(lambda v: self._avg_value_lbl.setText(f"{v/1000.0:.3f}"))
+        self._avg_value_lbl = QtWidgets.QLabel(self._fmt_avg(1000))
+        self._avg_slider.valueChanged.connect(
+            lambda v: self._avg_value_lbl.setText(self._fmt_avg(v)))
         avg_row = QtWidgets.QHBoxLayout()
         avg_row.addWidget(self._avg_slider, 1)
         avg_row.addWidget(self._avg_value_lbl)
         f.addRow("Avg α:", avg_row)
+
+        self._power_avg_check = QtWidgets.QCheckBox("Power (RMS) averaging")
+        self._power_avg_check.setToolTip(
+            "Average in linear power (radiometrically correct, unbiased) rather "
+            "than in dB. Recommended for quantitative / deep-space work: it is "
+            "~28% smoother and removes the ~2.5 dB low-bias of dB averaging — so "
+            "the noise floor reads ~2.5 dB HIGHER (its true level). A CW-tone "
+            "calibration is unaffected; re-check a noise-based dBm cal.")
+        self._power_avg_check.toggled.connect(self.request_power_avg.emit)
+        self._power_avg_check.toggled.connect(
+            lambda on: self.control_changed.emit('power_avg', on))
+        f.addRow(self._power_avg_check)
+
+        self._smooth_spin = QtWidgets.QSpinBox()
+        self._smooth_spin.setRange(0, 501)
+        self._smooth_spin.setSingleStep(2)
+        self._smooth_spin.setSpecialValueText("off")
+        self._smooth_spin.setToolTip(
+            "Frequency-domain smoothing width in bins (0 = off). Thins the visual "
+            "noise like SDR Console's Smoothing, but WIDENS and attenuates narrow "
+            "spectral lines — keep it OFF when hunting a narrow line (e.g. 1420 "
+            "MHz HI); use temporal averaging instead. Best for continuum.")
+        self._smooth_spin.valueChanged.connect(self.request_smooth.emit)
+        self._smooth_spin.valueChanged.connect(
+            lambda n: self.control_changed.emit('smooth_bins', n))
+        f.addRow("Smooth (bins):", self._smooth_spin)
         v.addWidget(fft_group)
 
         # Hold group
@@ -1291,7 +1390,8 @@ class FftPlotWidget(QtWidgets.QWidget):
 
         with _SignalBlocker(self._fft_size_combo, self._window_combo, self._norm_check,
                             self._dc_check, self._unit_combo, self._cal_spin,
-                            self._avg_slider, self._max_check,
+                            self._avg_slider, self._power_avg_check, self._smooth_spin,
+                            self._max_check,
                             self._min_check, self._ymin_spin, self._ymax_spin,
                             self._grid_check, self._labels_check, self._dark_bg_check,
                             self._width_spin, self._alpha_slider, self._label_edit,
@@ -1308,8 +1408,11 @@ class FftPlotWidget(QtWidgets.QWidget):
             # The dBm calibration offset is per-device: the main window restores
             # it from the [calibration] section via set_cal_offset_value().
             a = settings.get_float(section, 'avg_alpha')
-            self._avg_slider.setValue(int(round(max(0.001, min(1.0, a)) * 1000)))
-            self._avg_value_lbl.setText(f"{a:.3f}")
+            _av = int(round(max(0.001, min(1.0, a)) * 1000))
+            self._avg_slider.setValue(_av)
+            self._avg_value_lbl.setText(self._fmt_avg(_av))
+            self._power_avg_check.setChecked(settings.get_bool(section, 'power_avg'))
+            self._smooth_spin.setValue(settings.get_int(section, 'smooth_bins'))
             self._max_check.setChecked(settings.get_bool(section, 'max_hold'))
             self._min_check.setChecked(settings.get_bool(section, 'min_hold'))
             self._ymin_spin.setValue(settings.get_float(section, 'y_min'))
@@ -1343,6 +1446,8 @@ class FftPlotWidget(QtWidgets.QWidget):
         self.request_dc_suppress.emit(self._dc_check.isChecked())
         self.request_unit.emit(self._y_unit)
         self.request_cal_offset.emit(self._cal_spin.value())
+        self.request_power_avg.emit(self._power_avg_check.isChecked())
+        self.request_smooth.emit(self._smooth_spin.value())
         self.request_average.emit(self._avg_slider.value() / 1000.0)
         self.request_max_hold.emit(self._max_check.isChecked())
         self.request_min_hold.emit(self._min_check.isChecked())
@@ -3667,6 +3772,8 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         self._fft_plot.request_dc_suppress.connect(self._processor.set_dc_suppress)
         self._fft_plot.request_unit.connect(self._processor.set_unit)
         self._fft_plot.request_cal_offset.connect(self._processor.set_cal_offset_db)
+        self._fft_plot.request_power_avg.connect(self._processor.set_power_avg)
+        self._fft_plot.request_smooth.connect(self._processor.set_smooth_bins)
 
         # Keep the two control panels' visibility in lock-step so the spectrum
         # and waterfall plot regions stay equal-width. setChecked is a no-op
@@ -4278,6 +4385,7 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         self._sync_samp_rate_widgets()
         self._fft_plot.set_frequency_range(self.center_freq, self.samp_rate)
         self._waterfall_plot.set_frequency_range(self.center_freq, self.samp_rate)
+        self._processor.reset_averaging()   # RBW/axis changed — start a fresh average
         self._keep_one_in_n.set_n(self._decim_for(self.samp_rate))
         self._save_setting('rx', 'samp_rate_hz', float(self.samp_rate))
         # Stale overflow indicators from the old rate aren't meaningful any
@@ -4583,6 +4691,7 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         self.center_freq = center_freq
         self._fft_plot.set_frequency_range(self.center_freq, self.samp_rate)
         self._waterfall_plot.set_frequency_range(self.center_freq, self.samp_rate)
+        self._processor.reset_averaging()   # don't smear the average across tunings
         if self._playback_mode:
             # Virtual retune: shift the file's baseband by the offset between
             # the requested center frequency and the file's original center.
