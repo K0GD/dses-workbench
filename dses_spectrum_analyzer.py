@@ -714,16 +714,22 @@ class SpectrumProcessor(QObject):
         return db
 
     def _smooth(self, db):
-        """Optional frequency-domain (across-bin) boxcar smoothing of the display
-        trace. Reflect-padded so band edges aren't fabricated. Trades resolution
-        for a thinner floor — off (0/1) by default; harms narrow lines."""
+        """Optional frequency-domain (across-bin) smoothing of the display trace,
+        done in the POWER domain — a proper wider-RBW boxcar. It conserves power,
+        so levels stay physically meaningful and a narrow peak drops by only a
+        predictable ~10·log10(width) instead of collapsing toward the floor the
+        way a dB-domain average does. Reflect-padded so band edges aren't
+        fabricated. Off (0/1) by default; it still broadens narrow lines, so use
+        it for continuum, not narrow-line search."""
         k = self._smooth_bins
         if k <= 1:
             return db
         w = k if (k % 2 == 1) else k + 1        # odd window
         pad = w // 2
         kernel = np.ones(w, dtype=np.float64) / w
-        return np.convolve(np.pad(db, pad, mode='reflect'), kernel, mode='valid')
+        power = np.power(10.0, db / 10.0)
+        smoothed = np.convolve(np.pad(power, pad, mode='reflect'), kernel, mode='valid')
+        return 10.0 * np.log10(smoothed + 1e-20)
 
 
 def _make_pen(color, width, alpha):
@@ -977,10 +983,11 @@ class FftPlotWidget(QtWidgets.QWidget):
         self._smooth_spin.setSingleStep(2)
         self._smooth_spin.setSpecialValueText("off")
         self._smooth_spin.setToolTip(
-            "Frequency-domain smoothing width in bins (0 = off). Thins the visual "
-            "noise like SDR Console's Smoothing, but WIDENS and attenuates narrow "
-            "spectral lines — keep it OFF when hunting a narrow line (e.g. 1420 "
-            "MHz HI); use temporal averaging instead. Best for continuum.")
+            "Frequency-domain smoothing width in bins (0 = off). A power-domain "
+            "(wider-RBW) average that conserves level. Thins the noise like SDR "
+            "Console's Smoothing, but still WIDENS a narrow line and drops its "
+            "peak ~10·log10(width) — keep it OFF when hunting a narrow line (e.g. "
+            "1420 MHz HI); use temporal averaging instead. Best for continuum.")
         self._smooth_spin.valueChanged.connect(self.request_smooth.emit)
         self._smooth_spin.valueChanged.connect(
             lambda n: self.control_changed.emit('smooth_bins', n))
