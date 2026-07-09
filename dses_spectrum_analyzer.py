@@ -198,6 +198,7 @@ DEFAULTS = {
         'fft_size':        1024,
         'window':          'blackman-harris',
         'normalize_window': False,
+        'dc_suppress':     True,   # hide the zero-IF center-DC spike by default
         'avg_alpha':       1.0,
         'max_hold':        False,
         'min_hold':        False,
@@ -443,13 +444,14 @@ class SpectrumProcessor(QObject):
     frame_ready = Signal(object, object, object)  # avg_db, max_db|None, min_db|None
 
     def __init__(self, sink, fft_size=1024, window_name="blackman-harris",
-                 update_hz=10.0, normalize=False, parent=None):
+                 update_hz=10.0, normalize=False, dc_suppress=True, parent=None):
         super().__init__(parent)
         self._sink = sink
         self._fft_size = int(fft_size)
         self._window_name = window_name
         self._window = WINDOWS[window_name](self._fft_size).astype(np.float64)
         self._normalize = bool(normalize)
+        self._dc_suppress = bool(dc_suppress)
         self._avg_alpha = 1.0
         self._max_on = False
         self._min_on = False
@@ -506,6 +508,10 @@ class SpectrumProcessor(QObject):
     def set_window_normalized(self, on):
         self._normalize = bool(on)
 
+    @Slot(bool)
+    def set_dc_suppress(self, on):
+        self._dc_suppress = bool(on)
+
     def set_update_hz(self, hz):
         self._timer.setInterval(max(20, int(1000.0 / float(hz))))
 
@@ -514,6 +520,12 @@ class SpectrumProcessor(QObject):
         samples = self._sink.latest(n)
         if samples is None:
             return
+        if self._dc_suppress:
+            # Zero-IF radios (HackRF, RTL-SDR, …) put a DC-offset / LO-leakage
+            # spike in the center bin (= the tuned center frequency). Subtract
+            # the complex mean — a per-frame DC block — to remove it. This is
+            # display-only: the .fil / SigMF recorders tap the raw stream.
+            samples = samples - samples.mean()
         windowed = samples * self._window
         spec = np.fft.fftshift(np.fft.fft(windowed))
         if self._normalize:
@@ -584,6 +596,7 @@ class FftPlotWidget(QtWidgets.QWidget):
     request_reset_max = Signal()
     request_reset_min = Signal()
     request_window_normalized = Signal(bool)
+    request_dc_suppress = Signal(bool)
     # Fires on every user-driven control change; args: (settings_key, value).
     # The main window listens once and persists to the INI.
     control_changed = Signal(str, object)
@@ -713,6 +726,16 @@ class FftPlotWidget(QtWidgets.QWidget):
         self._norm_check.toggled.connect(
             lambda on: self.control_changed.emit('normalize_window', on))
         f.addRow(self._norm_check)
+
+        self._dc_check = QtWidgets.QCheckBox("Remove DC spike")
+        self._dc_check.setToolTip(
+            "Suppress the center-frequency spike from a zero-IF radio's DC offset "
+            "/ LO leakage (HackRF, RTL-SDR, …) by subtracting the DC component "
+            "before the FFT. Affects the display only — recordings stay raw.")
+        self._dc_check.toggled.connect(self.request_dc_suppress.emit)
+        self._dc_check.toggled.connect(
+            lambda on: self.control_changed.emit('dc_suppress', on))
+        f.addRow(self._dc_check)
 
         self._avg_slider = QtWidgets.QSlider(Qt.Horizontal)
         self._avg_slider.setRange(1, 1000)
@@ -1063,15 +1086,17 @@ class FftPlotWidget(QtWidgets.QWidget):
             slot['label'] = settings.get_str(section, f'trace_label_{which}')
 
         with _SignalBlocker(self._fft_size_combo, self._window_combo, self._norm_check,
-                            self._avg_slider, self._max_check, self._min_check,
-                            self._ymin_spin, self._ymax_spin, self._grid_check,
-                            self._labels_check, self._dark_bg_check, self._width_spin,
-                            self._alpha_slider, self._label_edit, self._linear_check):
+                            self._dc_check, self._avg_slider, self._max_check,
+                            self._min_check, self._ymin_spin, self._ymax_spin,
+                            self._grid_check, self._labels_check, self._dark_bg_check,
+                            self._width_spin, self._alpha_slider, self._label_edit,
+                            self._linear_check):
             idx = self._fft_size_combo.findData(settings.get_int(section, 'fft_size'))
             if idx >= 0:
                 self._fft_size_combo.setCurrentIndex(idx)
             self._window_combo.setCurrentText(settings.get_str(section, 'window'))
             self._norm_check.setChecked(settings.get_bool(section, 'normalize_window'))
+            self._dc_check.setChecked(settings.get_bool(section, 'dc_suppress'))
             a = settings.get_float(section, 'avg_alpha')
             self._avg_slider.setValue(int(round(max(0.001, min(1.0, a)) * 1000)))
             self._avg_value_lbl.setText(f"{a:.3f}")
@@ -1103,6 +1128,7 @@ class FftPlotWidget(QtWidgets.QWidget):
         self.request_fft_size.emit(self._fft_size_combo.currentData())
         self.request_window.emit(self._window_combo.currentText())
         self.request_window_normalized.emit(self._norm_check.isChecked())
+        self.request_dc_suppress.emit(self._dc_check.isChecked())
         self.request_average.emit(self._avg_slider.value() / 1000.0)
         self.request_max_hold.emit(self._max_check.isChecked())
         self.request_min_hold.emit(self._min_check.isChecked())
@@ -3424,6 +3450,7 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         self._fft_plot.request_reset_max.connect(self._processor.reset_max_hold)
         self._fft_plot.request_reset_min.connect(self._processor.reset_min_hold)
         self._fft_plot.request_window_normalized.connect(self._processor.set_window_normalized)
+        self._fft_plot.request_dc_suppress.connect(self._processor.set_dc_suppress)
 
         # Keep the two control panels' visibility in lock-step so the spectrum
         # and waterfall plot regions stay equal-width. setChecked is a no-op
