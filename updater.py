@@ -14,6 +14,8 @@ so a mid-way failure is rolled back rather than leaving a half-updated install.
 
 import hashlib
 import shutil
+import ssl
+import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -22,11 +24,78 @@ _CHUNK = 1 << 16
 _USER_AGENT = "DSES-Spectrum-Analyzer-Updater"
 
 
+# OpenSSL's X509_V_ERR_CERT_HAS_EXPIRED. The stdlib ssl module doesn't export
+# the X509_V_ERR_* codes, so we hard-code it; the value 10 has been stable in
+# OpenSSL for its entire history. It's the *only* verification failure the
+# certifi fallback below is meant to rescue.
+_CERT_HAS_EXPIRED = 10
+
+
+def _is_expired_cert_error(reason):
+    """True only for an OpenSSL "certificate has expired" verification failure —
+    the stale/expired cached-intermediate case the certifi fallback exists for.
+
+    Deliberately NOT true for "unable to get local issuer" / "self-signed
+    certificate in chain" / other verification failures. Those are how an
+    OS-level *distrust* of a CA surfaces (an admin removing or distrusting a
+    root drops it from the loaded set, so a chain through it fails to build) —
+    and the fallback must never override a deliberate distrust decision."""
+    if not isinstance(reason, ssl.SSLCertVerificationError):
+        return False
+    if getattr(reason, "verify_code", None) == _CERT_HAS_EXPIRED:
+        return True
+    # verify_code can be absent on some construction paths; match the text too.
+    return "certificate has expired" in (
+        getattr(reason, "verify_message", "") or "").lower()
+
+
+def open_url(url, timeout, headers=None):
+    """Open `url` (returning the urllib response) verifying the server
+    certificate against the OS trust store first, then falling back to the
+    bundled certifi roots if — and only if — the OS store rejected it with a
+    ``certificate has expired`` verification error.
+
+    Why the fallback exists: on Windows the OS trust store can accumulate a
+    stale, expired cached intermediate — e.g. the 2020-2025 cross-signed
+    ``ISRG Root X2`` that Let's Encrypt retired on 2025-09-15. OpenSSL's path
+    builder can then pick that expired copy instead of chaining to the still
+    valid root and abort with ``certificate has expired``, even though the
+    server's certificate is perfectly valid. certifi ships a clean, curated
+    root set with no such stale cache, so retrying against it rescues exactly
+    that case.
+
+    Security: BOTH attempts fully verify the certificate (hostname + chain);
+    the fallback never disables verification, it only swaps one trusted root
+    set for another. It is scoped to the *expired* verify code specifically, so
+    it cannot override an administrator's deliberate removal/distrust of a CA
+    (which surfaces as a different verify error and re-raises here), and it
+    cannot accept a genuinely expired/invalid *server* certificate (certifi
+    rejects that too and the error propagates). The OS store is tried FIRST so
+    enterprise private CAs and antivirus/proxy HTTPS-scanning roots (which live
+    only in the OS store) keep working; certifi is a fallback, not a
+    replacement. Non-certificate failures (timeouts, DNS, HTTP errors) are
+    re-raised immediately without a second attempt."""
+    def _open(context):
+        req = urllib.request.Request(url, headers=headers or {})
+        return urllib.request.urlopen(req, timeout=timeout, context=context)
+
+    try:
+        return _open(None)  # context=None -> OS default trust store
+    except urllib.error.URLError as first_err:
+        if not _is_expired_cert_error(getattr(first_err, "reason", None)):
+            raise  # not the stale-expired-cache case — don't second-guess it
+        try:
+            import certifi
+            ctx = ssl.create_default_context(cafile=certifi.where())
+        except Exception:
+            raise first_err  # can't fall back — surface the original error
+        return _open(ctx)
+
+
 def download(url, dest, progress=None):
     """Stream `url` to `dest`. progress(bytes_so_far, total_or_0) if given."""
-    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
     dest = Path(dest)
-    with urllib.request.urlopen(req, timeout=30) as r:
+    with open_url(url, timeout=30, headers={"User-Agent": _USER_AGENT}) as r:
         total = int(r.headers.get("Content-Length", 0) or 0)
         got = 0
         with open(dest, "wb") as f:
@@ -51,10 +120,12 @@ def sha256_file(path):
 
 def fetch_published_sha256(sha_url):
     """Read a `<hex>  filename` .sha256 file from a URL; return the hex digest."""
-    req = urllib.request.Request(sha_url, headers={"User-Agent": _USER_AGENT})
-    with urllib.request.urlopen(req, timeout=15) as r:
+    with open_url(sha_url, timeout=15, headers={"User-Agent": _USER_AGENT}) as r:
         text = r.read().decode("utf-8", "replace")
-    return text.split()[0].strip().lower()
+    parts = text.split()
+    if not parts:
+        raise ValueError(f"empty or malformed .sha256 at {sha_url}")
+    return parts[0].strip().lower()
 
 
 def verify(zip_path, sha_url):

@@ -116,7 +116,7 @@ import time
 
 # === App metadata ===
 APP_NAME        = "DSES Spectrum Analyzer"
-APP_VERSION     = "1.1.3"
+APP_VERSION     = "1.1.4"
 APP_AUTHOR      = "Richard M Hambly (K0GD)"
 APP_AUTHOR_EMAIL = "rick@cnssys.com"
 APP_COPYRIGHT   = "Copyright © 2026 Richard M Hambly (K0GD)"
@@ -2723,6 +2723,36 @@ def _parse_version(v):
         return ()
 
 
+def _friendly_check_error(exc, manifest_url=""):
+    """Turn an update-check exception into a message the user can act on. A TLS
+    certificate-verification failure is usually local — antivirus "HTTPS
+    scanning" or a stale/expired root cached in the OS certificate store — but
+    it can also be a genuinely expired/invalid server certificate. Name both
+    possibilities and point at the manual-download page."""
+    import ssl
+    reason = getattr(exc, 'reason', None)
+    is_cert = (isinstance(exc, ssl.SSLCertVerificationError)
+               or isinstance(reason, ssl.SSLCertVerificationError)
+               or 'CERTIFICATE_VERIFY_FAILED' in str(exc))
+    if not is_cert:
+        return f"{type(exc).__name__}: {exc}"
+    raw = reason if reason is not None else exc
+    detail = str(raw)
+    if detail.startswith('(') and getattr(raw, 'args', None):
+        detail = str(raw.args[0])  # unwrap a bare ('msg',) repr into clean text
+    msg = ("The update server's security certificate could not be verified:\n"
+           f"{detail}\n\n"
+           "This usually means a problem on THIS PC -- antivirus \"HTTPS "
+           "scanning\" (Avast/AVG/ESET/Kaspersky/Bitdefender) intercepting the "
+           "connection, or a stale/expired root certificate cached in the "
+           "system certificate store -- but it can also mean the update "
+           "server's own certificate has expired or is invalid.")
+    if '/' in manifest_url:
+        base = manifest_url.rsplit('/', 1)[0] + '/'
+        msg += f"\n\nYou can still download the update manually from:\n{base}"
+    return msg
+
+
 class UpdateChecker(QtCore.QObject):
     """Fetches a small manifest.json from a configured URL on a background
     thread and, if it advertises a newer version than what's running, emits
@@ -2752,14 +2782,17 @@ class UpdateChecker(QtCore.QObject):
             # menu handler should also check this and tell the user.
             return
         try:
-            import urllib.request
-            req = urllib.request.Request(url, headers={'User-Agent': self.USER_AGENT})
-            with urllib.request.urlopen(req, timeout=8) as resp:
+            # updater.open_url verifies against the OS trust store first, then
+            # falls back to the bundled certifi roots, so a stale/expired cached
+            # intermediate in the system store can't block the check. See
+            # updater.open_url for the full rationale.
+            with updater.open_url(url, timeout=8,
+                                  headers={'User-Agent': self.USER_AGENT}) as resp:
                 raw = resp.read()
             import json
             data = json.loads(raw.decode('utf-8'))
         except Exception as exc:
-            self.check_failed.emit(f"{type(exc).__name__}: {exc}")
+            self.check_failed.emit(_friendly_check_error(exc, url))
             return
         latest = str(data.get('latest_version', '')).strip()
         download_url = str(data.get('download_url', '')).strip()
