@@ -99,17 +99,40 @@ try {
     }
 
     # --- Zip ---
-    # Retry: a real-time AV scan (Defender) or a just-launched copy of the app
-    # can briefly lock a freshly-staged file, making Compress-Archive throw
-    # "being used by another process". Retry a few times before giving up.
+    # Build the zip with .NET ZipArchive, writing entry paths with FORWARD
+    # SLASHES. We deliberately do NOT use Compress-Archive: Windows PowerShell
+    # 5.1's Compress-Archive writes entry paths with backslashes (a violation of
+    # the ZIP spec, which requires '/'), which extract as literal-backslash
+    # *filenames* on macOS/Linux and silently break the in-app updater there.
+    # Files only; the extractor recreates directories.
+    # (Retry wraps the whole build: a real-time AV scan or a just-launched copy
+    # can briefly lock a freshly-staged file.)
+    Add-Type -AssemblyName System.IO.Compression | Out-Null
+    Add-Type -AssemblyName System.IO.Compression.FileSystem | Out-Null
+    $stageFull = (Resolve-Path $stage).Path
+    $prefix = Split-Path $stageFull -Leaf          # the versioned top-folder name
     $maxAttempts = 5
     for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
         try {
-            Compress-Archive -Path $stage -DestinationPath $zip -Force -ErrorAction Stop
+            if (Test-Path $zip) { Remove-Item -Force $zip }
+            $fs = [System.IO.File]::Open($zip, [System.IO.FileMode]::CreateNew)
+            $archive = New-Object System.IO.Compression.ZipArchive($fs, [System.IO.Compression.ZipArchiveMode]::Create)
+            try {
+                Get-ChildItem -Path $stage -Recurse -File | ForEach-Object {
+                    $rel = $_.FullName.Substring($stageFull.Length + 1).Replace('\', '/')
+                    $entry = $archive.CreateEntry("$prefix/$rel", [System.IO.Compression.CompressionLevel]::Optimal)
+                    $es = $entry.Open()
+                    $bytes = [System.IO.File]::ReadAllBytes($_.FullName)
+                    $es.Write($bytes, 0, $bytes.Length)
+                    $es.Dispose()
+                }
+            } finally {
+                $archive.Dispose(); $fs.Dispose()
+            }
             break
         } catch {
             if ($attempt -eq $maxAttempts) { throw }
-            Write-Warning ("Zip attempt {0}/{1} failed (file locked?); retrying in 3s..." -f $attempt, $maxAttempts)
+            Write-Warning ("Zip attempt {0}/{1} failed ({2}); retrying in 3s..." -f $attempt, $maxAttempts, $_.Exception.Message)
             if (Test-Path $zip) { Remove-Item -Force $zip -ErrorAction SilentlyContinue }
             Start-Sleep -Seconds 3
         }

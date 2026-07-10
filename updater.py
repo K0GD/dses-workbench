@@ -147,16 +147,35 @@ def sha256_url_for(download_url):
 def extract_release(zip_path, dest_dir):
     """Safely extract `zip_path` into `dest_dir`; return the single top-level
     folder inside it (the `dses-spectrum-analyzer-<version>/` the bundle uses).
-    Rejects absolute or `..` member paths (zip-slip guard)."""
+
+    Normalizes Windows-style backslash separators to '/': PowerShell's
+    Compress-Archive writes non-spec zip entries using '\\', which
+    zipfile.extractall() would otherwise turn into literal-backslash *filenames*
+    on macOS/Linux (no folder, nothing overwritten, a silently-broken update).
+    Also restores any Unix mode bits stored in the entry (so launcher.sh stays
+    executable), and guards against absolute / '..' member paths (zip-slip)."""
     dest_dir = Path(dest_dir)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    tops = set()
     with zipfile.ZipFile(zip_path) as z:
-        names = [n for n in z.namelist() if n.strip("/")]
-        for n in names:
-            p = Path(n)
+        for info in z.infolist():
+            name = info.filename.replace("\\", "/")   # normalize Windows seps
+            if not name.strip("/"):
+                continue
+            p = Path(name)
             if p.is_absolute() or ".." in p.parts:
-                raise ValueError(f"unsafe path in zip: {n}")
-        z.extractall(dest_dir)
-    tops = {n.split("/", 1)[0] for n in names}
+                raise ValueError(f"unsafe path in zip: {info.filename}")
+            tops.add(name.split("/", 1)[0])
+            target = dest_dir / name
+            if name.endswith("/"):
+                target.mkdir(parents=True, exist_ok=True)
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with z.open(info) as src, open(target, "wb") as dst:
+                shutil.copyfileobj(src, dst)
+            mode = (info.external_attr >> 16) & 0o777   # Unix mode if present
+            if mode:
+                target.chmod(mode)
     if len(tops) == 1:
         return dest_dir / next(iter(tops))
     return dest_dir
@@ -166,6 +185,23 @@ def extract_release(zip_path, dest_dir):
 # (the bundled SigMF playback sample is ~160 MB and never changes between
 # releases). When the size matches, an in-place install skips it.
 _SKIP_IF_SAME_OVER = 50_000_000
+
+# Shell launchers that MUST stay executable after an install. A zip built on
+# Windows carries no Unix mode bits, so these would otherwise land non-executable
+# and the macOS .app (which does `exec launcher.sh`) — or a plain ./launcher.sh —
+# would fail after an update. chmod +x here is harmless on Windows.
+_LAUNCHERS = ("launcher.sh", "launcher.command", "install-shortcut.command")
+
+
+def _make_launchers_executable(install_dir):
+    install_dir = Path(install_dir)
+    for name in _LAUNCHERS:
+        f = install_dir / name
+        if f.is_file():
+            try:
+                f.chmod(f.stat().st_mode | 0o111)  # add exec for u/g/o
+            except OSError:
+                pass
 
 
 def install_in_place(src_dir, target_dir):
@@ -199,6 +235,7 @@ def install_in_place(src_dir, target_dir):
             else:
                 shutil.copy2(item, dst)
             done.append((name, existed))
+        _make_launchers_executable(target_dir)
         return backup
     except Exception:
         # Roll back everything we touched, newest first.
@@ -225,4 +262,5 @@ def install_new_copy(src_dir, parent_dir):
     if new_dir.exists():
         raise FileExistsError(f"{new_dir} already exists")
     shutil.copytree(src_dir, new_dir)
+    _make_launchers_executable(new_dir)
     return new_dir
