@@ -79,8 +79,11 @@ copy_if_present DSES_RFI_Spectrum_Analyzer_Installation.pdf "$stage/"
 copy_if_present sample.sigmf-data "$stage/"
 copy_if_present sample.sigmf-meta "$stage/"
 
-# Make launcher.sh executable inside the bundle
+# Make the Unix launcher + the macOS shortcut installer executable inside the
+# bundle so a fresh install can run them (a plain unzip preserves these bits;
+# the .command must be +x to run from a Finder double-click).
 chmod +x "$stage/launcher.sh"
+[ -f "$stage/install-shortcut.command" ] && chmod +x "$stage/install-shortcut.command"
 
 # Zip — use python's zipfile so we don't depend on a system zip binary.
 python3 -c "
