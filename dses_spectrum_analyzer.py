@@ -3674,6 +3674,7 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         # overwritten when the plots/controls are added afterward).
         self.resize(1280, 780)
         self._geometry_applied = False
+        self._last_good_geom = None   # last (x,y,w,h) seen while normally visible
         self.flowgraph_started = threading.Event()
 
         ##################################################
@@ -4341,6 +4342,30 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
             return
         self._save_setting('spectrum', key, value)
 
+    def moveEvent(self, event):
+        QtWidgets.QWidget.moveEvent(self, event)
+        self._remember_geometry()
+
+    def resizeEvent(self, event):
+        QtWidgets.QWidget.resizeEvent(self, event)
+        self._remember_geometry()
+
+    def _remember_geometry(self):
+        """Record the FRAME position (self.pos()) + client size while the window
+        is normally visible. We persist the frame top-left — the SAME reference
+        move() sets — so save/restore round-trips exactly. Saving geometry() (the
+        *client* top-left) but restoring with move() (the frame) drifts the
+        window by the frame margins every launch (macOS 0/28, LXDE/Openbox 2/30).
+        Ignored until the first-show restore has run and while minimized/
+        maximized/fullscreen; a close-time query can also read (0, 0) on some X11
+        WMs, so we track during normal use instead."""
+        if not self._geometry_applied or not self.isVisible():
+            return
+        if self.isMinimized() or self.isMaximized() or self.isFullScreen():
+            return
+        p = self.pos()
+        self._last_good_geom = (p.x(), p.y(), self.width(), self.height())
+
     def showEvent(self, event):
         QtWidgets.QWidget.showEvent(self, event)
         # Apply the saved size/position once, on first show — after every
@@ -4350,48 +4375,88 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
             self._geometry_applied = True
             self._restore_geometry()
             self._clamp_window_to_screen()
+            # X11 reparenting WMs (LXDE/Openbox) may not have drawn the title-bar
+            # frame yet when showEvent fires, so the move() above can land the
+            # client at the requested y and push the title bar off the top edge.
+            # Re-apply once the event loop has let the WM decorate the window.
+            if sys.platform.startswith('linux'):
+                QtCore.QTimer.singleShot(0, self._reapply_geometry)
+
+    def _reapply_geometry(self):
+        self._restore_geometry()
+        self._clamp_window_to_screen()
 
     def _restore_geometry(self):
-        """Apply the saved window position/size (plain ints in the INI)."""
+        """Apply the saved window size/position (plain ints in the INI). With
+        nothing saved (first run), center on the screen on Linux rather than let
+        the WM drop the window in the top-left corner where its title bar can be
+        hard to grab; macOS/Windows keep their native first-run placement."""
         try:
             gw = self._app_settings.get_int('window', 'width')
             gh = self._app_settings.get_int('window', 'height')
-            if gw > 0 and gh > 0:
-                self.resize(gw, gh)
+        except Exception:
+            gw = gh = 0
+        if gw > 0 and gh > 0:
+            self.resize(gw, gh)
+            try:
                 self.move(self._app_settings.get_int('window', 'x'),
                           self._app_settings.get_int('window', 'y'))
-        except Exception as exc:
-            print(f"Geometry restore failed: {exc}", file=sys.stderr)
+            except Exception as exc:
+                print(f"Geometry position restore failed: {exc}", file=sys.stderr)
+                self._center_on_screen()
+        elif sys.platform.startswith('linux'):
+            self._center_on_screen()
 
-    def _clamp_window_to_screen(self):
-        """Shrink and reposition the window so it fits entirely on its screen.
-        Guards against a saved geometry (from a larger display or a pre-scroll
-        layout) leaving the window taller/wider than this display — which the
-        user can't fix by dragging once the title bar is above the screen top."""
+    def _center_on_screen(self):
+        """Center the window on its current (or primary) screen's work area."""
         screen = self.screen() or QtWidgets.QApplication.primaryScreen()
         if screen is None:
             return
         avail = screen.availableGeometry()
-        w = min(self.width(), avail.width())
-        h = min(self.height(), avail.height())
+        self.move(avail.left() + max(0, (avail.width() - self.width()) // 2),
+                  avail.top() + max(0, (avail.height() - self.height()) // 2))
+
+    def _clamp_window_to_screen(self):
+        """Keep the whole decorated window — title bar included — on-screen, so a
+        saved position can't open it with the title bar above the top edge where
+        it can't be grabbed, and shrink it if it is larger than this display.
+        Works in FRAME coordinates (frameGeometry + a delta move) so the WM
+        decorations are accounted for on every platform."""
+        screen = self.screen() or QtWidgets.QApplication.primaryScreen()
+        if screen is None:
+            return
+        avail = screen.availableGeometry()
+        # Frame margins (title bar + borders); 0 until the WM has decorated.
+        dw = self.frameGeometry().width() - self.width()
+        dh = self.frameGeometry().height() - self.height()
+        w = min(self.width(), max(200, avail.width() - dw))
+        h = min(self.height(), max(150, avail.height() - dh))
         if w != self.width() or h != self.height():
             self.resize(w, h)
-        # Nudge fully on-screen if a saved position pushed it partly off.
-        x = max(avail.left(), min(self.x(), avail.right() - w + 1))
-        y = max(avail.top(), min(self.y(), avail.bottom() - h + 1))
-        if x != self.x() or y != self.y():
-            self.move(x, y)
+        fg = self.frameGeometry()
+        nx = max(avail.left(), min(fg.left(), avail.right() - fg.width() + 1))
+        ny = max(avail.top(),  min(fg.top(),  avail.bottom() - fg.height() + 1))
+        dx, dy = nx - fg.left(), ny - fg.top()
+        if dx or dy:
+            self.move(self.x() + dx, self.y() + dy)   # shift the frame by delta
 
     def _save_geometry(self):
-        """Persist the window position/size into the INI as plain integers.
-        Used by closeEvent and the signal handler. The INI saves reliably on
-        every platform, unlike QSettings on macOS."""
+        """Persist the FRAME position + client size into the INI as plain
+        integers, preferring the last values seen while the window was normally
+        visible (see _remember_geometry) over a close-time query, which
+        reparenting X11 WMs can report as (0, 0). Restoring the frame position
+        with move() round-trips exactly. Used by closeEvent and the signal
+        handler; the INI saves reliably on every platform."""
         try:
-            g = self.geometry()
-            self._app_settings.set('window', 'x', int(g.x()))
-            self._app_settings.set('window', 'y', int(g.y()))
-            self._app_settings.set('window', 'width', int(g.width()))
-            self._app_settings.set('window', 'height', int(g.height()))
+            if self._last_good_geom is not None:
+                x, y, w, h = self._last_good_geom
+            else:
+                p = self.pos()
+                x, y, w, h = p.x(), p.y(), self.width(), self.height()
+            self._app_settings.set('window', 'x', int(x))
+            self._app_settings.set('window', 'y', int(y))
+            self._app_settings.set('window', 'width', int(w))
+            self._app_settings.set('window', 'height', int(h))
             self._app_settings.save()
         except Exception as exc:
             print(f"Geometry save failed: {exc}", file=sys.stderr)
