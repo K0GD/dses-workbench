@@ -955,6 +955,10 @@ class FftPlotWidget(QtWidgets.QWidget):
         self._avg_slider = QtWidgets.QSlider(Qt.Horizontal)
         self._avg_slider.setRange(1, 1000)
         self._avg_slider.setValue(1000)
+        # Keep a grabbable floor. On macOS/Linux a QSlider collapses to zero
+        # width when a neighbour claims the space (Windows keeps a wider
+        # minimum), so a squeezed slider becomes invisible and un-draggable.
+        self._avg_slider.setMinimumWidth(60)
         self._avg_slider.setToolTip(
             "Exponential averaging. Lower α = heavier integration = a smoother, "
             "less jaggy noise floor (at the cost of slower response). The ≈N is "
@@ -964,6 +968,12 @@ class FftPlotWidget(QtWidgets.QWidget):
         self._avg_slider.valueChanged.connect(
             lambda v: self.control_changed.emit('avg_alpha', v / 1000.0))
         self._avg_value_lbl = QtWidgets.QLabel(self._fmt_avg(1000))
+        # Reserve room for the WIDEST reading ("0.001 (≈1999)") so the label
+        # never grows with the value and squeezes the slider. Without this,
+        # dragging alpha to the far left widened this text until the slider
+        # vanished on macOS/Linux (Windows fonts happened to stay narrow enough).
+        self._avg_value_lbl.setFixedWidth(
+            self._avg_value_lbl.fontMetrics().horizontalAdvance("0.000 (≈1999)") + 4)
         self._avg_slider.valueChanged.connect(
             lambda v: self._avg_value_lbl.setText(self._fmt_avg(v)))
         avg_row = QtWidgets.QHBoxLayout()
