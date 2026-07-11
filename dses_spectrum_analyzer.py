@@ -4413,6 +4413,8 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         if screen is None:
             return
         avail = screen.availableGeometry()
+        if avail.isEmpty():
+            return   # headless / 0x0 screen — nothing to center against
         self.move(avail.left() + max(0, (avail.width() - self.width()) // 2),
                   avail.top() + max(0, (avail.height() - self.height()) // 2))
 
@@ -4426,6 +4428,12 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         if screen is None:
             return
         avail = screen.availableGeometry()
+        if avail.isEmpty():
+            # Headless / no connected output: Qt reports a 0x0 screen (seen on the
+            # DSES drift-scan box — HDMI disconnected, viewed over RDP). Clamping
+            # to a zero rect would shrink/move the window to garbage; leave the
+            # restored geometry alone.
+            return
         # Frame margins (title bar + borders); 0 until the WM has decorated.
         dw = self.frameGeometry().width() - self.width()
         dh = self.frameGeometry().height() - self.height()
