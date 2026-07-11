@@ -100,5 +100,24 @@ if ! "$ROOT/bin/python" -c "import PySide6, pyqtgraph, scipy" >/dev/null 2>&1; t
     exit 1
 fi
 
+# Linux headless-display fix. When no monitor is connected (e.g. the box is
+# viewed over Splashtop/RDP with HDMI disconnected), the X server has a
+# framebuffer but no *connected* RandR output, so Qt reports a 0x0 screen —
+# which collapses every popup (dropdowns, menus) and breaks window geometry.
+# If RandR reports no monitors, synthesize one spanning the framebuffer so Qt
+# sees a real screen. Skipped when a real monitor is attached (Monitors >= 1);
+# a no-op on macOS and where xrandr is absent. Uses ${fbw}/${fbh} locals so it
+# never clobbers "$@" (passed through to the app below).
+if [ "$(uname)" = "Linux" ] && [ -n "${DISPLAY:-}" ] && command -v xrandr >/dev/null 2>&1; then
+    if xrandr --listmonitors 2>/dev/null | head -1 | grep -q '^Monitors: 0'; then
+        fbdim="$(xrandr -q 2>/dev/null | sed -n 's/.*current \([0-9]\{2,\}\) x \([0-9]\{2,\}\).*/\1 \2/p' | head -1)"
+        if [ -n "$fbdim" ]; then
+            fbw="${fbdim% *}"; fbh="${fbdim#* }"
+            xrandr --setmonitor DSES-VIRT "${fbw}/508x${fbh}/286+0+0" none 2>/dev/null \
+                && echo "launcher: no monitor connected — synthesized a ${fbw}x${fbh} virtual screen so Qt popups/geometry work." >&2
+        fi
+    fi
+fi
+
 cd "$SCRIPT_DIR"
 exec "$ROOT/bin/python" "$MAIN_SCRIPT" "$@"
