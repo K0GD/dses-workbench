@@ -846,8 +846,10 @@ class FftPlotWidget(QtWidgets.QWidget):
         self._plot.viewport().installEventFilter(self)         # hide on mouse-leave
 
         # Frozen markers: left-click freezes marker A, right-click freezes B
-        # (re-clicking moves that one), middle-click clears both. With both set,
-        # the B label also shows the A->B difference in frequency and level.
+        # (re-clicking moves that one); double-click (or a middle-click) clears
+        # both. Double-click is the macOS clear, since Mac mice have no middle
+        # button. With both set, the B label also shows the A->B difference in
+        # frequency and level.
         self._frozen = {'A': None, 'B': None}                  # data (x, y) or None
         self._freeze_dots = pg.ScatterPlotItem(size=14, pxMode=True, symbol='+')
         self._freeze_dots.setZValue(1001)
@@ -859,6 +861,9 @@ class FftPlotWidget(QtWidgets.QWidget):
             _lab.setVisible(False)
             self._plot.addItem(_lab, ignoreBounds=True)
         self._plot.setMenuEnabled(False)   # free the right button for marker B
+        self._plot.setToolTip(
+            "Left-click: place marker A   ·   Right-click: place marker B\n"
+            "Double-click: clear both markers")
         self._plot.scene().sigMouseClicked.connect(self._on_plot_clicked)
 
         layout.addWidget(self._plot, 1)
@@ -1341,7 +1346,7 @@ class FftPlotWidget(QtWidgets.QWidget):
             self._readout.setVisible(False)
         return super().eventFilter(obj, event)
 
-    # --- Frozen markers (left = A, right = B, middle = clear) ---------------
+    # --- Frozen markers (left = A, right = B, double-click/middle = clear) ---
 
     def _format_marker(self, tag, xy):
         return f"{tag}  {self._format_readout(xy[0], xy[1])}"
@@ -1359,12 +1364,14 @@ class FftPlotWidget(QtWidgets.QWidget):
         label.setPos(*xy)
 
     def _on_plot_clicked(self, ev):
-        """Left = freeze marker A, right = freeze marker B, middle = clear."""
+        """Left = freeze marker A, right = freeze marker B. Clear both with a
+        double-click OR a middle-click — double-click is the macOS-friendly clear,
+        since Mac mice/trackpads have no middle button."""
         vb = self._plot.getPlotItem().getViewBox()
-        if ev.double() or not vb.sceneBoundingRect().contains(ev.scenePos()):
+        if not vb.sceneBoundingRect().contains(ev.scenePos()):
             return
         btn = ev.button()
-        if btn == Qt.MiddleButton:
+        if ev.double() or btn == Qt.MiddleButton:
             self._frozen['A'] = self._frozen['B'] = None
         elif btn in (Qt.LeftButton, Qt.RightButton):
             pt = vb.mapSceneToView(ev.scenePos())
