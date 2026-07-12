@@ -253,6 +253,18 @@ DEFAULTS = {
     'ui': {
         'control_panels_visible': True,
     },
+    'sweep': {
+        # Swept (stepped) spectrum-analyzer mode: tune the radio across a
+        # range start->stop in chunks of step_hz, FFT each chunk, stitch into
+        # one wide trace. Useful for RFI surveys spanning more than the
+        # radio's instantaneous bandwidth. enabled persists the mode toggle;
+        # step_hz=0 means "auto from sample rate" (~80%).
+        'enabled':         False,
+        'start_hz':        100e6,
+        'stop_hz':         1000e6,
+        'step_hz':         0.0,
+        'settle_ms':       150,
+    },
     'window': {
         # Main-window position/size as plain integers (human-readable and
         # corruption-proof, unlike an opaque saveGeometry() blob). width/height
@@ -468,6 +480,19 @@ class SampleBufferSink(gr.sync_block):
             if not self._filled or n > self._chunk_size or n <= 0:
                 return None
             return self._buf[-n:].copy()
+
+
+def _fmt_hz(hz: float) -> str:
+    """Human-readable RF frequency for labels/tooltips: 1e3 -> '1 kHz',
+    2e9 -> '2 GHz', 1.766e9 -> '1.766 GHz'."""
+    hz = float(hz)
+    if hz >= 1e9:
+        return f"{hz / 1e9:g} GHz"
+    if hz >= 1e6:
+        return f"{hz / 1e6:g} MHz"
+    if hz >= 1e3:
+        return f"{hz / 1e3:g} kHz"
+    return f"{hz:g} Hz"
 
 
 class SpectrumProcessor(QObject):
@@ -3640,9 +3665,26 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         self._sidebar_scroll.setMinimumHeight(80)   # let the window shrink past it
         self.main_layout.addWidget(self._sidebar_scroll, 0)
 
+        # Mode selector: Live = real-time FFT at the tuned center frequency
+        # (the traditional view); Sweep = stepped scan from start to stop.
+        self._mode_group = QtWidgets.QGroupBox("Mode")
+        _mode_layout = QtWidgets.QHBoxLayout(self._mode_group)
+        self._mode_live_btn = QtWidgets.QRadioButton("Live")
+        self._mode_sweep_btn = QtWidgets.QRadioButton("Sweep")
+        _mode_layout.addWidget(self._mode_live_btn)
+        _mode_layout.addWidget(self._mode_sweep_btn)
+        _mode_layout.addStretch(1)
+        self.sidebar_layout.addWidget(self._mode_group)
+
         self._tuning_group = QtWidgets.QGroupBox("Tuning")
         self._tuning_group_layout = QtWidgets.QVBoxLayout(self._tuning_group)
         self.sidebar_layout.addWidget(self._tuning_group)
+
+        # Sweep controls — built here, populated after the source is known;
+        # hidden in Live mode (shown/hidden by _on_mode_changed).
+        self._sweep_group = QtWidgets.QGroupBox("Sweep")
+        self._sweep_group_layout = QtWidgets.QFormLayout(self._sweep_group)
+        self.sidebar_layout.addWidget(self._sweep_group)
 
         self._rx_group = QtWidgets.QGroupBox("RX")
         self._rx_group_layout = QtWidgets.QVBoxLayout(self._rx_group)
@@ -4002,6 +4044,80 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
             update_hz=10.0, gain_db=float(self.gain), parent=self)
         self._processor.frame_ready.connect(self._fft_plot.on_frame)
         self._processor.frame_ready.connect(self._waterfall_plot.on_frame)
+        self._processor.frame_ready.connect(self._on_processor_frame_cache)
+        # --- Sweep (stepped wide-spectrum) mode: persisted settings, runtime
+        #     state, and the per-step settle timer. The Mode/Sweep UI is built
+        #     in the sidebar; the sweep loop drives the plots itself. ---
+        _sw = self._app_settings
+        self._sweep_enabled   = _sw.get_bool('sweep', 'enabled')
+        self._sweep_start_hz  = _sw.get_float('sweep', 'start_hz')
+        self._sweep_stop_hz   = _sw.get_float('sweep', 'stop_hz')
+        self._sweep_step_hz   = _sw.get_float('sweep', 'step_hz')   # 0 = auto
+        self._sweep_settle_ms = max(20, int(_sw.get_int('sweep', 'settle_ms')))
+        self._sweep_active    = False
+        self._sweep_step_idx  = 0
+        self._sweep_n_steps   = 0
+        self._sweep_kept_bins = 0
+        self._sweep_start_idx = 0
+        self._sweep_step_actual_hz = 0.0
+        self._sweep_wide_db   = None
+        self._sweep_max_db    = None
+        self._sweep_show_max  = False
+        self._sweep_eff_center = 0.0
+        self._sweep_eff_bw    = 0.0
+        self._sweep_latest_avg_db = None
+        self._sweep_axis_needs_apply = False
+        self._sweep_saved_alpha = None
+        self._sweep_saved_max = None
+        self._sweep_saved_min = None
+        self._hw_freq_range   = None   # (lo, hi) radio range for clamping, if known
+        self._sweep_timer = QTimer(self)
+        self._sweep_timer.setSingleShot(True)
+        self._sweep_timer.timeout.connect(self._sweep_capture_and_advance)
+        # --- Populate the Sweep group + wire the Mode toggle. Done here (not
+        #     in sidebar construction) so the source/processor/plots and the
+        #     sweep state already exist when a persisted Sweep mode auto-enters. ---
+        if self._hw_freq_range is not None:
+            lo, hi = self._hw_freq_range
+            self._sweep_start_hz = max(lo, min(hi, self._sweep_start_hz))
+            self._sweep_stop_hz  = max(lo, min(hi, self._sweep_stop_hz))
+            if self._sweep_stop_hz <= self._sweep_start_hz:
+                self._sweep_stop_hz = min(hi, self._sweep_start_hz + 100e6)
+        self._sweep_start_edit = QtWidgets.QLineEdit(_fmt_hz(self._sweep_start_hz))
+        self._sweep_stop_edit = QtWidgets.QLineEdit(_fmt_hz(self._sweep_stop_hz))
+        _step_text = ("auto" if self._sweep_step_hz <= 0 else _fmt_hz(self._sweep_step_hz))
+        self._sweep_step_edit = QtWidgets.QLineEdit(_step_text)
+        self._sweep_step_edit.setToolTip(
+            "Hz per tuning step. Type 'auto' to use ~80% of the current "
+            "sample rate (recommended); otherwise enter an explicit step "
+            "size, e.g. 5M for 5 MHz.")
+        if self._hw_freq_range is not None:
+            lo, hi = self._hw_freq_range
+            _rng = f"Range: {_fmt_hz(lo)} \u2013 {_fmt_hz(hi)}"
+            self._sweep_start_edit.setToolTip(_rng)
+            self._sweep_stop_edit.setToolTip(_rng)
+        self._sweep_start_edit.editingFinished.connect(self._on_sweep_range_edit)
+        self._sweep_stop_edit.editingFinished.connect(self._on_sweep_range_edit)
+        self._sweep_step_edit.editingFinished.connect(self._on_sweep_step_edit)
+        self._sweep_group_layout.addRow("Start:", self._sweep_start_edit)
+        self._sweep_group_layout.addRow("Stop:", self._sweep_stop_edit)
+        self._sweep_group_layout.addRow("Step:", self._sweep_step_edit)
+        self._sweep_status_label = QtWidgets.QLabel("Idle")
+        self._sweep_status_label.setStyleSheet("color: #888;")
+        self._sweep_group_layout.addRow("Status:", self._sweep_status_label)
+        # setChecked runs before the signals are connected, so apply the
+        # persisted mode explicitly via _on_mode_changed after wiring.
+        self._mode_live_btn.setChecked(not self._sweep_enabled)
+        self._mode_sweep_btn.setChecked(self._sweep_enabled)
+        self._mode_live_btn.toggled.connect(lambda on: on and self._on_mode_changed('live'))
+        self._mode_sweep_btn.toggled.connect(lambda on: on and self._on_mode_changed('sweep'))
+        if self._playback_mode:
+            self._mode_sweep_btn.setEnabled(False)
+            self._mode_live_btn.setChecked(True)
+            self._sweep_group.hide()
+            self._mode_group.setToolTip("Sweep is disabled in playback mode.")
+        else:
+            self._on_mode_changed('sweep' if self._sweep_enabled else 'live')
         self._fft_plot.request_fft_size.connect(self._processor.set_fft_size)
         self._fft_plot.request_window.connect(self._processor.set_window)
         self._fft_plot.request_average.connect(self._processor.set_average_alpha)
@@ -4158,6 +4274,342 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
             self._recording_status.setText(
                 f"Playback (looping): {Path(self._playback_path).name}.sigmf-data")
             self._recording_status.setToolTip(self._playback_path + '.sigmf-data')
+
+    def _on_processor_frame_cache(self, avg_db, _max_db, _min_db):
+        """Stash the most recent processor frame for the sweep loop."""
+        self._sweep_latest_avg_db = avg_db
+
+    @Slot(bool)
+    def _on_sweep_max_hold_toggle(self, on):
+        """When in Sweep mode, the Max-hold checkbox controls our cross-pass
+        max accumulator (per-frame max-hold doesn't make sense across retunes).
+        Unchecking it stops drawing the max trace but does NOT clear the
+        accumulator — re-checking immediately shows the running max."""
+        if not self._sweep_active:
+            return
+        self._sweep_show_max = bool(on)
+        # Push the current state to the plot right away so the user sees the
+        # max trace appear/disappear without waiting for the next pass.
+        self._finish_sweep_pass(_refresh_only=True)
+
+    @Slot()
+    def _on_sweep_reset_max(self):
+        """Clear the cross-pass max-hold accumulator."""
+        if not self._sweep_active:
+            return
+        self._sweep_max_db = None
+        self._finish_sweep_pass(_refresh_only=True)
+
+    def _effective_sweep_step_hz(self):
+        """Resolved step size: user override if set, else ~80% of samp_rate.
+        Clamped to (0, samp_rate]."""
+        sr = float(self.samp_rate) if self.samp_rate else 1e6
+        step = float(self._sweep_step_hz) if self._sweep_step_hz > 0 else sr * 0.8
+        return max(1e3, min(sr, step))
+
+    def _parse_eng_or_none(self, text):
+        """Parse a user-entered frequency into Hz, accepting:
+          * plain numbers ('690000000', '6.9e8'),
+          * SI suffixes case-insensitively ('690M', '690m', '2G', '2g',
+            '100k') — the lowercase letters would otherwise mean milli/etc.,
+            but this is a radio app where every value is way above 1 Hz, so
+            we treat them as the obvious mega/giga/kilo,
+          * an optional trailing 'Hz' / 'MHz' / 'GHz' / 'kHz' (any case,
+            spaces ignored).
+        Returns float Hz, or None if it can't make sense of the input."""
+        s = str(text).strip().replace(' ', '')
+        if not s:
+            return None
+        if len(s) >= 2 and s[-2:].lower() == 'hz':
+            s = s[:-2]
+        # Normalize the SI suffix to the form gnuradio.eng_notation expects:
+        # giga = 'G', mega = 'M', kilo = 'k' (lowercase, because eng_notation
+        # uses uppercase 'K' for kelvin / nothing). The user may type either
+        # case for any of them.
+        _suffix_map = {'g': 'G', 'G': 'G',
+                       'm': 'M', 'M': 'M',
+                       'k': 'k', 'K': 'k'}
+        if s and s[-1] in _suffix_map:
+            s = s[:-1] + _suffix_map[s[-1]]
+        try:
+            return float(eng_notation.str_to_num(s))
+        except Exception:
+            pass
+        try:
+            return float(s)
+        except Exception:
+            return None
+
+    def _on_sweep_range_edit(self):
+        """Parse Start/Stop edits, clamp to the radio's range, persist, and
+        restart the sweep loop if Sweep mode is active."""
+        start = self._parse_eng_or_none(self._sweep_start_edit.text())
+        stop  = self._parse_eng_or_none(self._sweep_stop_edit.text())
+        if start is None or stop is None or stop <= start:
+            # Bad input: refresh the edits to the last good values.
+            self._sweep_start_edit.setText(_fmt_hz(self._sweep_start_hz))
+            self._sweep_stop_edit.setText(_fmt_hz(self._sweep_stop_hz))
+            return
+        if self._hw_freq_range is not None:
+            lo, hi = self._hw_freq_range
+            start = max(lo, min(hi, start))
+            stop  = max(lo, min(hi, stop))
+            if stop <= start:
+                stop = min(hi, start + 100e6)
+        self._sweep_start_hz = start
+        self._sweep_stop_hz  = stop
+        self._sweep_start_edit.setText(_fmt_hz(start))
+        self._sweep_stop_edit.setText(_fmt_hz(stop))
+        self._save_setting('sweep', 'start_hz', float(start))
+        self._save_setting('sweep', 'stop_hz',  float(stop))
+        if self._sweep_active:
+            self._sweep_max_db = None   # bins remap; old max-hold no longer applies
+            self._start_sweep_pass()
+
+    def _on_sweep_step_edit(self):
+        """Parse the Step edit ('auto' or an eng-notation number), persist,
+        and restart the sweep loop."""
+        text = self._sweep_step_edit.text().strip().lower()
+        if text in ("", "auto", "0"):
+            step = 0.0
+        else:
+            parsed = self._parse_eng_or_none(text)
+            step = parsed if (parsed is not None and parsed > 0) else 0.0
+        self._sweep_step_hz = step
+        self._sweep_step_edit.setText(
+            "auto" if step <= 0 else _fmt_hz(step))
+        self._save_setting('sweep', 'step_hz', float(step))
+        if self._sweep_active:
+            self._sweep_max_db = None   # bins remap; old max-hold no longer applies
+            self._start_sweep_pass()
+
+    def _on_mode_changed(self, mode: str):
+        """Switch between Live and Sweep. Mutually exclusive; persists
+        the selection."""
+        want_sweep = (mode == 'sweep')
+        # Tuning group is meaningless in Sweep (we choose the center per step);
+        # disable so the user isn't confused. The Sweep group is hidden in
+        # Live so it doesn't clutter the sidebar.
+        self._tuning_group.setEnabled(not want_sweep)
+        self._sweep_group.setVisible(want_sweep)
+        if want_sweep and not self._playback_mode:
+            self._enter_sweep_mode()
+        else:
+            self._exit_sweep_mode()
+        self._sweep_enabled = want_sweep
+        self._save_setting('sweep', 'enabled', want_sweep)
+
+    def _enter_sweep_mode(self):
+        """Force the processor into one-shot mode (alpha=1, no per-frame
+        hold) and kick off the first sweep pass. Cross-pass max-hold takes
+        over the role of the existing Max-hold checkbox."""
+        if self._sweep_active:
+            return
+        # Save the user's prior averaging/hold settings; force the processor
+        # into a "one frame at a time" configuration that's meaningful per
+        # tune step. Restored in _exit_sweep_mode.
+        self._sweep_saved_alpha = float(self._processor._avg_alpha)
+        self._sweep_saved_max   = bool(self._processor._max_on)
+        self._sweep_saved_min   = bool(self._processor._min_on)
+        self._processor.set_average_alpha(1.0)
+        self._processor.set_max_hold(False)
+        self._processor.set_min_hold(False)
+        # Detach the processor's continuous frame_ready from the plots — in
+        # Sweep mode each processor frame is a single-tune-step FFT, but the
+        # plots are now configured for the WIDE stitched x-axis, so letting
+        # those frames through would render single-step data smeared across
+        # the whole span (wrong bin geometry, signals at the wrong x). We
+        # drive the plots ourselves from _finish_sweep_pass instead. The
+        # cache slot stays connected — it's what the sweep loop reads.
+        try:
+            self._processor.frame_ready.disconnect(self._fft_plot.on_frame)
+            self._processor.frame_ready.disconnect(self._waterfall_plot.on_frame)
+        except (TypeError, RuntimeError):
+            pass
+        # Mirror the user's prior Max-hold preference into the cross-pass
+        # accumulator so it just keeps working when they enter Sweep.
+        self._sweep_show_max = self._sweep_saved_max
+        self._sweep_max_db = None
+        # Always re-apply the sweep x-axis on entry, even if the grid hasn't
+        # changed from a previous sweep run — otherwise the plot keeps the
+        # Live axis that _exit_sweep_mode set last time.
+        self._sweep_axis_needs_apply = True
+        self._sweep_active = True
+        self._start_sweep_pass()
+
+    def _exit_sweep_mode(self):
+        """Stop the sweep loop, reconnect the live plot pipeline, and restore
+        the user's prior processor settings."""
+        if not self._sweep_active:
+            return
+        self._sweep_active = False
+        self._sweep_timer.stop()
+        # Reattach the processor's continuous frame_ready to the plots so the
+        # Live view resumes. Use a try/except in case it's somehow already
+        # connected (e.g. an aborted enter_sweep_mode).
+        try:
+            self._processor.frame_ready.connect(self._fft_plot.on_frame)
+            self._processor.frame_ready.connect(self._waterfall_plot.on_frame)
+        except Exception:
+            pass
+        if self._sweep_saved_alpha is not None:
+            self._processor.set_average_alpha(self._sweep_saved_alpha)
+            self._processor.set_max_hold(self._sweep_saved_max)
+            self._processor.set_min_hold(self._sweep_saved_min)
+            self._sweep_saved_alpha = None
+        # Restore the plots' frequency range to the tuned center.
+        self._fft_plot.set_frequency_range(self.center_freq, self.samp_rate)
+        self._waterfall_plot.set_frequency_range(self.center_freq, self.samp_rate)
+        # Retune the radio back to the user's chosen center frequency.
+        if self._source is not None:
+            self._source.set_center_freq(self.center_freq)
+        self._sweep_status_label.setText("Idle")
+
+    def _start_sweep_pass(self):
+        """(Re)compute the sweep grid from current Start/Stop/Step + FFT size,
+        allocate (or reuse) the wide buffer, and start step 0. Reusing the
+        previous pass's wide_db is intentional: each step overwrites one
+        slot, so the display always shows a complete wide trace with the
+        freshly-swept region updated (no flat-line gap on the right)."""
+        if not self._sweep_active or self._source is None:
+            return
+        n = int(self._processor._fft_size)
+        sr = float(self.samp_rate)
+        step_hz = self._effective_sweep_step_hz()
+        kept_bins = max(8, int(round(step_hz / sr * n)))
+        # Even kept_bins keeps a symmetric slice around DC (avoids the bin
+        # right on top of the LO leakage and keeps left/right symmetric).
+        kept_bins -= kept_bins % 2
+        if kept_bins >= n:
+            kept_bins = n - 2
+        start_idx = (n - kept_bins) // 2
+        span = self._sweep_stop_hz - self._sweep_start_hz
+        n_steps = max(1, int(np.ceil(span / step_hz)))
+        # Adjusted step so n_steps tiles [start, start+n_steps*step) exactly.
+        actual_step = span / n_steps
+        # Recompute kept_bins so the tile width matches actual_step.
+        kept_bins = max(8, int(round(actual_step / sr * n)))
+        kept_bins -= kept_bins % 2
+        kept_bins = min(kept_bins, n - 2)
+        start_idx = (n - kept_bins) // 2
+        self._sweep_n_steps   = n_steps
+        self._sweep_kept_bins = kept_bins
+        self._sweep_start_idx = start_idx
+        self._sweep_eff_bw     = n_steps * actual_step
+        self._sweep_eff_center = self._sweep_start_hz + self._sweep_eff_bw / 2.0
+        self._sweep_step_actual_hz = actual_step
+        total = n_steps * kept_bins
+        grid_changed = (self._sweep_wide_db is None
+                        or len(self._sweep_wide_db) != total)
+        if grid_changed:
+            # Fresh allocation (first pass or grid changed) — paint a flat
+            # floor so progressive fill is visible against something. Also
+            # reset the max-hold accumulator (bins remap).
+            self._sweep_wide_db = np.full(total, -150.0, dtype=np.float32)
+            self._sweep_max_db = None
+        # Apply the sweep x-axis when the grid changed OR we just entered
+        # Sweep mode (the axis_needs_apply one-shot flag). Otherwise leave
+        # the plot's visible range alone so a user zoom into a region of
+        # interest survives pass-to-pass updates within the same sweep run.
+        if grid_changed or self._sweep_axis_needs_apply:
+            self._fft_plot.set_frequency_range(self._sweep_eff_center,
+                                               self._sweep_eff_bw)
+            self._waterfall_plot.set_frequency_range(self._sweep_eff_center,
+                                                     self._sweep_eff_bw)
+            self._sweep_axis_needs_apply = False
+        else:
+            # Pass-to-pass update with same grid and no entry — preserve the
+            # user's zoom by setting the plot widgets' internal freq state
+            # directly, without calling set_frequency_range (which calls
+            # setXRange and would reset the view).
+            self._fft_plot._center_freq = self._sweep_eff_center
+            self._fft_plot._samp_rate = self._sweep_eff_bw
+            self._waterfall_plot._center_freq = self._sweep_eff_center
+            self._waterfall_plot._samp_rate = self._sweep_eff_bw
+        self._sweep_step_idx = 0
+        self._sweep_latest_avg_db = None
+        self._tune_for_sweep_step(0)
+        self._sweep_timer.start(self._sweep_settle_ms)
+
+    def _tune_for_sweep_step(self, idx):
+        """Retune the source to step `idx`'s center frequency and update
+        the status label."""
+        center = (self._sweep_start_hz
+                  + (idx + 0.5) * self._sweep_step_actual_hz)
+        if self._source is not None:
+            self._source.set_center_freq(center)
+        self._sweep_status_label.setText(
+            f"Step {idx + 1}/{self._sweep_n_steps} @ {_fmt_hz(center)}")
+
+    @Slot()
+    def _sweep_capture_and_advance(self):
+        """Settle timer fired: capture the cached frame for the current
+        step, write its center slice into the wide buffer, advance to the
+        next step or finish the pass."""
+        if not self._sweep_active:
+            return
+        avg = self._sweep_latest_avg_db
+        kb = self._sweep_kept_bins
+        si = self._sweep_start_idx
+        i = self._sweep_step_idx
+        wrote_slot = False
+        if avg is not None and len(avg) >= si + kb and self._sweep_wide_db is not None:
+            self._sweep_wide_db[i * kb:(i + 1) * kb] = np.asarray(
+                avg[si:si + kb], dtype=np.float32)
+            wrote_slot = True
+        # Else: no frame arrived yet (very first step before any processor
+        # tick) — leave the previous pass's value (or the -150 floor) in
+        # place; the next pass will fill it.
+
+        # Push the partial wide buffer to the FFT plot so the trace updates
+        # at the step rate instead of jumping once per full pass. Max-hold
+        # stays at the prior pass's value until _finish_sweep_pass merges
+        # the new pass in — consistent semantics (max-hold = per-pass).
+        if wrote_slot and self._sweep_wide_db is not None:
+            max_for_plot = (self._sweep_max_db
+                            if (self._sweep_show_max
+                                and self._sweep_max_db is not None
+                                and len(self._sweep_max_db) == len(self._sweep_wide_db))
+                            else None)
+            self._fft_plot.on_frame(self._sweep_wide_db, max_for_plot, None)
+
+        self._sweep_step_idx += 1
+        if self._sweep_step_idx >= self._sweep_n_steps:
+            self._finish_sweep_pass()
+            if self._sweep_active:
+                self._start_sweep_pass()
+            return
+        self._tune_for_sweep_step(self._sweep_step_idx)
+        self._sweep_latest_avg_db = None  # force a fresh frame post-settle
+        self._sweep_timer.start(self._sweep_settle_ms)
+
+    def _finish_sweep_pass(self, _refresh_only=False):
+        """Push the stitched wide spectrum to the FFT + waterfall plots, and
+        update the cross-pass max-hold accumulator. `_refresh_only=True` skips
+        the max-hold update (used when the Max-hold checkbox or Reset Max
+        button needs to refresh the display without a fresh pass)."""
+        if self._sweep_wide_db is None:
+            return
+        # Update the cross-pass max-hold accumulator from the new pass.
+        if not _refresh_only:
+            if (self._sweep_max_db is None
+                    or len(self._sweep_max_db) != len(self._sweep_wide_db)):
+                self._sweep_max_db = self._sweep_wide_db.copy()
+            else:
+                np.maximum(self._sweep_max_db, self._sweep_wide_db,
+                           out=self._sweep_max_db)
+        # The plots' x-axis was set by _start_sweep_pass on grid change;
+        # don't re-call set_frequency_range here, it would reset any user
+        # zoom on every pass. Just push the wide buffer.
+        # Pass the cross-pass max array when the user has Max-hold checked
+        # (the FftPlotWidget draws it as the green Max-hold trace). Min-hold
+        # is not implemented for sweep — pass None.
+        max_for_plot = (self._sweep_max_db
+                        if (self._sweep_show_max
+                            and self._sweep_max_db is not None)
+                        else None)
+        self._fft_plot.on_frame(self._sweep_wide_db, max_for_plot, None)
+        self._waterfall_plot.on_frame(self._sweep_wide_db, None, None)
 
     def _build_menu_bar(self):
         bar = QtWidgets.QMenuBar(self)
