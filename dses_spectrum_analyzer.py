@@ -199,6 +199,12 @@ DEFAULTS = {
         # samp_rate). Defaults match the validated lab L-band geometry.
         'fil_nchans':      2048,
         'fil_integrate':   1,
+        # Optional source/pulsar name folded into the output filename AND written
+        # into the SIGPROC .fil header (source_name). Blank = timestamp-only name.
+        'source_name':     '',
+        # Optional target recording length; blank = record until stopped. Accepts
+        # minutes ("30") or H:MM / HH:MM:SS ("1:30"); auto-stops when reached.
+        'rec_duration':    '',
     },
     'spectrum': {
         'fft_size':        1024,
@@ -3663,6 +3669,15 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         self._fil_nchans = max(2, int(self._app_settings.get_int('recording', 'fil_nchans')))
         self._fil_integrate = max(1, int(self._app_settings.get_int('recording', 'fil_integrate')))
         self._fil_sink = None  # current FilterbankSink, or None when not recording
+        # Optional source name + timed-recording state (features: name-in-filename,
+        # elapsed counter, red REC indicator, "record for" duration + auto-stop).
+        self._source_name = self._app_settings.get_str('recording', 'source_name')
+        self._rec_duration_text = self._app_settings.get_str('recording', 'rec_duration')
+        self._rec_start_time = None   # time.monotonic() at record start, else None
+        self._rec_duration_s = 0      # parsed target length in seconds (0 = none)
+        self._rec_timer = QtCore.QTimer(self)
+        self._rec_timer.setInterval(1000)
+        self._rec_timer.timeout.connect(self._tick_recording)
 
         self._recording_dir_button = QtWidgets.QPushButton("Folder: " + self._elided_dir())
         self._recording_dir_button.setToolTip(self.recording_dir)
@@ -3837,6 +3852,22 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         self._record_format_tool_bar.addWidget(self._record_format_combo)
         self._record_group_layout.addWidget(self._record_format_tool_bar)
 
+        # --- Optional source / pulsar name (plain row, not a QToolBar, so it
+        #     doesn't collapse into an overflow menu in the narrow sidebar) ---
+        self._source_name_widget = QtWidgets.QWidget(self)
+        _src_row = QtWidgets.QHBoxLayout(self._source_name_widget)
+        _src_row.setContentsMargins(0, 0, 0, 0)
+        _src_row.addWidget(QtWidgets.QLabel("Source:"))
+        self._source_name_edit = QtWidgets.QLineEdit(self._source_name)
+        self._source_name_edit.setPlaceholderText("optional, e.g. B0329+54")
+        self._source_name_edit.setToolTip(
+            "Optional source / pulsar name. When set it is added to the recording\n"
+            "filename AND written into the SIGPROC .fil header (source_name), which\n"
+            "PRESTO/prepfold read. Leave blank for a timestamp-only filename.")
+        self._source_name_edit.editingFinished.connect(self._on_source_name_changed)
+        _src_row.addWidget(self._source_name_edit, 1)
+        self._record_group_layout.addWidget(self._source_name_widget)
+
         # --- .fil geometry (only meaningful in filterbank mode) ---
         # A plain two-row grid, NOT a QToolBar. A QToolBar collapses any widget
         # that doesn't fit the available width into an overflow ("»") menu, and
@@ -3861,6 +3892,21 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         _fil_geom_grid.addWidget(self._fil_integrate_spin, 1, 1)
         self._record_group_layout.addWidget(self._fil_geom_widget)
 
+        # --- Optional recording duration (auto-stop) ---
+        self._rec_duration_widget = QtWidgets.QWidget(self)
+        _dur_row = QtWidgets.QHBoxLayout(self._rec_duration_widget)
+        _dur_row.setContentsMargins(0, 0, 0, 0)
+        _dur_row.addWidget(QtWidgets.QLabel("Record for:"))
+        self._rec_duration_edit = QtWidgets.QLineEdit(self._rec_duration_text)
+        self._rec_duration_edit.setPlaceholderText("min or H:MM")
+        self._rec_duration_edit.setToolTip(
+            "Optional recording length: minutes (e.g. 30) or H:MM / HH:MM:SS\n"
+            "(e.g. 1:30). The recording auto-stops when it is reached; the counter\n"
+            "below shows a countdown. Leave blank to record until you stop it.")
+        self._rec_duration_edit.editingFinished.connect(self._on_rec_duration_changed)
+        _dur_row.addWidget(self._rec_duration_edit, 1)
+        self._record_group_layout.addWidget(self._rec_duration_widget)
+
         # --- Record selector ---
         self._record_options = [0, 1]
         self._record_labels = ['Stopped', 'Recording']
@@ -3883,6 +3929,14 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         self._recording_status.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self._recording_status.setWordWrap(True)
         self._record_group_layout.addWidget(self._recording_status)
+
+        # Elapsed / countdown counter with a red REC dot; only visible while a
+        # recording is actually running (set by _on_recording_started/_stopped).
+        self._rec_elapsed_label = QtWidgets.QLabel("")
+        self._rec_elapsed_label.setStyleSheet(
+            "color: #e74c3c; font-weight: bold;")   # red REC text
+        self._rec_elapsed_label.setVisible(False)
+        self._record_group_layout.addWidget(self._rec_elapsed_label)
 
         # Grey out the .fil geometry row unless filterbank format is selected.
         self._update_fil_geom_enabled()
@@ -4727,13 +4781,14 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
             return  # already recording
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         path = os.path.join(self.recording_dir,
-                            f"DSES_Spectrum_Analyzer_{ts}.fil")
+                            self._recording_basename(ts) + ".fil")
         try:
             sink = sigproc_fil.FilterbankSink(
                 path, nchans=self._fil_nchans, samp_rate=self.samp_rate,
                 center_freq_mhz=self.center_freq / 1e6,
                 tstart_mjd=sigproc_fil.unix_to_mjd(time.time()),
-                integrate=self._fil_integrate, source_name="capture")
+                integrate=self._fil_integrate,
+                source_name=(self._source_name.strip() or "capture"))
         except Exception as exc:
             QtWidgets.QMessageBox.critical(
                 self, "Recording failed to start",
@@ -4767,6 +4822,7 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
             f"Recording → {os.path.basename(path)} "
             f"({self._fil_nchans} ch, tsamp {tsamp_ms:.4g} ms)")
         self._recording_status.setToolTip(path)
+        self._on_recording_started()
 
     def _start_sigmf_recording(self):
         """Construct a fresh SigMF sink with a timestamped filename and
@@ -4776,8 +4832,8 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         if self._sigmf_sink is not None:
             return  # already recording
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        base = os.path.join(self.recording_dir,
-                            f"DSES_Spectrum_Analyzer_{ts}")
+        base = os.path.join(self.recording_dir, self._recording_basename(ts))
+        _src = self._source_name.strip()
         try:
             assert self._source is not None  # guarded by _playback_mode check above
             sink = blocks.sigmf_sink_minimal(
@@ -4786,7 +4842,8 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
                 sample_rate=self.samp_rate,
                 center_freq=self.center_freq,
                 author=APP_AUTHOR,
-                description=f"Spectrum analyzer capture ({self._source.display_label})",
+                description=(f"Spectrum analyzer capture ({self._source.display_label})"
+                            + (f" — source {_src}" if _src else "")),
                 hw_info=self._source.hw_info,
                 is_complex=True)
         except Exception as exc:
@@ -4815,6 +4872,7 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         self._recording_status.setText(
             f"Recording → {os.path.basename(base)}.sigmf-data")
         self._recording_status.setToolTip(f"{base}.sigmf-data")
+        self._on_recording_started()
 
     def _stop_recording(self):
         """Pull whichever recording sink is active out of the flowgraph and
@@ -4843,6 +4901,7 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
             sink.close()  # flush + close the .fil
         except Exception as exc:
             print(f"Filterbank close failed: {exc}", file=sys.stderr)
+        self._on_recording_stopped()   # stop the counter, clear the red indicator
         path = getattr(self, '_fil_sink_path', '')
         if path:
             self._recording_status.setText(f"Saved → {os.path.basename(path)}")
@@ -4867,6 +4926,7 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         except Exception as exc:
             print(f"Recording disconnect failed: {exc}", file=sys.stderr)
         del sink  # let GC run the destructor and flush the file
+        self._on_recording_stopped()   # stop the counter, clear the red indicator
         path = getattr(self, '_sigmf_sink_path', '')
         if path:
             self._recording_status.setText(
@@ -4875,6 +4935,98 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         else:
             self._recording_status.setText("Idle")
             self._recording_status.setToolTip("")
+
+    # --- Source name + timed-recording helpers -----------------------------
+
+    def _on_source_name_changed(self):
+        self._source_name = self._source_name_edit.text().strip()
+        self._save_setting('recording', 'source_name', self._source_name)
+
+    def _on_rec_duration_changed(self):
+        self._rec_duration_text = self._rec_duration_edit.text().strip()
+        self._save_setting('recording', 'rec_duration', self._rec_duration_text)
+
+    @staticmethod
+    def _sanitize_name(name):
+        """A filesystem-safe token from a source name ('' if nothing usable)."""
+        keep = ("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+                "0123456789+.-")
+        s = "".join(c if c in keep else "_" for c in (name or "").strip())
+        return s.strip("_")[:40]
+
+    def _recording_basename(self, ts):
+        """DSES_Spectrum_Analyzer[_<source>]_<timestamp>  (no extension)."""
+        src = self._sanitize_name(self._source_name)
+        parts = ["DSES_Spectrum_Analyzer"] + ([src] if src else []) + [ts]
+        return "_".join(parts)
+
+    @staticmethod
+    def _parse_duration_s(text):
+        """'30' -> minutes; 'H:MM' / 'HH:MM:SS' -> that time. Returns seconds, or
+        0 if blank/unparseable (meaning 'record until manually stopped')."""
+        t = (text or "").strip()
+        if not t:
+            return 0
+        try:
+            if ":" in t:
+                p = [int(x) for x in t.split(":")]
+                if len(p) == 2:
+                    return (p[0] * 60 + p[1]) * 60
+                if len(p) == 3:
+                    return p[0] * 3600 + p[1] * 60 + p[2]
+                return 0
+            return int(round(float(t) * 60))     # a plain number = minutes
+        except ValueError:
+            return 0
+
+    @staticmethod
+    def _fmt_hms(seconds):
+        s = max(0, int(seconds)); h, r = divmod(s, 3600); m, s = divmod(r, 60)
+        return f"{h}:{m:02d}:{s:02d}"
+
+    def _on_recording_started(self):
+        """Called once a recording sink is actually live: start the elapsed /
+        countdown counter, turn the status indicator red, and arm the auto-stop."""
+        self._rec_start_time = time.monotonic()
+        self._rec_duration_s = self._parse_duration_s(self._rec_duration_text)
+        self._recording_status.setStyleSheet(
+            "color: white; background-color: #c0392b;"
+            " padding: 2px 4px; border-radius: 3px;")     # red = RECORDING
+        self._source_name_widget.setEnabled(False)        # locked in for this file
+        self._rec_duration_widget.setEnabled(False)
+        self._rec_elapsed_label.setVisible(True)
+        self._tick_recording()                             # paint 0:00 at once
+        self._rec_timer.start()
+
+    def _on_recording_stopped(self):
+        """Called when a recording sink is torn down: stop the counter and clear
+        the red indicator. Idempotent (safe if nothing was running)."""
+        self._rec_timer.stop()
+        self._rec_start_time = None
+        self._recording_status.setStyleSheet("")           # back to normal colour
+        self._source_name_widget.setEnabled(True)
+        self._rec_duration_widget.setEnabled(True)
+        self._rec_elapsed_label.setVisible(False)
+        self._rec_elapsed_label.setText("")
+
+    def _tick_recording(self):
+        """1 Hz: refresh the elapsed/countdown text; auto-stop at the target."""
+        if self._rec_start_time is None:
+            return
+        elapsed = time.monotonic() - self._rec_start_time
+        if self._rec_duration_s > 0:
+            if elapsed >= self._rec_duration_s:
+                self._rec_elapsed_label.setText(
+                    "⏺ REC  " + self._fmt_hms(self._rec_duration_s)
+                    + " / " + self._fmt_hms(self._rec_duration_s))
+                self.set_record(0)          # target reached -> stop_recording
+                return
+            self._rec_elapsed_label.setText(
+                "⏺ REC  " + self._fmt_hms(elapsed)
+                + "  (−" + self._fmt_hms(self._rec_duration_s - elapsed)
+                + " left)")
+        else:
+            self._rec_elapsed_label.setText("⏺ REC  " + self._fmt_hms(elapsed))
 
     def get_gain(self):
         return self.gain
