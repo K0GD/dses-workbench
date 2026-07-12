@@ -33,6 +33,7 @@ The header is tagged ``telescope_id = 12`` so the DSES processing side routes
 it VLA -> observatory 'c' -> Haswell.
 """
 
+import re
 import struct
 from pathlib import Path
 
@@ -63,6 +64,38 @@ def _kv_dbl(name, val):
     return _str(name) + struct.pack("<d", float(val))
 
 
+_PSR_DESIG_RE = re.compile(
+    r'^(?:PSR[\s_]*)?[BJ][\s_]*'
+    r'(\d{2})(\d{2})(\d{2}(?:\.\d+)?)?'    # RA:  HH MM [SS[.s]]
+    r'[\s_]*([+-])[\s_]*'                      # sign
+    r'(\d{2})(\d{2})?(\d{2}(?:\.\d+)?)?',   # Dec: DD [MM [SS[.s]]]
+    re.IGNORECASE)
+
+
+def radec_from_name(name):
+    """Best-effort (src_raj, src_dej) in SIGPROC packed sexagesimal from a pulsar
+    designation -- the name encodes its own position (IAU convention):
+
+        'B0329+54'          -> (32900.0,  540000.0)      # 03:29,      +54
+        'J0332+5434'        -> (33200.0,  543400.0)      # 03:32,      +54:34
+        'J033259.37+543443' -> (33259.37, 543443.0)      # 03:32:59.37, +54:34:43
+        'J1935-1408'        -> (193500.0, -140800.0)
+
+    SIGPROC packs RA as HHMMSS.sss and Dec as (+/-)DDMMSS.sss into a float, which
+    is exactly the name's digit layout. Returns (0.0, 0.0) for anything that
+    isn't a recognizable B/J designation (e.g. 'capture', 'Sun', ''). B-name
+    coordinates are B1950 (approximate read as J2000) -- enough to give
+    PRESTO/prepfold a pointing without a catalog; pass src_raj/src_dej explicitly
+    to override with exact (e.g. catalog) coordinates."""
+    m = _PSR_DESIG_RE.match((name or "").strip())
+    if not m:
+        return (0.0, 0.0)
+    hh, mm, ss, sign, dd, dm, ds = m.groups()
+    raj = float(hh) * 1e4 + float(mm) * 1e2 + (float(ss) if ss else 0.0)
+    dej = float(dd) * 1e4 + (float(dm) if dm else 0.0) * 1e2 + (float(ds) if ds else 0.0)
+    return (raj, -dej if sign == '-' else dej)
+
+
 def sigproc_header(*, source_name, fch1, foff, nchans, nbits, tstart, tsamp,
                    telescope_id=12, machine_id=0, src_raj=0.0, src_dej=0.0,
                    rawdatafile="sim.fil"):
@@ -72,6 +105,11 @@ def sigproc_header(*, source_name, fch1, foff, nchans, nbits, tstart, tsamp,
     maps to observatory 'c' = Haswell. data_type=1 means filterbank, nifs=1
     means one IF/polarization in the written data (pols already summed).
     """
+    # If coordinates weren't supplied, derive an approximate RA/Dec from the
+    # source name (pulsar B/J designations encode their own position) so
+    # PRESTO/prepfold get a pointing. Explicit non-zero coordinates win.
+    if not src_raj and not src_dej:
+        src_raj, src_dej = radec_from_name(source_name)
     h = _str("HEADER_START")
     h += _kv_int("telescope_id", telescope_id)   # 12 -> VLA -> Haswell
     h += _kv_int("machine_id", machine_id)        # 0
