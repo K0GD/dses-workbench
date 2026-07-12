@@ -3251,6 +3251,12 @@ class RadioSource:
         opts = self.samp_rate_options or [1e6]
         return (float(min(opts)), float(max(opts)))
 
+    def freq_range(self):
+        """(min_hz, max_hz) center frequencies the device can tune to, or
+        None if unknown. Hardware-backed subclasses override with real
+        limits; the base can't know, so the sweep range just isn't clamped."""
+        return None
+
     def get_actual_samp_rate(self) -> float:
         """The rate the device is really running, which can differ from the
         requested value after the driver snaps to an achievable rate. Return
@@ -3381,6 +3387,17 @@ class UhdB200Source(RadioSource):
         except Exception:
             pass
         return RadioSource.samp_rate_range(self)
+
+    def freq_range(self):
+        """The B210's RF tuning range, from UHD."""
+        try:
+            r = self.block.get_freq_range(0)     # uhd.meta_range_t
+            lo, hi = float(r.start()), float(r.stop())
+            if hi > lo > 0:
+                return (lo, hi)
+        except Exception:
+            pass
+        return None
 
     def get_actual_samp_rate(self) -> float:
         try:
@@ -3582,6 +3599,26 @@ class SoapyGenericSource(RadioSource):
         except Exception:
             pass
         return RadioSource.samp_rate_range(self)
+
+    def freq_range(self):
+        """The driver's reported RF tuning range, via SoapySDR."""
+        try:
+            rngs = self.block.get_frequency_range(0)
+            try:
+                items = list(rngs)
+            except TypeError:
+                items = [rngs]
+            mins, maxs = [], []
+            for rg in items:
+                mn = rg.minimum() if hasattr(rg, "minimum") else rg.start()
+                mx = rg.maximum() if hasattr(rg, "maximum") else rg.stop()
+                mins.append(float(mn))
+                maxs.append(float(mx))
+            if mins and maxs and max(maxs) > min(mins) > 0:
+                return (min(mins), max(maxs))
+        except Exception:
+            pass
+        return None
 
     def get_actual_samp_rate(self) -> float:
         try:
@@ -4104,7 +4141,8 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         self._sweep_saved_max = None
         self._sweep_saved_min = None
         self._sweep_saved_baseline = None
-        self._hw_freq_range   = None   # (lo, hi) radio range for clamping, if known
+        self._hw_freq_range = (self._source.freq_range()
+                               if self._source is not None else None)
         self._sweep_timer = QTimer(self)
         self._sweep_timer.setSingleShot(True)
         self._sweep_timer.timeout.connect(self._sweep_capture_and_advance)
