@@ -1064,7 +1064,7 @@ class FftPlotWidget(QtWidgets.QWidget):
 
         # Baseline / bandpass-removal group (radio-astronomy: flatten the
         # instrument bandpass so a weak line stands proud of ~0).
-        base_group = QtWidgets.QGroupBox("Baseline")
+        self._baseline_group = base_group = QtWidgets.QGroupBox("Baseline")
         bf = QtWidgets.QFormLayout(base_group)
         bf.setContentsMargins(4, 4, 4, 4)
         self._baseline_combo = QtWidgets.QComboBox()
@@ -1440,6 +1440,13 @@ class FftPlotWidget(QtWidgets.QWidget):
             self._place_label(self._label_b, b)
         self._label_b.setVisible(b is not None)
         self._freeze_dots.setData(spots)
+
+    def clear_markers(self):
+        """Clear both frozen A/B markers and redraw — used when the x-axis
+        meaning changes (entering/leaving Sweep) so a stale marker can't point
+        at the wrong frequency."""
+        self._frozen['A'] = self._frozen['B'] = None
+        self._update_frozen()
 
     # --- Plot title with the resolution bandwidth -------------------------
 
@@ -2451,6 +2458,15 @@ and drop them next to the program. (You don't need to change any code.)</li>
 </ul>
 
 <h3>Sidebar controls (right side)</h3>
+<h4>Mode</h4>
+<ul>
+<li><b>Live</b>: real-time FFT of the radio's instantaneous bandwidth around
+one tuned center frequency (the traditional view).</li>
+<li><b>Sweep</b>: stepped scan across a wide range — for RFI surveys that span
+more than the radio's instantaneous bandwidth. The radio is retuned across the
+range and each step's FFT is stitched into one wide trace. See the <b>Sweep</b>
+group below. Unavailable in Playback.</li>
+</ul>
 <h4>Tuning</h4>
 <ul>
 <li><b>Pulsar Band</b>: preset frequencies for common pulsar observation
@@ -2462,6 +2478,23 @@ the manual frequency).</li>
 Accepts engineering notation, e.g. <code>1.42G</code> or <code>408M</code>.</li>
 </ul>
 
+<p>The Tuning group is disabled in Sweep mode (the center frequency is chosen
+automatically per step).</p>
+<h4>Sweep (visible in Sweep mode)</h4>
+<ul>
+<li><b>Start / Stop</b>: bottom and top of the swept range. Keep them within the
+connected radio's tuning range.</li>
+<li><b>Step</b>: Hz per tuning step. Type <code>auto</code> for ~80% of the
+current sample rate (recommended — keeps the clean middle of each FFT and avoids
+the DC spike plus band-edge rolloff). For tighter spacing enter a value, e.g.
+<code>2M</code>.</li>
+<li><b>Status</b>: current step number and tune frequency, or <i>Idle</i> in Live.</li>
+</ul>
+<p>Sweep runs continuously, redrawing the wide trace after each pass; the
+waterfall adds one row per pass. Sample rate and gain still apply to each step's
+FFT. Averaging, Max/Min hold, and baseline removal are forced off while sweeping
+(they would smear across retunes) and restored on return to Live; frozen cursor
+markers are cleared when entering or leaving Sweep.</p>
 <h4>RX</h4>
 <ul>
 <li><b>Sample Rate</b>: per-radio. The combo shows validated quick-pick rates
@@ -4070,6 +4103,7 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         self._sweep_saved_alpha = None
         self._sweep_saved_max = None
         self._sweep_saved_min = None
+        self._sweep_saved_baseline = None
         self._hw_freq_range   = None   # (lo, hi) radio range for clamping, if known
         self._sweep_timer = QTimer(self)
         self._sweep_timer.setSingleShot(True)
@@ -4391,6 +4425,7 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         # disable so the user isn't confused. The Sweep group is hidden in
         # Live so it doesn't clutter the sidebar.
         self._tuning_group.setEnabled(not want_sweep)
+        self._fft_plot._baseline_group.setEnabled(not want_sweep)
         self._sweep_group.setVisible(want_sweep)
         if want_sweep and not self._playback_mode:
             self._enter_sweep_mode()
@@ -4414,6 +4449,13 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         self._processor.set_average_alpha(1.0)
         self._processor.set_max_hold(False)
         self._processor.set_min_hold(False)
+        # A stored OFF-source reference / flatten is center-frequency specific,
+        # so it would corrupt the retuned per-step FFTs — force baseline off and
+        # restore it on exit. Frozen markers would point at the wrong frequency
+        # once the x-axis becomes the wide swept span, so clear them.
+        self._sweep_saved_baseline = self._processor._baseline_mode
+        self._processor.set_baseline_mode('off')
+        self._fft_plot.clear_markers()
         # Detach the processor's continuous frame_ready from the plots — in
         # Sweep mode each processor frame is a single-tune-step FFT, but the
         # plots are now configured for the WIDE stitched x-axis, so letting
@@ -4456,7 +4498,11 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
             self._processor.set_average_alpha(self._sweep_saved_alpha)
             self._processor.set_max_hold(self._sweep_saved_max)
             self._processor.set_min_hold(self._sweep_saved_min)
+            if self._sweep_saved_baseline is not None:
+                self._processor.set_baseline_mode(self._sweep_saved_baseline)
+                self._sweep_saved_baseline = None
             self._sweep_saved_alpha = None
+        self._fft_plot.clear_markers()
         # Restore the plots' frequency range to the tuned center.
         self._fft_plot.set_frequency_range(self.center_freq, self.samp_rate)
         self._waterfall_plot.set_frequency_range(self.center_freq, self.samp_rate)
