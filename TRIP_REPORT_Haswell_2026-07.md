@@ -116,10 +116,20 @@ were copied unchanged and verified head+tail). Headers now read
 | **B0329+54** | topocentric (`-topo -p 0.714520 -dm 26.7641`) | **~20.1 σ** (Prob(noise) < 4.5×10⁻⁹⁰), P_topo 714.42 ms, DM peak ≈ 26 |
 | **B0329+54** | barycentric par fold (`-par J0332+5434.par`) | **~19.9 σ**, folded against the real ephemeris |
 | **B0950+08** | topocentric (`-topo -p 0.253065 -dm 2.97`) | **~9.7 σ** (Prob(noise) < 1.8×10⁻²²), P_topo 252.93 ms |
+| **B0950+08** | barycentric par fold (`-par J0953+0755.par`) | **~9.9 σ** (Prob(noise) < 2.5×10⁻²³), P_topo 252.94 ms; DM slides to ~0 (low DM over 20 MHz) |
 
-**Both pulsars clearly detected — the record → `.fil` → PRESTO pipeline is
-validated end-to-end on real dish data.** (Plots + `.bestprof` in
-`~/Documents/DSES_SA_Recordings/folds/`.)
+No J0953+0755 ephemeris existed anywhere (TEMPO's `tzpar/` here has almost none),
+so I built a minimal one in **`~/work/J0953+0755.par`** from the catalog position
++ F0/DM — an accurate *position* is what a barycentric fold needs, and prepfold's
+search handles the rest. B0329 used the existing `~/work/J0332+5434.par`. Both
+par folds run **warning-free** now that TEMPO's UT1 table is current (below).
+
+**Both pulsars clearly detected in both topocentric AND barycentric-ephemeris
+folds — the record → `.fil` → PRESTO pipeline is validated end-to-end on real
+dish data.** Full prepfold diagnostic plots are saved as **PDFs alongside the
+`.fil` files** in `~/Documents/DSES_SA_Recordings/` — for each recording a
+`…prepfold.pdf` (topocentric) and a `…prepfold-par.pdf` (barycentric); the
+`.pfd`/`.bestprof` working products stay in the `folds/` subdir.
 
 **TEMPO fixed for barycentric folds (Mac):**
 - `tempo` must be on `PATH` — PRESTO calls it by bare name (it lives in the
