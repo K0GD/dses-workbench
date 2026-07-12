@@ -1,0 +1,3 @@
+# Shell scripts run in Linux/WSL — force LF so a Windows checkout can't give
+# them CRLF (which breaks `#!/usr/bin/env bash`).
+*.sh text eol=lf
