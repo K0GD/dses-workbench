@@ -98,6 +98,30 @@ try {
         }
     }
 
+    # --- Normalize Unix-consumed text files to LF in the staging tree ---
+    # Checkout line endings become SHIPPED line endings, and a Windows
+    # autocrlf checkout gave launcher.sh a CRLF shebang in the 1.1.6 zip --
+    # which silently broke launching on Linux/macOS. .gitattributes now forces
+    # LF in fresh checkouts; this is the build-time guarantee regardless of
+    # how the tree was checked out.
+    $lfExts = @('.sh', '.command', '.desktop', '.py', '.yml')
+    Get-ChildItem -Path $stage -Recurse -File |
+        Where-Object { $lfExts -contains $_.Extension } |
+        ForEach-Object {
+            $bytes = [System.IO.File]::ReadAllBytes($_.FullName)
+            $hasCR = $false
+            for ($i = 0; $i -lt $bytes.Length; $i++) {
+                if ($bytes[$i] -eq 13) { $hasCR = $true; break }
+            }
+            if ($hasCR) {
+                $text = [System.Text.Encoding]::UTF8.GetString($bytes)
+                $text = $text.Replace("`r`n", "`n").Replace("`r", "`n")
+                [System.IO.File]::WriteAllBytes($_.FullName,
+                    [System.Text.Encoding]::UTF8.GetBytes($text))
+                Write-Host "  normalized to LF: $($_.Name)"
+            }
+        }
+
     # --- Zip ---
     # Build the zip with .NET ZipArchive, writing entry paths with FORWARD
     # SLASHES. We deliberately do NOT use Compress-Archive: Windows PowerShell
