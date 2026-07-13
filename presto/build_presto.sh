@@ -42,7 +42,7 @@ fi
 say "Installing build dependencies (sudo apt) ..."
 sudo apt-get update
 sudo apt-get install -y --no-install-recommends \
-  git build-essential gfortran tcsh autoconf automake libtool pkg-config \
+  git build-essential gfortran tcsh autoconf automake libtool libltdl-dev pkg-config \
   meson ninja-build ghostscript \
   libfftw3-bin libfftw3-dev libgsl-dev liberfa-dev \
   pgplot5 libx11-dev libpng-dev libcfitsio-bin libcfitsio-dev libglib2.0-dev \
@@ -61,8 +61,17 @@ export PRESTO="$PRESTO_SRC"
 [ -d build ] || meson setup build --prefix="$VIRTUAL_ENV"
 meson compile -C build
 meson install -C build
-( cd python && pip install . )
-say "PRESTO CLI -> $VIRTUAL_ENV/bin ; presto python package installed in the venv."
+# The python package's meson build calls cc.find_library('presto') with NO
+# explicit search dir, and the just-installed libpresto.so lives in the venv's
+# libdir (not a default linker path). Point the linker there for BOTH the build
+# and runtime, or `pip install .` fails with "library 'presto' not found".
+_prlib="$VIRTUAL_ENV/lib/$(gcc -dumpmachine 2>/dev/null || echo x86_64-linux-gnu)"
+export LIBRARY_PATH="$_prlib${LIBRARY_PATH:+:$LIBRARY_PATH}"
+export LD_LIBRARY_PATH="$_prlib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export PKG_CONFIG_PATH="$_prlib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+( cd python && pip install . ) \
+  || warn "PRESTO python package didn't install (CLI tools still work; 'import presto' and the python-based scripts need it — see the error above)."
+say "PRESTO CLI + python -> $VIRTUAL_ENV/bin"
 
 # --------------------------------------------------------- 3. TEMPO (src) --
 say "Building TEMPO ..."
@@ -85,7 +94,11 @@ build_tempo2() {
   [ -d "$TEMPO2_SRC/.git" ] || git clone --depth 1 https://github.com/mattpitkin/tempo2.git "$TEMPO2_SRC"
   cd "$TEMPO2_SRC"
   export TEMPO2="$TEMPO2_SRC/T2runtime"   # must be exported BEFORE configure
-  ./bootstrap
+  # bootstrap needs libltdl's LT_LIB_DLLOAD macro (from libltdl-dev); if the
+  # packaged bootstrap still can't regenerate configure, force a full autoreconf
+  # (also re-adds install-sh/config.guess/config.sub/compile).
+  ./bootstrap || autoreconf -fi
+  [ -x ./configure ] || autoreconf -fi
   ./configure --prefix="$TEMPO2_SRC/local"
   make -j"$JOBS"
   make install
@@ -110,6 +123,9 @@ export TEMPO2="$TEMPO2_SRC/T2runtime"
 # Activate the PRESTO venv (puts readfile/prepfold/accelsearch + the presto
 # python package on PATH). Remove this line if you prefer not to auto-activate.
 [ -f "$PRESTO_VENV/bin/activate" ] && source "$PRESTO_VENV/bin/activate"
+# libpresto.so lives in the venv libdir; the CLI binaries AND 'import presto'
+# need it on the runtime linker path.
+export LD_LIBRARY_PATH="$_prlib\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}"
 # TEMPO / TEMPO2 binaries (search both bin/ and src/ in case of layout diffs):
 export PATH="$TEMPO_SRC/bin:$TEMPO_SRC/src:$TEMPO2_SRC/local/bin:\$PATH"
 EOF
