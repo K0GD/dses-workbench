@@ -360,8 +360,12 @@ def add_cover_page(doc):
         doc.add_paragraph()
 
     # Version / author / org / date stacked at the bottom of the cover.
+    # DOC_VERSION starting with 'v' renders as "Version X.Y.Z" (manuals);
+    # anything else (e.g. "Rev A" for reports) is printed verbatim.
+    ver_text = (f"Version {DOC_VERSION.lstrip('v')}"
+                if DOC_VERSION.startswith('v') else DOC_VERSION)
     for text in (
-        f"Version {DOC_VERSION.lstrip('v')}",
+        ver_text,
         DOC_AUTHOR,
         DOC_ORG,
         date.today().strftime("%B %Y"),
@@ -498,6 +502,30 @@ def md_to_docx(src_path: Path, dst_path: Path):
             i += 1; continue
         if stripped.startswith('# '):
             add_h1_banner(stripped[2:])
+            i += 1; continue
+
+        # Image: a line of the form ![caption](path). The path is resolved
+        # relative to the source .md; the alt text becomes an italic caption.
+        m_img = re.match(r'^!\[(.*?)\]\((.+?)\)\s*$', stripped)
+        if m_img:
+            caption, img_ref = m_img.group(1), m_img.group(2)
+            img_path = Path(img_ref)
+            if not img_path.is_absolute():
+                img_path = src_path.parent / img_path
+            if img_path.is_file():
+                p = doc.add_paragraph()
+                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                p.add_run().add_picture(str(img_path), width=Inches(6.2))
+                if caption:
+                    cp = doc.add_paragraph()
+                    cp.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    cr = cp.add_run(caption)
+                    cr.font.size = Pt(9)
+                    cr.font.italic = True
+                    cr.font.color.rgb = SUBTITLE_COLOR_RGB
+            else:
+                p = doc.add_paragraph()
+                add_runs(p, f"*[missing image: {img_ref}]*")
             i += 1; continue
 
         if re.match(r'^\s*[-*]\s+', line):
@@ -680,9 +708,14 @@ def main():
     ap.add_argument('--subtitle', default=DOC_SUBTITLE,
                     help=f"Cover-page + header subtitle "
                          f"(default: {DOC_SUBTITLE!r})")
+    ap.add_argument('--version', default=DOC_VERSION, dest='doc_version',
+                    help="Cover-page version line. A value starting with 'v' "
+                         "renders as 'Version X.Y.Z'; anything else (e.g. "
+                         f"'Rev A') is printed verbatim. Default: {DOC_VERSION!r}")
     args = ap.parse_args()
     DOC_TITLE = args.title
     DOC_SUBTITLE = args.subtitle
+    globals()['DOC_VERSION'] = args.doc_version
 
     src = Path(args.src)
     pdf_out = Path(args.pdf)
