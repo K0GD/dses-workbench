@@ -1,6 +1,6 @@
 # Executive Summary
 
-On Saturday, July 11, 2026, DSES conducted its first live pulsar observing session using the Society's own **DSES Spectrum Analyzer** software. Two bright pulsars were recorded through the 60-foot dish at the Haswell, Colorado site with an Ettus USRP B210 software-defined radio, and both were subsequently **detected with high statistical confidence**:
+On Saturday, July 11, 2026, a DSES team — **Ray Uberecken, Anne Haney, and Richard Hambly** — conducted the Society's first live pulsar observing session using our own **DSES Spectrum Analyzer** software. The trip had a specific purpose: to demonstrate that members who are *not* pulsar-processing experts can plan an observation, capture pulsar data, and process it into professional-quality reports using the new software. That demonstration succeeded. Two bright pulsars were recorded through the 60-foot dish at the Haswell, Colorado site with an Ettus USRP B210 software-defined radio, and both were subsequently **detected with high statistical confidence**:
 
 | Pulsar | Period | Detection significance |
 |---|---|---|
@@ -17,7 +17,15 @@ Over the three-day span (Saturday July 11 – Monday July 13) the team also:
 - **Extended pulsar processing to the Windows platform** (previously Linux/Mac only), giving DSES redundant, reproducible analysis capability on all of its development machines.
 - Brought **every observatory machine and the public release channel** up to the verified 1.1.6 baseline.
 
-# Background
+# Purpose — Lowering the Barrier to Radio Astronomy
+
+For many years, the Society's radio-astronomy results have rested on the expertise of two members: **Dr. Richard Russel** and **Dan Layne**. The toolchain they mastered is the professional one, and it is demanding. Pulsar work at the site has meant a Linux workstation running **PRESTO** and **TEMPO** built from source (with hand-edited observatory coordinate and clock files), Dan's custom **GNU Radio** filterbank flowgraphs driving the B210, the **SIGPROC** filterbank utilities, Breakthrough Listen's **blimpy/watutil** for RFI and saturation checks, and the I0NAA planning and analysis tools (**Murmur** and **Best Profile Analyzer**, run under Wine) — plus Stellarium and, above all, the experience to know how the pieces fit together. DSES's own training materials for this stack run to hundreds of pages. It produces first-rate results, but the learning curve has effectively limited hands-on pulsar observing to our two experts.
+
+A few months ago, **Ray Uberecken and Richard Hambly** decided to pursue that same level of dedication to radio astronomy without requiring every observer to first master the full professional toolchain. Hambly began developing new software to consolidate the work done on site — planning the observation, choosing clean frequencies, verifying the RF path, and capturing analysis-ready data — into a single, easy-to-use package: the **DSES Spectrum Analyzer**. The name now undersells it: what began as an RFI-survey instrument has grown into a radio-astronomy data-acquisition system.
+
+This trip was the deliberate test of that premise: could members who are not pulsar-processing experts use the new software to capture pulsar data and produce reports comparable to those Dan and Rich have delivered in the past? The answer — documented in this report — was **yes**. The session simultaneously produced a list of practical upgrades to make the software still more capable for the next trip; all of them shipped in version 1.1.6 within two days (below). With a roster of members now signed up for a radio-astronomy interest group, the Society is positioned to begin training new observers on a far gentler learning curve.
+
+# The DSES Spectrum Analyzer
 
 The DSES Spectrum Analyzer is a cross-platform (Windows / macOS / Linux) spectrum-analyzer and data-acquisition application developed within the Society. It drives the Ettus USRP B210 and a range of other software-defined radios, and was originally built to investigate radio-frequency interference (RFI) at the Haswell site. It has since grown into a pulsar data-acquisition tool: it can channelize the radio's stream in real time and write industry-standard SIGPROC filterbank (`.fil`) files — the input format consumed by PRESTO, the pulsar search and analysis toolkit used throughout the professional community.
 
@@ -89,8 +97,9 @@ Practical effect for DSES: recordings can now be validated minutes after capture
 
 1. **Publish** this report on the DSES web site.
 2. **SARA conference** — prepare a slide presentation from this material.
-3. **Re-observe B0950+08** with a longer integration (scintillation), and begin repeat observations of B0329+54 toward timing-grade data (pulse arrival times over a long baseline).
-4. **Continue Spectrum Analyzer development** — additional features are planned; this document and the operating guide form the baseline that future releases will update.
+3. **Begin training the radio-astronomy interest group.** A roster of interested members is in hand, and the new software substantially lowers the barrier to a first observing session.
+4. **Re-observe B0950+08** with a longer integration (scintillation), and begin repeat observations of B0329+54 toward timing-grade data (pulse arrival times over a long baseline).
+5. **Continue Spectrum Analyzer development** — additional features are planned; this document and the operating guide form the baseline that future releases will update.
 
 # Acknowledgments
 
