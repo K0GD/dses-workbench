@@ -36,7 +36,7 @@ from pathlib import Path
 
 from docx import Document
 from docx.shared import Pt, Inches, RGBColor, Cm
-from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_BREAK
+from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_BREAK, WD_TAB_ALIGNMENT
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 
@@ -131,6 +131,9 @@ CODE_FILL_HEX       = "F2F2F2"                    # very light gray
 PAGE_MARGINS = dict(  # inches; matches both DSES reference documents
     left=1.00, right=0.81, top=1.36, bottom=1.00,
 )
+# Optional logo shown right-justified in the page header (pages 2+). Set via
+# --header-logo; None keeps the classic text-only header.
+HEADER_LOGO = None
 
 
 # ---------------------------------------------------------------------------
@@ -251,6 +254,25 @@ def configure_section(section):
     r.bold = True
     r.font.size = Pt(11)
     r.font.color.rgb = TITLE_COLOR_RGB
+    # Optional logo, right-justified on the title line via a right tab stop
+    # at the text-column edge.
+    if HEADER_LOGO and Path(HEADER_LOGO).is_file():
+        content_w = 8.5 - PAGE_MARGINS['left'] - PAGE_MARGINS['right']
+        p1.paragraph_format.tab_stops.add_tab_stop(
+            Inches(content_w), WD_TAB_ALIGNMENT.RIGHT)
+        # The built-in Header style carries center (3.25") and right (6.5")
+        # stops; a single tab would land on the center one and park the logo
+        # mid-page. Emit w:val="clear" entries so only our stop remains.
+        # NOTE: w:tab elements must be in ascending w:pos order or Word
+        # discards the list — insert 9360 first, then 4680 in front of it.
+        tabs_el = p1._p.pPr.find(qn('w:tabs'))
+        for pos_twips in ('9360', '4680'):          # 6.5" then 3.25"
+            clear = OxmlElement('w:tab')
+            clear.set(qn('w:val'), 'clear')
+            clear.set(qn('w:pos'), pos_twips)
+            tabs_el.insert(0, clear)
+        p1.add_run('\t')
+        p1.add_run().add_picture(str(HEADER_LOGO), height=Inches(0.42))
     p2 = hdr.add_paragraph()
     r2 = p2.add_run(DOC_SUBTITLE)
     r2.italic = True
@@ -712,10 +734,14 @@ def main():
                     help="Cover-page version line. A value starting with 'v' "
                          "renders as 'Version X.Y.Z'; anything else (e.g. "
                          f"'Rev A') is printed verbatim. Default: {DOC_VERSION!r}")
+    ap.add_argument('--header-logo', default=None,
+                    help="PNG shown right-justified in the page header "
+                         "(pages 2+; the cover is unaffected). Default: none.")
     args = ap.parse_args()
     DOC_TITLE = args.title
     DOC_SUBTITLE = args.subtitle
     globals()['DOC_VERSION'] = args.doc_version
+    globals()['HEADER_LOGO'] = args.header_logo
 
     src = Path(args.src)
     pdf_out = Path(args.pdf)
