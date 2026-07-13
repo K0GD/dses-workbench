@@ -44,6 +44,21 @@ if p.wsl_available():
 
 Any tool: `p.run("accelsearch", "-zmax", "50", r"C:\…\obs_DM26.80.dat")`.
 
+## Fold output convention
+
+**Every fold gets a PDF next to the source `.fil`.** When a recording is folded,
+save the prepfold diagnostic plot as a PDF in the *same directory* as the `.fil`,
+named after the recording:
+
+- `<recording>_prepfold.pdf` — topocentric fold (`-topo -p … -dm …`)
+- `<recording>_prepfold-par.pdf` — barycentric fold (`-par …`)
+
+The `.pfd` / `.bestprof` / PostScript working products stay in a subdir
+(`presto_validation/` here; `folds/` on the Mac). PRESTO 6 writes the plot as
+**landscape PostScript** (a dot-terminated EPS name, not `.pfd.ps`) — render it
+to an upright-landscape PDF (e.g. `gs` → PNG at ~300 dpi + a 90° rotate, or
+`ps2pdf` with the page rotated; a plain `ps2pdf`/EPSCrop comes out sideways).
+
 ## Barycentric (`-par`) folds
 
 `prepfold -par par/<psr>.par <obs>.fil` folds against a full ephemeris. Two
