@@ -94,4 +94,4 @@ Practical effect for DSES: recordings can now be validated minutes after capture
 
 # Acknowledgments
 
-Software development, field diagnosis, and data processing were accelerated substantially by AI-assisted engineering (Anthropic Claude) working alongside the author across the Society's Windows, macOS, and Linux machines.
+Software development, field diagnosis, and data processing were accelerated substantially by AI-assisted engineering (Claude Code) working alongside the author across the Society's Windows, macOS, and Linux machines.
