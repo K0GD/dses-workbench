@@ -116,7 +116,7 @@ import time
 
 # === App metadata ===
 APP_NAME        = "DSES Spectrum Analyzer"
-APP_VERSION     = "1.1.5"
+APP_VERSION     = "1.1.6"
 APP_AUTHOR      = "Richard M Hambly (K0GD)"
 APP_AUTHOR_EMAIL = "rick@cnssys.com"
 APP_COPYRIGHT   = "Copyright © 2026 Richard M Hambly (K0GD)"
@@ -2528,6 +2528,11 @@ on click.</li>
 <ul>
 <li><b>Folder</b>: where recordings land. Defaults to
 <code>~/Documents/DSES_SA_Recordings</code>.</li>
+<li><b>Source</b>: optional source / pulsar name (e.g. <code>B0329+54</code>).
+When set it is folded into the recording filename and written into the SIGPROC
+<code>.fil</code> header (<code>source_name</code>, plus RA/Dec derived from the
+name) and the SigMF description, so PRESTO/prepfold pick it up. Blank gives a
+timestamp-only filename. Locked while recording.</li>
 <li><b>Format</b>: <i>Raw I/Q (SigMF)</i> writes full-rate complex samples to
 a SigMF <code>.sigmf-meta</code>/<code>.sigmf-data</code> pair — exact, but
 large (e.g. ~192&nbsp;MB/s at 24&nbsp;Msps). <i>Filterbank (.fil)</i>
@@ -2539,8 +2544,13 @@ the same validated code as the offline <code>iq_to_fil.py</code> converter.</li>
 count and how many power frames are summed per output sample, so
 <code>tsamp&nbsp;=&nbsp;channels&nbsp;&times;&nbsp;integrate&nbsp;/&nbsp;sample&nbsp;rate</code>.
 Locked while recording.</li>
+<li><b>Record for</b>: optional fixed length — minutes (e.g. <code>30</code>) or
+<code>H:MM</code> / <code>HH:MM:SS</code> (e.g. <code>1:30</code>). The recording
+auto-stops when it is reached and the counter shows a countdown; blank records
+until you stop it. Locked while recording.</li>
 <li><b>Record</b>: <i>Stopped</i> / <i>Recording</i>. Recording always
-starts <i>Stopped</i> on launch.</li>
+starts <i>Stopped</i> on launch. While recording, a red <b>REC</b> counter
+shows elapsed time (or the countdown when a duration is set).</li>
 </ul>
 
 <h3>Spectrum (top plot)</h3>
