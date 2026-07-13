@@ -10,7 +10,7 @@ FINISH           59433.928
 DM               26.764100
 SOLARN0              10.00
 EPHEM               DE200
-CLK                 UNCORR                          
+CLK                 UNCORR
 UNITS               TDB
 TIMEEPH             FB90
 T2CMETHOD           TEMPO
@@ -19,8 +19,5 @@ PLANET_SHAPIRO      N
 DILATEFREQ          N
 NTOA                    10
 TRES               3289.31
-TZRMJD  59433.92122278370652
-TZRFRQ            1420.010
-TZRSITE                  CH
 MODE                     0
 NITS                     1

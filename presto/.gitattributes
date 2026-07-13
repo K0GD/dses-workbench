@@ -1,3 +1,7 @@
 # Shell scripts run in Linux/WSL — force LF so a Windows checkout can't give
 # them CRLF (which breaks `#!/usr/bin/env bash`).
 *.sh text eol=lf
+# Pulsar .par ephemerides are read by tempo/tempo2 on Linux/WSL — force LF so a
+# CRLF checkout can't leave a stray \r on the PSRJ value (it ends up in output
+# filenames and can confuse the parsers).
+*.par text eol=lf

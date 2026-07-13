@@ -16,6 +16,11 @@ Ubuntu VM) and lets the Spectrum Analyzer invoke them on its `.fil` recordings.
 - **`presto_bridge.py`** — pure-stdlib module for the *Windows* side. Shells out
   to `wsl.exe`, sources `~/.presto_env`, maps `C:\…` → `/mnt/…`, shell-quotes
   args, and returns captured UTF-8 output.
+- **`extend_ut1.sh`** — run *inside Ubuntu* (`bash extend_ut1.sh`). Refreshes
+  tempo2's UT1 (Earth-orientation) table so barycentric `prepfold -par` folds
+  work for recent/near-future observation dates. Re-run ~yearly. See
+  "Barycentric (`-par`) folds" below.
+- **`par/`** — pulsar `.par` ephemerides for `-par` folds (see `par/README.md`).
 
 ## Setup
 
@@ -39,14 +44,31 @@ if p.wsl_available():
 
 Any tool: `p.run("accelsearch", "-zmax", "50", r"C:\…\obs_DM26.80.dat")`.
 
+## Barycentric (`-par`) folds
+
+`prepfold -par par/<psr>.par <obs>.fil` folds against a full ephemeris. Two
+gotchas — both already handled in this folder:
+
+- **UT1 currency.** PRESTO ≥6 builds polycos with **tempo2**, which reads
+  `$TEMPO2/clock/ut1.dat`. That table only forecasts ~1 year, so an observation
+  past its end fails (`Problem running tempo2 … for make_polycos()`, empty
+  polyco). Fix: `bash extend_ut1.sh` — extends the table from astropy's bundled
+  IERS data (offline). Re-run ~yearly. (PRESTO 5 / the Mac use *tempo1* instead,
+  whose fix is a stale `$TEMPO/clock/ut1.dat`.)
+- **Observatory codes.** tempo2 uses its own site names, not tempo1 codes, so a
+  `TZRSITE` like `CH` (CHIME's tempo1 code) makes tempo2 emit an empty polyco.
+  The `par/` files here are kept tempo2-safe (no tool-specific `TZRSITE`, which
+  only sets the reference-TOA phase zero point and is irrelevant to folding).
+
 ## Notes
 
 - The bridge talks to **WSL**, so run `build_presto.sh` in WSL for app
   integration. A VMware/native VM (same script) is great for interactive
   post-processing and trip-report figures, but wiring the app to a VM would use
   SSH instead of `wsl.exe`.
-- `build_presto.sh` **must keep LF line endings** (it's a Linux script); a
-  `.gitattributes` here enforces that.
+- The `*.sh` scripts and `par/*.par` files **must keep LF line endings** (Linux
+  scripts / tempo parsers choke on CRLF — a `\r` on `PSRJ` even leaks into output
+  filenames); the `.gitattributes` here enforces LF for both.
 - Verified 2026-07 against PRESTO `INSTALL.md` (meson), `nanograv/tempo`, and
   `mattpitkin/tempo2`. TEMPO2 is also on conda-forge (linux-64/osx-64) if you
   prefer `mamba install -c conda-forge tempo2` over the source build.
