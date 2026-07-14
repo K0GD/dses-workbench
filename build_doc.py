@@ -407,6 +407,9 @@ def apply_heading_styles(doc):
     h1.font.color.rgb = H1_TEXT_RGB
     h1.font.size = Pt(11)
     h1.font.bold = True
+    # Rick's H1 spacing tweak: 12 pt above, 6 pt below (was 24/0).
+    h1.paragraph_format.space_before = Pt(12)
+    h1.paragraph_format.space_after = Pt(6)
     # Heading-2 stays default (slate); Heading 3 → dark teal
     h3 = doc.styles['Heading 3']
     h3.font.color.rgb = H3_COLOR_RGB
@@ -496,9 +499,16 @@ def md_to_docx(src_path: Path, dst_path: Path):
         set_paragraph_shading(p, H1_BG_HEX)
 
     i = 0
+    prev_was_table = False          # for post-table paragraph spacing
     while i < len(lines):
         line = lines[i]
         stripped = line.strip()
+        # A body paragraph immediately under a table gets a little air above
+        # it (Rick's house tweak). Latch the "previous block was a table"
+        # state here and clear it each iteration; only the table branch re-sets
+        # it, so a heading/image between table and paragraph correctly resets.
+        after_table = prev_was_table
+        prev_was_table = False
 
         if stripped.startswith('```'):
             code_lines = []
@@ -514,6 +524,7 @@ def md_to_docx(src_path: Path, dst_path: Path):
                 and re.match(r'^\s*\|[\s\-:|]+\|\s*$', lines[i + 1]):
             header, body, i = parse_table_block(lines, i)
             add_table(doc, header, body)
+            prev_was_table = True
             continue
 
         if stripped.startswith('### '):
@@ -542,7 +553,7 @@ def md_to_docx(src_path: Path, dst_path: Path):
                     cp = doc.add_paragraph()
                     cp.alignment = WD_ALIGN_PARAGRAPH.CENTER
                     cr = cp.add_run(caption)
-                    cr.font.size = Pt(9)
+                    cr.font.size = Pt(8.5)
                     cr.font.italic = True
                     cr.font.color.rgb = SUBTITLE_COLOR_RGB
             else:
@@ -584,6 +595,7 @@ def md_to_docx(src_path: Path, dst_path: Path):
             continue
 
         if stripped == '':
+            prev_was_table = after_table   # carry table-state across blank lines
             i += 1; continue
 
         # Paragraph: coalesce wrapped lines
@@ -598,6 +610,8 @@ def md_to_docx(src_path: Path, dst_path: Path):
             para_lines.append(nxt)
             i += 1
         p = doc.add_paragraph()
+        if after_table:
+            p.paragraph_format.space_before = Pt(6)
         add_runs(p, ' '.join(s.strip() for s in para_lines))
 
     doc.save(dst_path)
@@ -737,6 +751,9 @@ def main():
     ap.add_argument('--header-logo', default=None,
                     help="PNG shown right-justified in the page header "
                          "(pages 2+; the cover is unaffected). Default: none.")
+    ap.add_argument('--force', action='store_true',
+                    help="Overwrite the --docx target even if git reports it "
+                         "modified (i.e., discard hand-made Word edits).")
     args = ap.parse_args()
     DOC_TITLE = args.title
     DOC_SUBTITLE = args.subtitle
@@ -757,6 +774,31 @@ def main():
         docx_out = Path(args.docx)
     else:
         docx_out = Path(tempfile.gettempdir()) / f"{pdf_out.stem}.docx"
+
+    # GUARD: never clobber hand-made Word edits. Rebuilding regenerates the
+    # DOCX from the .md, so any direct edits to a kept, git-tracked DOCX are
+    # lost. If git reports the target modified vs HEAD, someone edited it
+    # since the last build -- stop and make them port the edits into the .md
+    # (or pass --force to overwrite deliberately). Born of the 2026-07-13
+    # trip-report incident; do not remove.
+    if keep_docx and docx_out.exists() and not args.force:
+        import subprocess
+        try:
+            r = subprocess.run(
+                ['git', 'status', '--porcelain', '--', str(docx_out)],
+                capture_output=True, text=True, timeout=15)
+            dirty = r.returncode == 0 and r.stdout.strip().startswith(' M')
+        except Exception:
+            dirty = False
+        if dirty:
+            print(f"REFUSING to overwrite {docx_out}:\n"
+                  "  git says it was modified since the last commit — it "
+                  "likely contains\n  hand-made Word edits that a rebuild "
+                  "would destroy.\n"
+                  "  Port those edits into the Markdown source first (or "
+                  "commit the DOCX),\n  then rebuild. Pass --force to "
+                  "overwrite anyway.", file=sys.stderr)
+            sys.exit(3)
 
     md_to_docx(src, docx_out)
     try:

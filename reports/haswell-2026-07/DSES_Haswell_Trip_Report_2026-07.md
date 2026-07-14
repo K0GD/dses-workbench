@@ -12,14 +12,14 @@ These results validate the Society's complete, in-house data path end to end: **
 Over the three-day span (Saturday July 11 – Monday July 13) the team also:
 
 - **Reproduced both detections independently on two different computers** (macOS and Windows) running separately built copies of the PRESTO pulsar toolkit — the results agree to three significant figures, a strong cross-check of both the data and the analysis chain.
-- **Root-caused and permanently fixed** the field computer's user-interface problems (dead dropdown menus, misplaced windows), which turned out to be a headless-display condition, not an application bug.
+- **Root-caused and permanently fixed** the Linux field computer's user-interface problems (dead dropdown menus, misplaced windows), which turned out to be a Linux headless-display condition, not an application bug.
 - **Released Spectrum Analyzer v1.1.6**, bundling the features requested in the field: a wide-band Sweep mode for RFI surveys, and recording enhancements that stamp each observation with its source name and coordinates.
-- **Extended pulsar processing to the Windows platform** (previously Linux/Mac only), giving DSES redundant, reproducible analysis capability on all of its development machines.
-- Brought **every observatory machine and the public release channel** up to the verified 1.1.6 baseline.
+- **Extended pulsar processing to the Windows platform** (previously Linux/Mac only), giving DSES redundant, reproducible analysis capability on multiple development machines.
+- Brought **every test computer and the public release channel** up to the verified 1.1.6 baseline.
 
 # Purpose — Lowering the Barrier to Radio Astronomy
 
-For many years, the Society's radio-astronomy results have rested on the expertise of two members: **Dr. Richard Russel (AC0UB)** and **Dan Layne (AD0CY)**. The toolchain they mastered is the professional one, and it is demanding. Pulsar work at the site has meant a Linux workstation running **PRESTO** and **TEMPO** built from source (with hand-edited observatory coordinate and clock files), Dan's custom **GNU Radio** filterbank flowgraphs driving the B210, the **SIGPROC** filterbank utilities, Breakthrough Listen's **blimpy/watutil** for RFI and saturation checks, and the I0NAA planning and analysis tools (**Murmur** and **Best Profile Analyzer**, run under Wine) — plus Stellarium and, above all, the experience to know how the pieces fit together. DSES's own training materials for this stack run to hundreds of pages. It produces first-rate results, but the learning curve has effectively limited hands-on pulsar observing to our two experts.
+For many years, the Society's radio-astronomy results have rested on the expertise of two members: **Dr. Richard Russel (AC0UB)** and **Dan Layne (AD0CY)**. The toolchain they mastered is the professional one, and it is demanding. Pulsar work at the site has meant a transportable Linux workstation running **PRESTO** and **TEMPO** built from source (with hand-edited observatory coordinate and clock files), Dan's custom **GNU Radio** filterbank flowgraphs driving the B210, the **SIGPROC** filterbank utilities, Breakthrough Listen's **blimpy/watutil** for RFI and saturation checks, and the I0NAA planning and analysis tools (**Murmur** and **Best Profile Analyzer**, run under Wine) — plus Stellarium and, above all, the experience to know how the pieces fit together. DSES's own training materials for this stack run to hundreds of pages. It produces first-rate results, but the learning curve has effectively limited hands-on pulsar observing to our two experts.
 
 A few months ago, **Ray Uberecken and Richard Hambly** decided to pursue that same level of dedication to radio astronomy without requiring every observer to first master the full professional toolchain. Hambly began developing new software to consolidate the work done on site — planning the observation, choosing clean frequencies, verifying the RF path, and capturing analysis-ready data — into a single, easy-to-use package: the **DSES Spectrum Analyzer**. The name now undersells it: what began as an RFI-survey instrument has grown into a radio-astronomy data-acquisition system.
 
@@ -29,7 +29,7 @@ This trip was the deliberate test of that premise: could members who are not pul
 
 The DSES Spectrum Analyzer is a cross-platform (Windows / macOS / Linux) spectrum-analyzer and data-acquisition application developed within the Society. It drives the Ettus USRP B210 and a range of other software-defined radios, and was originally built to investigate radio-frequency interference (RFI) at the Haswell site. It has since grown into a pulsar data-acquisition tool: it can channelize the radio's stream in real time and write industry-standard SIGPROC filterbank (`.fil`) files — the input format consumed by PRESTO, the pulsar search and analysis toolkit used throughout the professional community.
 
-The software is distributed from the Society's server with a built-in update checker, so observatory and member machines converge on each new release automatically. The field station at Haswell includes a Raspberry Pi 5 ("drift-scan box") that runs the same application and is reachable remotely for support.
+The software is distributed from the Society's server with a built-in update checker, so observatory and member machines converge on each new release automatically. The field station at Haswell includes a Linux Raspberry Pi 5 ("drift-scan box") that runs the same application and is reachable remotely for support.
 
 # Observations — July 11, Haswell
 
@@ -73,7 +73,7 @@ Running identical fold commands on both platforms produced identical results to 
 
 # Field Engineering — Drift-Scan Box Fixed
 
-During the session the field Raspberry Pi exhibited unusable dropdown menus, a blank Help menu, and a window that opened tiny in the corner of the screen. Remote diagnosis (over the site's Tailscale network) traced every symptom to a single root cause: the box runs **headless** — no monitor is attached, and it is viewed over remote desktop — and with no connected display the graphics system reports a **0×0-pixel screen**, which collapses every popup menu and confuses window placement. This was a display-configuration condition, not an application defect, and it had silently affected every prior software version.
+During the session the field Linux Raspberry Pi 5 exhibited unusable dropdown menus, a blank Help menu, and a window that opened tiny in the corner of the screen. Remote diagnosis (over the site's Tailscale network) traced every symptom to a single root cause: the box runs **headless** — no monitor is attached, and it is viewed over remote desktop — and with no connected display the graphics system reports a **0×0-pixel screen**, which collapses every popup menu and confuses window placement. This was a display-configuration condition, not an application defect, and it had silently affected every prior software version.
 
 The permanent fix ships in v1.1.6: at startup the launcher now synthesizes a virtual monitor when none is connected, and the application declines to reposition windows against an empty screen. The field box was verified running the released fix.
 
@@ -103,4 +103,4 @@ Practical effect for DSES: recordings can now be validated minutes after capture
 
 # Acknowledgments
 
-Software development, field diagnosis, and data processing were accelerated substantially by AI-assisted engineering (Claude Code) working alongside the author across the Society's Windows, macOS, and Linux machines.
+Software development, field diagnosis, and data processing were accelerated substantially by AI-assisted engineering (Claude Code – Opus 4.8 and Fable 5 engines) working alongside the author across the Society's Windows, macOS, and Linux machines.

@@ -46,3 +46,7 @@ desktop.ini
 
 # DOCX intermediates (throwaway; build_doc.py makes the .pdf deliverables)
 *.docx
+# ...but report DOCX files under reports/ are deliverables — track them
+!reports/**/*.docx
+# pre-overwrite backups written by build_doc.py's clobber guard
+*.docx.prev
