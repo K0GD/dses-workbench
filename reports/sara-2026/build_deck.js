@@ -230,29 +230,33 @@ function figFrame(s, imgPath, x, y, w, h) {
     { x: MX, y: 1.58, w: 8.5, h: 0.65, margin: 0, fontFace: BODY, fontSize: 14, color: INK }
   );
   const tools = [
-    ["PRESTO v5 + TEMPO1 + TEMPO2", "built from source; hand-edited observatory coordinate and clock files"],
+    ["PRESTO v5 + TEMPO1 + TEMPO2", "built from source; hand-edited observatory and clock files"],
+    ["RIPTIDE", "a second, independent pulsar-search code (fast-folding)"],
     ["GNU Radio", "custom filterbank flowgraphs driving the B210"],
     ["SIGPROC", "filterbank-format utilities"],
-    ["blimpy / watutil", "Breakthrough Listen tools for RFI and saturation checks"],
-    ["Murmur + Best Profile Analyzer", "I0NAA planning and analysis tools — run under Wine"],
+    ["blimpy / watutil", "Breakthrough Listen RFI and saturation checks"],
+    ["PINT", "high-precision pulsar timing in Python"],
+    ["ATNF pulsar catalogue", "ephemeris data (.par) for every fold"],
+    ["Murmur + Best Profile Analyzer", "I0NAA planning/analysis tools — run under Wine"],
     ["Stellarium + experience", "above all, knowing how the pieces fit together"],
   ];
-  const tw = 4.25, th = 1.12, gpx = 0.22, gpy = 0.17, tx0 = MX, ty0 = 2.42;
+  const gpx = 0.18, gpy = 0.16, tx0 = MX, ty0 = 2.3;
+  const tw = (8.72 - 2 * gpx) / 3, th = 1.18;
   tools.forEach(([name, desc], i) => {
-    const x = tx0 + (i % 2) * (tw + gpx);
-    const y = ty0 + Math.floor(i / 2) * (th + gpy);
+    const x = tx0 + (i % 3) * (tw + gpx);
+    const y = ty0 + Math.floor(i / 3) * (th + gpy);
     card(s, x, y, tw, th);
     s.addText(name, {
-      x: x + 0.22, y: y + 0.12, w: tw - 0.44, h: 0.32, margin: 0,
-      fontFace: BODY, fontSize: 13.5, bold: true, color: NAVY,
+      x: x + 0.18, y: y + 0.1, w: tw - 0.36, h: 0.3, margin: 0,
+      fontFace: BODY, fontSize: 11.5, bold: true, color: NAVY,
     });
     s.addText(desc, {
-      x: x + 0.22, y: y + 0.44, w: tw - 0.44, h: 0.62, margin: 0, valign: "top",
-      fontFace: BODY, fontSize: 11.5, color: INK,
+      x: x + 0.18, y: y + 0.42, w: tw - 0.36, h: 0.7, margin: 0, valign: "top",
+      fontFace: BODY, fontSize: 10, color: INK,
     });
   });
   // The wider professional world uses even more — subdued: not even in OUR experts' stack
-  card(s, tx0, 6.3, 2 * tw + gpx, 0.62, "F7FAFB", "E5EDF1");
+  card(s, tx0, 6.36, 8.72, 0.56, "F7FAFB", "E5EDF1");
   s.addText(
     [
       { text: "PSRCHIVE", options: { bold: true, color: MUTED } },
@@ -261,7 +265,7 @@ function figFrame(s, imgPath, x, y, w, h) {
         options: { color: "93A2AA" },
       },
     ],
-    { x: tx0 + 0.22, y: 6.3, w: 2 * tw + gpx - 0.44, h: 0.62, margin: 0, valign: "middle", fontFace: BODY, fontSize: 11.5 }
+    { x: tx0 + 0.22, y: 6.36, w: 8.72 - 0.44, h: 0.56, margin: 0, valign: "middle", fontFace: BODY, fontSize: 11 }
   );
   // right stats
   stat(s, 9.6, 2.42, 3.1, "100s", "of pages of DSES training material for this stack", GOLD);
@@ -273,7 +277,8 @@ function figFrame(s, imgPath, x, y, w, h) {
   s.addNotes(
     "Credit where due: this toolchain produces first-rate, professional results, and Rich and Dan built " +
       "DSES's pulsar program on it. The point is not that the tools are bad — it's that the barrier to entry " +
-      "kept hands-on observing limited to two people. Hundreds of pages of training material is a real number. " +
+      "kept hands-on observing limited to two people. Hundreds of pages of training material is a real number — " +
+      "this tool list is straight from the DSES pulsar training guide's system-configuration table. " +
       "The grayed row is the kicker: the professional world in common use runs even deeper — PSRCHIVE is a " +
       "whole additional suite our two experts didn't even need."
   );
