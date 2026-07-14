@@ -129,6 +129,29 @@ Conventions: `[ ]` planned, `[x]` shipped (note the commit), `[-]` dropped
       - Open questions for System-1: API transport + schema, coordinate
         epoch (J2000 assumed), one-shot slew vs. tracking handoff, and
         whether the SA should also read BACK the current az/el to display.
+
+- [ ] **Demodulators + audio chain for RFI identification** — click a
+      suspect signal on the spectrum/waterfall and LISTEN to it: an ear
+      identifies FM broadcast, hum-modulated power-line buzz, pager bursts,
+      digital chatter, etc. far faster than staring at the waterfall.
+      1. Secondary channel: a small DDC (freq-xlating filter/decimator) that
+         tunes within the already-streaming band — no interruption to the
+         main display or an in-progress recording.
+      2. Demodulators, GNU Radio built-ins to start: AM, NFM, WFM, SSB
+         (USB/LSB), CW (BFO), plus raw envelope. Squelch + volume + audio
+         bandwidth controls.
+      3. Audio out via the GR audio sink (portaudio is already in the conda
+         env); optionally record the demodulated audio to WAV (libsndfile
+         also present) for RFI reports.
+      4. **AI auto-detect of the right demodulator (stretch):** phase it —
+         (a) cheap classical heuristics first (occupied BW, envelope
+         variance, FM deviation, cyclostationary hints → suggest AM/FM/SSB/
+         digital), (b) then a small trained modulation classifier
+         (RadioML-style CNN on IQ snippets) if the heuristics disappoint.
+         Run it on the DDC output, suggest — don't force — the demod.
+      UI sketch: right-click a signal → "Listen here", a compact demod
+      panel (mode, squelch, volume, audio-record), tuned marker shown on
+      the spectrum. Settings persist in a new `[audio]`/`[demod]` group.
       - Az/el + set-time math is plain sidereal-time + spherical trig (numpy,
         no astropy dependency): cos(HA_set) = (sin el_min − sin lat · sin dec)
         / (cos lat · cos dec); circumpolar → "always up".
