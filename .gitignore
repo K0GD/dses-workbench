@@ -48,5 +48,7 @@ desktop.ini
 *.docx
 # ...but report DOCX files under reports/ are deliverables — track them
 !reports/**/*.docx
+# (the negation above would otherwise re-include Word lock files under reports/)
+reports/**/~$*.docx
 # pre-overwrite backups written by build_doc.py's clobber guard
 *.docx.prev
