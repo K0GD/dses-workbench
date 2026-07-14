@@ -230,27 +230,39 @@ function figFrame(s, imgPath, x, y, w, h) {
     { x: MX, y: 1.58, w: 8.5, h: 0.65, margin: 0, fontFace: BODY, fontSize: 14, color: INK }
   );
   const tools = [
-    ["PRESTO + TEMPO", "built from source; hand-edited observatory coordinate and clock files"],
+    ["PRESTO v5 + TEMPO1 + TEMPO2", "built from source; hand-edited observatory coordinate and clock files"],
     ["GNU Radio", "custom filterbank flowgraphs driving the B210"],
     ["SIGPROC", "filterbank-format utilities"],
     ["blimpy / watutil", "Breakthrough Listen tools for RFI and saturation checks"],
     ["Murmur + Best Profile Analyzer", "I0NAA planning and analysis tools — run under Wine"],
     ["Stellarium + experience", "above all, knowing how the pieces fit together"],
   ];
-  const tw = 4.25, th = 1.28, gpx = 0.22, gpy = 0.22, tx0 = MX, ty0 = 2.42;
+  const tw = 4.25, th = 1.12, gpx = 0.22, gpy = 0.17, tx0 = MX, ty0 = 2.42;
   tools.forEach(([name, desc], i) => {
     const x = tx0 + (i % 2) * (tw + gpx);
     const y = ty0 + Math.floor(i / 2) * (th + gpy);
     card(s, x, y, tw, th);
     s.addText(name, {
-      x: x + 0.22, y: y + 0.14, w: tw - 0.44, h: 0.32, margin: 0,
+      x: x + 0.22, y: y + 0.12, w: tw - 0.44, h: 0.32, margin: 0,
       fontFace: BODY, fontSize: 13.5, bold: true, color: NAVY,
     });
     s.addText(desc, {
-      x: x + 0.22, y: y + 0.47, w: tw - 0.44, h: 0.74, margin: 0, valign: "top",
+      x: x + 0.22, y: y + 0.44, w: tw - 0.44, h: 0.62, margin: 0, valign: "top",
       fontFace: BODY, fontSize: 11.5, color: INK,
     });
   });
+  // The wider professional world uses even more — subdued: not even in OUR experts' stack
+  card(s, tx0, 6.3, 2 * tw + gpx, 0.62, "F7FAFB", "E5EDF1");
+  s.addText(
+    [
+      { text: "PSRCHIVE", options: { bold: true, color: MUTED } },
+      {
+        text: "  —  the professional community’s archiving & timing suite, in common use — beyond even our experts’ stack",
+        options: { color: "93A2AA" },
+      },
+    ],
+    { x: tx0 + 0.22, y: 6.3, w: 2 * tw + gpx - 0.44, h: 0.62, margin: 0, valign: "middle", fontFace: BODY, fontSize: 11.5 }
+  );
   // right stats
   stat(s, 9.6, 2.42, 3.1, "100s", "of pages of DSES training material for this stack", GOLD);
   stat(s, 9.6, 4.32, 3.1, "2", "members who could run an observation end to end", TEAL);
@@ -261,7 +273,82 @@ function figFrame(s, imgPath, x, y, w, h) {
   s.addNotes(
     "Credit where due: this toolchain produces first-rate, professional results, and Rich and Dan built " +
       "DSES's pulsar program on it. The point is not that the tools are bad — it's that the barrier to entry " +
-      "kept hands-on observing limited to two people. Hundreds of pages of training material is a real number."
+      "kept hands-on observing limited to two people. Hundreds of pages of training material is a real number. " +
+      "The grayed row is the kicker: the professional world in common use runs even deeper — PSRCHIVE is a " +
+      "whole additional suite our two experts didn't even need."
+  );
+}
+
+// =================================================================================
+// 3b — THE NEW STACK (same chip format — deliberately near-empty)
+// =================================================================================
+{
+  const s = lightSlide("The answer", "The new stack — much simpler");
+  s.addText(
+    "The same observation today takes two pieces:",
+    { x: MX, y: 1.58, w: 8.5, h: 0.4, margin: 0, fontFace: BODY, fontSize: 14, color: INK }
+  );
+  // two chips + flow arrow, same card format as the previous slide
+  const cw = 3.85, chh = 1.9, cy = 3.15;
+  s.addText("ACQUISITION — ON SITE", {
+    x: MX, y: cy - 0.42, w: cw, h: 0.3, margin: 0,
+    fontFace: BODY, fontSize: 10, bold: true, color: TEAL, charSpacing: 1.5,
+  });
+  card(s, MX, cy, cw, chh);
+  s.addText("DSES Spectrum Analyzer", {
+    x: MX + 0.22, y: cy + 0.16, w: cw - 0.44, h: 0.34, margin: 0,
+    fontFace: BODY, fontSize: 14.5, bold: true, color: NAVY,
+  });
+  s.addText("plan, survey, verify, record — one application on one laptop (Windows / macOS / Linux)", {
+    x: MX + 0.22, y: cy + 0.56, w: cw - 0.44, h: 1.2, margin: 0, valign: "top",
+    fontFace: BODY, fontSize: 11.5, color: INK,
+  });
+  s.addShape(pptx.ShapeType.line, {
+    x: MX + cw + 0.18, y: cy + chh / 2, w: 0.65, h: 0,
+    line: { color: TEAL, width: 2.5, endArrowType: "triangle" },
+  });
+  const c2x = MX + cw + 1.01;
+  s.addText("ANALYSIS — ANY MACHINE", {
+    x: c2x, y: cy - 0.42, w: cw, h: 0.3, margin: 0,
+    fontFace: BODY, fontSize: 10, bold: true, color: TEAL, charSpacing: 1.5,
+  });
+  card(s, c2x, cy, cw, chh);
+  s.addText("PRESTO v6.0.0 + TEMPO2", {
+    x: c2x + 0.22, y: cy + 0.16, w: cw - 0.44, h: 0.34, margin: 0,
+    fontFace: BODY, fontSize: 14.5, bold: true, color: NAVY,
+  });
+  s.addText(
+    "the professional analysis suite, installed by one DSES build script — v6 barycenters in-process, so classic TEMPO is no longer needed",
+    {
+      x: c2x + 0.22, y: cy + 0.56, w: cw - 0.44, h: 1.2, margin: 0, valign: "top",
+      fontFace: BODY, fontSize: 11.5, color: INK,
+    }
+  );
+  // subdued strip mirroring the PSRCHIVE row on the previous slide
+  card(s, MX, 6.3, 2 * cw + 1.01, 0.62, "F7FAFB", "E5EDF1");
+  s.addText(
+    [
+      { text: "That’s the whole list", options: { bold: true, color: MUTED } },
+      {
+        text: "  —  no Wine, no custom flowgraphs, no hand-edited configuration files",
+        options: { color: "93A2AA" },
+      },
+    ],
+    { x: MX + 0.22, y: 6.3, w: 2 * cw + 1.01 - 0.44, h: 0.62, margin: 0, valign: "middle", fontFace: BODY, fontSize: 11.5 }
+  );
+  // right stats, mirroring the previous slide
+  stat(s, 9.6, 2.42, 3.1, "2", "pieces in the whole chain — acquisition and analysis", TEAL);
+  stat(s, 9.6, 4.32, 3.1, "1", "build script installs the analysis stack, per platform", GOLD);
+  s.addText("Same professional-quality results — on a far gentler learning curve.", {
+    x: 9.6, y: 6.12, w: 3.1, h: 0.7, margin: 0, valign: "top",
+    fontFace: BODY, fontSize: 11.5, italic: true, color: MUTED,
+  });
+  s.addNotes(
+    "Deliberate contrast with the previous slide: the wall of chips collapses to two. On site, the Spectrum " +
+      "Analyzer does everything the observer needs; at home (or in the field), PRESTO v6 plus TEMPO2 does the " +
+      "analysis. PRESTO v6 dropped the classic-TEMPO dependency — barycentering is in-process and polycos come " +
+      "from TEMPO2 — and both installations are captured as re-runnable build scripts in the Society's repository " +
+      "(WSL on Windows, macOS)."
   );
 }
 
@@ -269,7 +356,7 @@ function figFrame(s, imgPath, x, y, w, h) {
 // 4 — THE ANSWER
 // =================================================================================
 {
-  const s = lightSlide("The answer", "One instrument instead of a toolchain");
+  const s = lightSlide("The instrument", "One instrument instead of a toolchain");
   s.addText(
     [
       { text: "The DSES Spectrum Analyzer", options: { bold: true, color: NAVY } },
@@ -373,7 +460,7 @@ function figFrame(s, imgPath, x, y, w, h) {
   });
   const setup = [
     ["60-ft dish", "DSES site, Haswell, Colorado"],
-    ["Ettus USRP B210", "software-defined radio at the feed"],
+    ["Ettus USRP B210", "software-defined radio receiver"],
     ["Spectrum Analyzer", "one laptop — planning, RF checks, recording"],
   ];
   setup.forEach(([big, small], i) => {
