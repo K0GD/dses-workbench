@@ -152,6 +152,30 @@ Conventions: `[ ]` planned, `[x]` shipped (note the commit), `[-]` dropped
       UI sketch: right-click a signal → "Listen here", a compact demod
       panel (mode, squelch, volume, audio-record), tuned marker shown on
       the spectrum. Settings persist in a new `[audio]`/`[demod]` group.
+
+- [ ] **Recording timebase integrity: log overflows, keep the `.fil` clock
+      honest** — root-caused 2026-07-17 while re-folding the Haswell
+      B0329+54 recording per Dan Layne's review: a rigid no-search
+      ephemeris fold exposes a smooth ~1.2-rotation phase drift over the
+      36.6-min recording ≈ **3.9×10⁻⁴ fractional timebase error** — five
+      orders beyond pulsar/Doppler physics, so it's OUR clock. The header
+      tsamp already uses `get_actual_samp_rate()` (checked), so the prime
+      suspect is **dropped samples at RX overflow**: each drop silently
+      shortens the sample-count clock vs real time (the app SHOWS 'O's
+      live in the overflow sidebar but doesn't count or log them). The
+      drift is why prepfold searches report unphysical P/P-dot; detection
+      sigma survives (search absorbs it) but absolute timing/TOAs don't.
+      Fixes, in order of value:
+      1. Count overflow events (timestamped) during a recording; write
+         them into the `.fil`-adjacent metadata/SigMF and surface them in
+         the recording panel + results card ("N overflows ≈ X ms lost").
+      2. Consider gap-padding: on detected drops, insert the missing
+         number of samples (zeros or noise) so the sample clock tracks
+         wall time — the standard professional fix.
+      3. Optional: external/GPSDO reference support for absolute clock
+         accuracy at the site (doesn't fix drops, fixes rate).
+      Full analysis with plots: `DSES_SA_Recordings/…B0329+54…_prepfold-
+      par-refined.pdf` (2026-07-17 re-fold).
       - Az/el + set-time math is plain sidereal-time + spherical trig (numpy,
         no astropy dependency): cos(HA_set) = (sin el_min − sin lat · sin dec)
         / (cos lat · cos dec); circumpolar → "always up".
