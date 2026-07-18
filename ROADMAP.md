@@ -190,6 +190,14 @@ Conventions: `[ ]` planned, `[x]` shipped (note the commit), `[-]` dropped
 
 ## Backlog / unscheduled
 
+- [ ] **B0950+08 re-observation plan (observing, not software):** processing
+      gains on the 2026-07-11 recording are exhausted (see
+      `…B0950+08…_prepfold-refined.pdf`, 2026-07-17): cleanup lands best-fit
+      P/DM on catalog values but sigma is noise-limited at ~9. To reach a
+      publishable detection: 90+ min integration (~20σ), several sessions to
+      catch scintillation maxima, wider capture BW if the feed allows, and
+      record only after the v1.1.7 overflow/gap-padding fix ships.
+
 - [ ] Website version of the Haswell trip report (derive from the finished
       `.docx`, do not rebuild — see CLAUDE.md handoff notes)
 - [ ] **On-site computer upgrade (hardware, not app):** replace the
