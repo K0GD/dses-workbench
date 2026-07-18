@@ -219,6 +219,27 @@ Conventions: `[ ]` planned, `[x]` shipped (note the commit), `[-]` dropped
         no astropy dependency): cos(HA_set) = (sin el_min − sin lat · sin dec)
         / (cos lat · cos dec); circumpolar → "always up".
 
+- [ ] **Drift-scan recording support (ezRA `.txt` format)** — incorporate
+      the role of **ezCol** (the data-collection module of Ted Cline's free
+      open-source **ezRA** — Easy Radio Astronomy — suite,
+      https://github.com/tedcline/ezRA) so the Spectrum Analyzer can serve
+      as the drift-scan data collector: record integrated frequency spectra
+      in the **ezRA `.txt` data-file format**, feeding the rest of the suite
+      (ezCon → .ezb condensed files → ezPlot/ezSky/ezGal/ezGLon analysis &
+      sky maps). Notes:
+      - Primary use: 1420 MHz hydrogen-line drift scans on the
+        DSES-Drift-Scan box; complements (not replaces) the `.fil`/SigMF
+        pulsar recording modes — this is a third recording format targeting
+        long-timescale integrated spectra rather than fast time series.
+      - Get the exact `.txt` column/header spec from the ezRA docs/ezCol
+        source at implementation time; validate output by running real
+        captures through ezCon/ezPlot end-to-end (they are the acceptance
+        test). ezRA also ships converters (ezColBAA etc.) that hint at the
+        format's flexibility.
+      - Natural fit with the existing recording panel (Source name, timed
+        recording, elapsed counter) and the site/az-el metadata from the
+        visibility-planner item (drift scans want LST + pointing recorded).
+
 ## Backlog / unscheduled
 
 - [ ] **B0950+08 re-observation plan (observing, not software):** processing
