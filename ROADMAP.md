@@ -158,9 +158,22 @@ Conventions: `[ ]` planned, `[x]` shipped (note the commit), `[-]` dropped
       application the Spectrum Analyzer receives weak signals WORSE than
       other software on the SAME hardware. If real, this eats exactly the
       noise-limited margin that separates B0950+08 from a clean detection —
-      investigate before the next observing trip. Candidate causes to check
-      systematically (A/B against SDR# / GQRX / SDRangel on one antenna +
-      signal generator):
+      investigate before the next observing trip.
+      **PRIME SUSPECT FOUND (code inspection 2026-07-17):** the display FFT
+      processes only the latest `fft_size` samples per timer tick
+      (`_tick()` → `self._sink.latest(n)`) — at 20 MS/s / 1024-pt / ~30-60 Hz
+      that is ~0.3% of the stream; the rest never reaches the display.
+      Software that Welch-averages EVERY frame between screen updates shows
+      a far deeper-averaged noise floor (up to ~18x lower sigma at 20 MS/s),
+      which is exactly "weak signals better in other apps, same hardware."
+      Fix: accumulate/Welch-average all (or a sizable fraction of) the
+      blocks since the last tick before the EMA. NOTE: display-only — the
+      .fil recording path processes every sample, so pulsar recordings and
+      the B0950+08 noise limit are unaffected. Precision itself is fine:
+      display FFT is float64, linear-power averaging already default,
+      ENBW-aware scaling; recording float32 is standard for 12-bit ADC data.
+      Remaining candidates to check in the A/B (SDR# / GQRX / SDRangel, one
+      antenna + calibrated weak signal):
       - RF gain defaults / AGC: are we leaving front-end gain on the table?
       - Receive-chain config: antenna port selection, LNA path, bandwidth
         vs sample-rate filter rolloff at band edges.
