@@ -8,6 +8,37 @@ Conventions: `[ ]` planned, `[x]` shipped (note the commit), `[-]` dropped
 
 ## v1.1.7 (planned)
 
+- [ ] **① TOP PRIORITY (Rick, 2026-07-17, for Ray): display sensitivity fix —
+      integrate the full stream** — Ray Uberecken (AA0L) reports (verbal)
+      that in a different application the Spectrum Analyzer receives weak
+      signals WORSE than other software on the SAME hardware.
+      **PRIME SUSPECT FOUND (code inspection 2026-07-17):** the display FFT
+      processes only the latest `fft_size` samples per timer tick
+      (`_tick()` → `self._sink.latest(n)`) — at 20 MS/s / 1024-pt / ~30-60 Hz
+      that is ~0.3% of the stream; the rest never reaches the display.
+      Software that Welch-averages EVERY frame between screen updates shows
+      a far deeper-averaged noise floor (up to ~18x lower sigma at 20 MS/s),
+      which is exactly "weak signals better in other apps, same hardware."
+      **Fix: accumulate/Welch-average all (or a sizable fraction of) the
+      blocks since the last tick before the EMA.** NOTE: display-only — the
+      .fil recording path processes every sample, so pulsar recordings and
+      the B0950+08 noise limit are unaffected. Precision itself audited
+      clean: display FFT is float64, linear-power averaging already default,
+      ENBW-aware scaling; recording float32 is standard for 12-bit ADC data.
+      Verify the fix (and rule out secondary causes) with an A/B vs
+      SDR# / GQRX / SDRangel, one antenna + calibrated weak signal:
+      - RF gain defaults / AGC: are we leaving front-end gain on the table?
+      - Receive-chain config: antenna port selection, LNA path, bandwidth
+        vs sample-rate filter rolloff at band edges.
+      - FFT processing: window choice, FFT size vs RBW, averaging depth vs
+        other apps' defaults.
+      - **RX overflows**: dropped samples discard integration time — ties
+        into the timebase item; heavy drops = real sensitivity loss.
+      - Wire format sc8 vs sc16 on the USB link, DC-offset / IQ-balance
+        correction settings.
+      Get the exact scenario from Ray (app, mode, signal type, hardware,
+      settings) and reproduce with a calibrated weak signal first.
+
 - [ ] **Quick-look PRESTO analysis during a long recording** — while a
       multi-hour recording runs, let the user (or a timer) trigger a draft
       PRESTO fold on the data captured so far WITHOUT interrupting the
@@ -152,41 +183,6 @@ Conventions: `[ ]` planned, `[x]` shipped (note the commit), `[-]` dropped
       UI sketch: right-click a signal → "Listen here", a compact demod
       panel (mode, squelch, volume, audio-record), tuned marker shown on
       the spectrum. Settings persist in a new `[audio]`/`[demod]` group.
-
-- [ ] **Weak-signal sensitivity investigation (Ray's report, 2026-07-17)** —
-      Ray Uberecken (AA0L) reports (verbal, via Rick) that in a different
-      application the Spectrum Analyzer receives weak signals WORSE than
-      other software on the SAME hardware. If real, this eats exactly the
-      noise-limited margin that separates B0950+08 from a clean detection —
-      investigate before the next observing trip.
-      **PRIME SUSPECT FOUND (code inspection 2026-07-17):** the display FFT
-      processes only the latest `fft_size` samples per timer tick
-      (`_tick()` → `self._sink.latest(n)`) — at 20 MS/s / 1024-pt / ~30-60 Hz
-      that is ~0.3% of the stream; the rest never reaches the display.
-      Software that Welch-averages EVERY frame between screen updates shows
-      a far deeper-averaged noise floor (up to ~18x lower sigma at 20 MS/s),
-      which is exactly "weak signals better in other apps, same hardware."
-      Fix: accumulate/Welch-average all (or a sizable fraction of) the
-      blocks since the last tick before the EMA. NOTE: display-only — the
-      .fil recording path processes every sample, so pulsar recordings and
-      the B0950+08 noise limit are unaffected. Precision itself is fine:
-      display FFT is float64, linear-power averaging already default,
-      ENBW-aware scaling; recording float32 is standard for 12-bit ADC data.
-      Remaining candidates to check in the A/B (SDR# / GQRX / SDRangel, one
-      antenna + calibrated weak signal):
-      - RF gain defaults / AGC: are we leaving front-end gain on the table?
-      - Receive-chain config: antenna port selection, LNA path, bandwidth
-        vs sample-rate filter rolloff at band edges.
-      - FFT processing: window choice (Hann vs none/flattop), FFT size vs
-        RBW, averaging/integration depth vs other apps' defaults, possible
-        magnitude-vs-power (dB) scaling differences in the display path.
-      - **RX overflows**: dropped samples discard integration time — ties
-        directly into the timebase item below; heavy drops = real
-        sensitivity loss, not just display cosmetics.
-      - Wire format sc8 vs sc16 on the USB link, DC-offset / IQ-balance
-        correction settings.
-      Get the exact scenario from Ray (app, mode, signal type, hardware,
-      settings) and reproduce with a calibrated weak signal first.
 
 - [ ] **Recording timebase integrity: log overflows, keep the `.fil` clock
       honest** — root-caused 2026-07-17 while re-folding the Haswell
