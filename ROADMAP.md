@@ -169,9 +169,17 @@ Conventions: `[ ]` planned, `[x]` shipped (note the commit), `[-]` dropped
       1. Count overflow events (timestamped) during a recording; write
          them into the `.fil`-adjacent metadata/SigMF and surface them in
          the recording panel + results card ("N overflows ≈ X ms lost").
-      2. Consider gap-padding: on detected drops, insert the missing
-         number of samples (zeros or noise) so the sample clock tracks
-         wall time — the standard professional fix.
+      2. Gap-padding: on detected drops, insert the missing number of
+         samples (zeros or noise) so the sample clock tracks wall time —
+         the standard professional fix. **PROVEN 2026-07-17 by manual
+         repair:** the drift function was mapped with 22 fixed-period
+         window folds (smooth drip + ONE +0.219-rotation step at
+         t≈550 s); padding 0.558 s of noise at the step in a copy of the
+         `.fil` took the fold from 22.4σ (split profile, DM artifact 36)
+         to **28.0σ, textbook single profile, DM back at 25.3**. Padding
+         works; the app should do it automatically at overflow time
+         (where the true gap length is knowable from UHD timestamps —
+         post-hoc repair only recovers it modulo the pulse period).
       3. Optional: external/GPSDO reference support for absolute clock
          accuracy at the site (doesn't fix drops, fixes rate).
       Full analysis with plots: `DSES_SA_Recordings/…B0329+54…_prepfold-
