@@ -153,6 +153,28 @@ Conventions: `[ ]` planned, `[x]` shipped (note the commit), `[-]` dropped
       panel (mode, squelch, volume, audio-record), tuned marker shown on
       the spectrum. Settings persist in a new `[audio]`/`[demod]` group.
 
+- [ ] **Weak-signal sensitivity investigation (Ray's report, 2026-07-17)** —
+      Ray Uberecken (AA0L) reports (verbal, via Rick) that in a different
+      application the Spectrum Analyzer receives weak signals WORSE than
+      other software on the SAME hardware. If real, this eats exactly the
+      noise-limited margin that separates B0950+08 from a clean detection —
+      investigate before the next observing trip. Candidate causes to check
+      systematically (A/B against SDR# / GQRX / SDRangel on one antenna +
+      signal generator):
+      - RF gain defaults / AGC: are we leaving front-end gain on the table?
+      - Receive-chain config: antenna port selection, LNA path, bandwidth
+        vs sample-rate filter rolloff at band edges.
+      - FFT processing: window choice (Hann vs none/flattop), FFT size vs
+        RBW, averaging/integration depth vs other apps' defaults, possible
+        magnitude-vs-power (dB) scaling differences in the display path.
+      - **RX overflows**: dropped samples discard integration time — ties
+        directly into the timebase item below; heavy drops = real
+        sensitivity loss, not just display cosmetics.
+      - Wire format sc8 vs sc16 on the USB link, DC-offset / IQ-balance
+        correction settings.
+      Get the exact scenario from Ray (app, mode, signal type, hardware,
+      settings) and reproduce with a calibrated weak signal first.
+
 - [ ] **Recording timebase integrity: log overflows, keep the `.fil` clock
       honest** — root-caused 2026-07-17 while re-folding the Haswell
       B0329+54 recording per Dan Layne's review: a rigid no-search
