@@ -28,7 +28,16 @@ Conventions: `[ ]` planned, `[x]` shipped (note the commit), `[-]` dropped
       workflow): 9 findings confirmed, all fixed. **Release note needed:**
       default averaging is now linear power, so the displayed noise floor
       reads ~+2.5 dB vs ≤1.1.6 (the old dB-domain average was biased low —
-      this is a correction, not a regression). Ray Uberecken (AA0L) reports (verbal)
+      this is a correction, not a regression).
+      **GUI smoke test PASSED 2026-07-18 in playback mode** (B210 was NOT
+      connected to the dev PC — plug it in for the live-RF leg): app
+      launches, razor-flat Welch floor at 65536-pt/152.6 Hz RBW, max hold
+      verified as a per-block peak detector with quantitatively correct
+      order statistics (~+4 dB gap at ~15 blocks/tick vs ~+9 dB at ~9700),
+      FFT-size change 65536→1024 instant and clean, GUI responsive
+      throughout. (Dev note: launching outside the launcher needs
+      UHD_IMAGES_DIR pointed at radioconda's images for live B210 use.)
+      Ray Uberecken (AA0L) reports (verbal)
       that in a different application the Spectrum Analyzer receives weak
       signals WORSE than other software on the SAME hardware.
       **PRIME SUSPECT FOUND (code inspection 2026-07-17):** the display FFT
