@@ -28,7 +28,7 @@ const BODY = "Calibri";
 const A = (...p) => path.join(__dirname, ...p);
 const LOGO_TEAL = A("..", "assets", "DSES_Logo_Compact_Teal.png"); // 1317x488
 const LOGO_REV = A("..", "assets", "DSES_Logo_Compact_Reversed_WhiteOnNavy.png"); // 1457x598, card is NAVY
-const FIG_0329 = A("..", "haswell-2026-07", "figures", "B0329+54_prepfold.png"); // 1403x992
+const FIG_0329R = A("figures", "B0329+54_prepfold_gapbridged.png"); // 1542x1087, 2026-07-17 re-fold
 const FIG_0950 = A("..", "haswell-2026-07", "figures", "B0950+08_prepfold.png"); // 1637x1157
 const APP_ICON = A("..", "..", "icons", "dses_sa.png"); // square, pulsar art
 
@@ -175,12 +175,12 @@ function figFrame(s, imgPath, x, y, w, h) {
       "recording analysis-ready SIGPROC filterbank data — into a single, easy-to-use package driving an " +
       "Ettus USRP B210 software-defined radio. On July 11, 2026, a three-member team, none of them " +
       "pulsar-processing experts, put the premise to the test at the Society’s 60-foot dish in Haswell, " +
-      "Colorado. Both target pulsars were detected with high confidence — B0329+54 at ~20 sigma and " +
-      "B0950+08 at ~10 sigma — and the detections were reproduced independently on two operating systems, " +
-      "agreeing to three significant figures. The talk walks through the software, the observing session, the " +
-      "PRESTO analysis (including how dispersion separates a real pulsar from interference), some instructive " +
-      "field-engineering surprises, and the road ahead: training a new generation of DSES observers on a far " +
-      "gentler learning curve.",
+      "Colorado. B0329+54 was ultimately detected at 28 sigma — a figure that grew from 20 when peer review " +
+      "of the trip report exposed, and repaired, a subtle recording-timebase defect — and B0950+08 produced " +
+      "a strong ~9-sigma candidate whose best-fit period and dispersion land on the catalog values. Field " +
+      "feedback drove two software releases within a week, and a documented upgrade queue — from a built-in " +
+      "pulsar visibility planner to one-click post-recording analysis — now charts the path to training a " +
+      "new generation of DSES observers on a far gentler learning curve.",
     {
       x: MX + 0.3, y: 1.9, w: 7.95, h: 4.6, margin: 0, valign: "top",
       fontFace: BODY, fontSize: 13.5, color: INK, lineSpacingMultiple: 1.12,
@@ -404,7 +404,7 @@ function figFrame(s, imgPath, x, y, w, h) {
     x: 9.55, y: 4.18, w: 2.95, h: 0.6, margin: 0, align: "center",
     fontFace: BODY, fontSize: 11.5, color: ICE,
   });
-  s.addText("v1.1.6 — released July 12, 2026", {
+  s.addText("v1.1.7 — released July 18, 2026", {
     x: 9.55, y: 5.42, w: 2.95, h: 0.3, margin: 0, align: "center",
     fontFace: BODY, fontSize: 10.5, color: GOLD_SOFT,
   });
@@ -551,33 +551,79 @@ function figFrame(s, imgPath, x, y, w, h) {
 // =================================================================================
 {
   const s = lightSlide("Results", "B0329+54 — a textbook detection");
-  const fw = 6.62, fh = fw * (992 / 1403);
-  figFrame(s, FIG_0329, 6.15, 1.78, fw, fh);
-  s.addText("PRESTO prepfold diagnostic — 36.6-minute observation", {
+  const fw = 6.62, fh = fw * (1087 / 1542);
+  figFrame(s, FIG_0329R, 6.15, 1.78, fw, fh);
+  s.addText("Gap-bridged, RFI-cleaned ephemeris fold — the full 36.6-minute integration (2026-07-17 re-analysis)", {
     x: 6.15, y: 6.55, w: fw, h: 0.3, margin: 0, align: "center",
     fontFace: BODY, fontSize: 10.5, italic: true, color: MUTED,
   });
-  s.addText("20.6 σ", {
+  s.addText("28.0 σ", {
     x: MX, y: 1.85, w: 4.9, h: 1.0, margin: 0,
     fontFace: HEAD, fontSize: 60, bold: true, color: TEAL,
   });
-  s.addText("probability the signal is noise: < 5×10⁻⁹⁰", {
+  s.addText("probability the signal is noise: < 8×10⁻¹⁷³", {
     x: MX, y: 2.95, w: 4.9, h: 0.35, margin: 0,
     fontFace: BODY, fontSize: 13, color: GOLD, bold: true,
   });
   s.addText(
     [
-      { text: "The characteristic double-peaked pulse profile, at the catalog period of 714.5 ms", options: { bullet: true, breakLine: true, paraSpaceAfter: 10 } },
-      { text: "Signal persists across the entire 36-minute observation", options: { bullet: true, breakLine: true, paraSpaceAfter: 10 } },
+      { text: "Textbook single-peaked profile at the catalog period of 714.5 ms, coherent across the full 36.6 minutes", options: { bullet: true, breakLine: true, paraSpaceAfter: 10 } },
       { text: "Detection peaks at dispersion measure ≈ 25 — catalog value 26.8 — and falls off toward zero", options: { bullet: true, breakLine: true, paraSpaceAfter: 10 } },
-      { text: "Blind search (period, period-derivative, and DM all searched) converges on the same answer", options: { bullet: true } },
+      { text: "In the field it stood at ~20 σ; RFI cleanup and one timebase repair recovered the rest — that story is the next slide", options: { bullet: true } },
     ],
     { x: MX, y: 3.55, w: 5.1, h: 3.1, margin: 0, valign: "top", fontFace: BODY, fontSize: 13.5, color: INK }
   );
   s.addNotes(
-    "Walk the figure: profile top-left (double peak), phase-vs-time panel shows persistence, " +
-      "and the DM curve peaks near the catalog value. Fold types all agree: topocentric ~20.1 sigma, " +
-      "barycentric against the published ephemeris ~19.9 sigma, blind search 20.6 sigma at DM ≈ 25."
+    "Walk the figure: single clean pulse top-left, single vertical track in phase-vs-time, DM curve peaking " +
+      "near catalog. The number's history: ~19.9-20.6 sigma across the original fold types as reported in the " +
+      "field; RFI mask + zap took it to 22.4; bridging a 0.558-second dropped-sample gap recovered full " +
+      "coherence at 28.0 sigma with DM back at 25.3. Chi-squared_red 16.75."
+  );
+}
+
+// =================================================================================
+// 7b — PEER REVIEW / TIMEBASE FORENSICS
+// =================================================================================
+{
+  const s = lightSlide("Peer review", "One review comment was worth 5.6 σ");
+  const steps = [
+    ["The comment", "Dan Layne (AD0CY), reviewing the trip report: the fold shows a phase drift it shouldn’t have"],
+    ["The forensics", "A rigid no-search ephemeris fold: smooth 1.2-rotation drift plus one +0.22-rotation step — parts in 10⁴, five orders beyond any physics. Our clock, not the sky"],
+    ["The culprit", "USB sample drops during recording silently shorten the .fil’s sample-count clock — the app showed overflows live but didn’t count or log them"],
+    ["The repair", "0.558 s of noise padded at the step: 22.4 σ → 28.0 σ, single textbook profile, DM back at 25.3 — diagnosis confirmed by repair"],
+  ];
+  const scw = 2.92, sy = 2.0, sh = 3.3;
+  steps.forEach(([name, desc], i) => {
+    const x = MX + i * (scw + 0.14);
+    card(s, x, sy, scw, sh);
+    numDot(s, x + 0.24, sy + 0.28, String(i + 1), i === 3 ? GOLD : TEAL, 0.52);
+    s.addText(name, {
+      x: x + 0.24, y: sy + 1.0, w: scw - 0.48, h: 0.4, margin: 0,
+      fontFace: HEAD, fontSize: 15, bold: true, color: NAVY,
+    });
+    s.addText(desc, {
+      x: x + 0.24, y: sy + 1.45, w: scw - 0.48, h: sh - 1.6, margin: 0, valign: "top",
+      fontFace: BODY, fontSize: 11.5, color: INK,
+    });
+  });
+  card(s, MX, 5.75, 12.09, 1.0, TINT, TINT_LN);
+  s.addText(
+    [
+      { text: "Return on criticism.  ", options: { bold: true, color: GOLD } },
+      {
+        text: "Overflow logging and automatic gap-padding are now queued on the roadmap — future recordings keep an honest clock.",
+        options: { color: NAVY },
+      },
+    ],
+    { x: MX + 0.35, y: 5.75, w: 11.4, h: 1.0, margin: 0, valign: "middle", fontFace: BODY, fontSize: 14.5 }
+  );
+  s.addNotes(
+    "The drift function was mapped directly: 22 consecutive 100-second fixed-period folds, each window's " +
+      "phase measured by cross-correlation — a smooth accelerating drip plus one discrete +0.219-rotation step " +
+      "at t ≈ 550 s. The pad is 0.025% of the data, a copy of the preceding real noise — no synthetic signal; " +
+      "it only restores the time axis. The 5.6-sigma jump is the coherence recovered when the two segments " +
+      "finally add in phase. Caveat: the padded file is for detection and profile work, not absolute timing. " +
+      "Full analysis in the refined fold PDFs beside the recordings."
   );
 }
 
@@ -585,34 +631,37 @@ function figFrame(s, imgPath, x, y, w, h) {
 // 8 — B0950+08 RESULT
 // =================================================================================
 {
-  const s = lightSlide("Results", "B0950+08 — detected, with a lesson inside");
+  const s = lightSlide("Results", "B0950+08 — a strong candidate, honestly framed");
   const fw = 6.62, fh = fw * (1157 / 1637);
   figFrame(s, FIG_0950, 6.15, 1.78, fw, fh);
   s.addText("Fold at the known 253 ms period — 22.2-minute observation", {
     x: 6.15, y: 6.55, w: fw, h: 0.3, margin: 0, align: "center",
     fontFace: BODY, fontSize: 10.5, italic: true, color: MUTED,
   });
-  s.addText("~9.7 σ", {
+  s.addText("~9 σ", {
     x: MX, y: 1.85, w: 4.9, h: 1.0, margin: 0,
     fontFace: HEAD, fontSize: 60, bold: true, color: TEAL,
   });
-  s.addText("probability the signal is noise: < 2×10⁻²²", {
+  s.addText("after cleanup, the best fit lands on the catalog values", {
     x: MX, y: 2.95, w: 4.9, h: 0.35, margin: 0,
     fontFace: BODY, fontSize: 13, color: GOLD, bold: true,
   });
   s.addText(
     [
-      { text: "Clear peak at the pulsar’s 253 ms period when folded at the known ephemeris", options: { bullet: true, breakLine: true, paraSpaceAfter: 10 } },
-      { text: "The lesson: with only 20 MHz at 420 MHz, its tiny dispersion measure (2.97) is indistinguishable from zero — a blind search “slides” to DM 0 and superficially resembles interference", options: { bullet: true, breakLine: true, paraSpaceAfter: 10 } },
-      { text: "Folding at the known period settles it: the periodicity is unmistakably the pulsar", options: { bullet: true, breakLine: true, paraSpaceAfter: 10 } },
-      { text: "A strong scintillator — a longer follow-up observation is planned", options: { bullet: true } },
+      { text: "Clear peak at the pulsar’s 253 ms period when folded at the known ephemeris (~9.7 σ as recorded)", options: { bullet: true, breakLine: true, paraSpaceAfter: 9 } },
+      { text: "With RFI masked and the timebase repaired, the search converges on P = 253.05 ms and DM ≈ 2.9 — the catalog values — exactly how a real detection behaves", options: { bullet: true, breakLine: true, paraSpaceAfter: 9 } },
+      { text: "But it is noise-limited: at 20 MHz bandwidth DM 2.97 is indistinguishable from zero, and ~9 σ leaves no room for decisive sub-tests — a strong candidate, not yet a publishable detection", options: { bullet: true, breakLine: true, paraSpaceAfter: 9 } },
+      { text: "The remaining gains are observational: a 90-minute track (≈20 σ), several sessions to catch scintillation maxima, wider bandwidth", options: { bullet: true } },
     ],
-    { x: MX, y: 3.55, w: 5.1, h: 3.2, margin: 0, valign: "top", fontFace: BODY, fontSize: 13, color: INK }
+    { x: MX, y: 3.55, w: 5.1, h: 3.2, margin: 0, valign: "top", fontFace: BODY, fontSize: 12.5, color: INK }
   );
   s.addNotes(
-    "Good teaching moment for the audience: low-DM pulsars at modest bandwidth can masquerade as RFI in a " +
-      "blind search. Topocentric fold ~9.7 sigma, barycentric ~9.8. Scintillation means apparent brightness " +
-      "varies as interstellar plasma focuses and defocuses the signal — longer integration next trip."
+    "Honesty is the credibility of the whole talk: the 2026-07-17 re-analysis applied the full B0329+54 " +
+      "cleanup — the significance stays ~9 sigma (noise-limited, not artifact-limited), but the best-fit " +
+      "parameters walk onto the catalog values for the first time. A predictive split-half coherence test " +
+      "came out consistent (~2 sigma) but not decisive — at 9 sigma total, subdividing runs out of signal. " +
+      "Processing gains are exhausted; the re-observation plan is on the roadmap: record after the timebase " +
+      "fix ships, 90+ minutes, multiple sessions for scintillation."
   );
 }
 
@@ -720,7 +769,7 @@ function figFrame(s, imgPath, x, y, w, h) {
 // 11 — v1.1.6
 // =================================================================================
 {
-  const s = lightSlide("Shipped", "Field wish-list → released in two days");
+  const s = lightSlide("Shipped", "Field wish-list → v1.1.6 in two days");
   s.addText("Spectrum Analyzer v1.1.6 — cut and published July 12, one day after the observing session:", {
     x: MX, y: 1.58, w: 11.5, h: 0.4, margin: 0, fontFace: BODY, fontSize: 14, color: INK,
   });
@@ -764,33 +813,96 @@ function figFrame(s, imgPath, x, y, w, h) {
 }
 
 // =================================================================================
+// 11b — v1.1.7
+// =================================================================================
+{
+  const s = lightSlide("Shipped, again", "v1.1.7 six days later — the display was hiding signals");
+  const steps = [
+    ["The report", "Ray (AA0L): on the same hardware, other SDR software shows weak signals ours doesn’t"],
+    ["The root cause", "The display FFT examined only the newest FFT-length of samples each screen tick — about 0.3% of the stream at 20 MS/s. The other 99.7% never reached the screen"],
+    ["The fix", "Welch-average every sample between screen updates; true per-block peak/min hold detectors; an adaptive CPU budget so slower machines shed coverage gracefully"],
+    ["The result", "A razor-flat noise floor with sub-dB scatter — weak signals stand clear. Verified live on the B210; released July 18"],
+  ];
+  const scw = 2.92, sy = 2.0, sh = 3.3;
+  steps.forEach(([name, desc], i) => {
+    const x = MX + i * (scw + 0.14);
+    card(s, x, sy, scw, sh);
+    numDot(s, x + 0.24, sy + 0.28, String(i + 1), i === 3 ? GOLD : TEAL, 0.52);
+    s.addText(name, {
+      x: x + 0.24, y: sy + 1.0, w: scw - 0.48, h: 0.4, margin: 0,
+      fontFace: HEAD, fontSize: 15, bold: true, color: NAVY,
+    });
+    s.addText(desc, {
+      x: x + 0.24, y: sy + 1.45, w: scw - 0.48, h: sh - 1.6, margin: 0, valign: "top",
+      fontFace: BODY, fontSize: 11.5, color: INK,
+    });
+  });
+  card(s, MX, 5.75, 12.09, 1.0, TINT, TINT_LN);
+  s.addText(
+    [
+      { text: "Recordings were never affected", options: { bold: true, color: GOLD } },
+      {
+        text:
+          " — the filterbank path always processed every sample; this was display-only. Two field reports, two releases, seven days.",
+        options: { color: NAVY },
+      },
+    ],
+    { x: MX + 0.35, y: 5.75, w: 11.4, h: 1.0, margin: 0, valign: "middle", fontFace: BODY, fontSize: 14.5 }
+  );
+  s.addNotes(
+    "The noise-floor scatter dropped ~34x (≈ sqrt of the averaging depth); max hold is now a true per-block " +
+      "peak detector, so a 51-microsecond burst reads at full amplitude instead of -27 dB. One release note " +
+      "worth mentioning: the default average is now linear power, so the displayed floor reads about +2.5 dB " +
+      "versus older versions — the old dB-domain average was biased low; the new number is the honest one. " +
+      "Verified live on the B210 at 1422 MHz with three weak narrowband test signals."
+  );
+}
+
+// =================================================================================
 // 12 — NEXT STEPS
 // =================================================================================
 {
-  const s = lightSlide("The road ahead", "The barrier is now a slope");
-  const steps = [
-    ["Train the interest group", "A roster of DSES members is signed up for radio astronomy — first observing sessions on a far gentler learning curve."],
-    ["Re-observe B0950+08", "Longer integration to ride through scintillation."],
-    ["Toward timing-grade data", "Repeat B0329+54 observations — pulse arrival times over a long baseline."],
-    ["Publish", "Full trip report on the DSES web site; this talk for SARA."],
-    ["Keep building", "More Spectrum Analyzer features are planned — the report and operating guide are the baseline future releases will update."],
+  const s = lightSlide("The road ahead", "A documented upgrade queue");
+  const queue = [
+    ["Pulsar visibility planner", "“what’s up now?” — pulsars above the horizon with az/el, flux, and time left; a pick fills the recording Source field"],
+    ["One-click post-processing", "“is it good?” — automatic RFI mask + catalog fold when a recording ends; sigma/DM results card and a plain verdict"],
+    ["Quick-look during recording", "a draft fold on a snapshot of the data so far — without interrupting a multi-hour capture"],
+    ["Timebase integrity", "count and log overflows; automatic gap-padding keeps the .fil clock honest — the peer-review finding, fixed at the source"],
+    ["Self-contained fold PDFs", "commands, results table, and plain-language verdict inside every chart PDF — nothing to chase down later"],
+    ["Audio demodulators for RFI ID", "click a signal and listen — AM/NFM/WFM/SSB/CW; an AI mode-classifier to follow"],
+    ["System-1 steering integration", "pick a pulsar in the app and the dish knows where to point — awaiting the steering team’s API"],
+    ["ezRA drift-scan format", "record ezCol-compatible files for the open-source hydrogen-line drift-scan suite"],
   ];
-  let ny = 1.85;
-  steps.forEach(([name, desc], i) => {
-    numDot(s, MX, ny, String(i + 1), i === 0 ? GOLD : TEAL, 0.5);
-    s.addText(
-      [
-        { text: name + "  —  ", options: { bold: true, color: NAVY } },
-        { text: desc, options: { color: INK } },
-      ],
-      { x: MX + 0.72, y: ny - 0.08, w: 11.2, h: 0.66, margin: 0, valign: "middle", fontFace: BODY, fontSize: 14.5 }
-    );
-    ny += 0.98;
+  const qw = 4.25, qh = 1.05, qgx = 0.22, qgy = 0.14, qy0 = 1.95;
+  queue.forEach(([name, desc], i) => {
+    const x = MX + (i % 2) * (qw + qgx);
+    const y = qy0 + Math.floor(i / 2) * (qh + qgy);
+    card(s, x, y, qw, qh);
+    s.addText(name, {
+      x: x + 0.2, y: y + 0.09, w: qw - 0.4, h: 0.28, margin: 0,
+      fontFace: BODY, fontSize: 11.5, bold: true, color: NAVY,
+    });
+    s.addText(desc, {
+      x: x + 0.2, y: y + 0.38, w: qw - 0.4, h: 0.62, margin: 0, valign: "top",
+      fontFace: BODY, fontSize: 9.5, color: INK,
+    });
   });
+  stat(s, 9.6, 1.95, 3.1, "8", "features specified and committed to the Society’s shared roadmap", TEAL);
+  stat(s, 9.6, 3.85, 3.1, "≈20 σ", "expected from a 90-minute B0950+08 re-observation once the timebase fix ships", GOLD);
+  s.addText(
+    "Plus a site-computer upgrade to multi-core x86-64 — enabling PRESTO post-processing right at the dish.",
+    { x: 9.6, y: 5.65, w: 3.1, h: 1.1, margin: 0, valign: "top", fontFace: BODY, fontSize: 11.5, italic: true, color: MUTED }
+  );
+  s.addText(
+    "Training the radio-astronomy interest group starts on this baseline — a roster of members is signed up.",
+    { x: MX, y: 6.85, w: 8.72, h: 0.35, margin: 0, valign: "top", fontFace: BODY, fontSize: 11.5, italic: true, color: MUTED }
+  );
   s.addNotes(
-    "The point of the whole effort: training starts now, on software a newcomer can learn in an afternoon " +
-      "instead of a season. Science follow-ups: longer B0950+08 integration, and repeated B0329+54 sessions " +
-      "toward timing."
+    "This is not a wish list — every item is specified in the repository's shared ROADMAP.md with design " +
+      "notes. The queue turns the remaining expertise into software: the planner replaces the Murmur/Stellarium " +
+      "planning step, one-click post-processing replaces the hand-run PRESTO pipeline for the common case, and " +
+      "timebase integrity fixes the defect peer review found. Science queue alongside: the B0950+08 campaign, " +
+      "and repeated B0329+54 sessions toward timing-grade data."
   );
 }
 
@@ -807,9 +919,9 @@ function figFrame(s, imgPath, x, y, w, h) {
     fontFace: BODY, fontSize: 12.5, bold: true, color: GOLD_SOFT, charSpacing: 2,
   });
   const takes = [
-    "Non-experts detected two pulsars — with software the Society wrote, controls, and can teach.",
-    "The whole data path — antenna → SDR → filterbank → PRESTO — is validated end to end and reproduced across platforms.",
-    "The barrier is now a slope: training the next generation of DSES observers starts immediately.",
+    "Non-experts detected B0329+54 at 28 σ — plus a strong second candidate — with software the Society wrote, controls, and can teach.",
+    "The whole data path — antenna → SDR → filterbank → PRESTO — is validated end to end, reproduced across platforms, and hardened by peer review.",
+    "The barrier is now a slope: two releases shipped from field feedback in a week, and the upgrade queue is written down.",
   ];
   let ty = 1.35;
   takes.forEach((t, i) => {
@@ -825,7 +937,7 @@ function figFrame(s, imgPath, x, y, w, h) {
   });
   s.addText(
     [
-      { text: "Standing on the work of Dr. Richard Russel (AC0UB) and Dan Layne (AD0CY).\n", options: {} },
+      { text: "Standing on the work of Dr. Richard Russel (AC0UB) and Dan Layne (AD0CY) — whose review of the report made the headline number stronger.\n", options: {} },
       { text: "Field team: Ray Uberecken (AA0L), Anne Haney (W0ZDW), Richard Hambly (K0GD).\n", options: {} },
       { text: "Development, field diagnosis, and data processing accelerated by AI-assisted engineering (Claude Code).", options: {} },
     ],

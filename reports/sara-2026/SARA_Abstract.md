@@ -16,14 +16,15 @@ workflow — planning the observation, choosing clean frequencies, verifying the
 path, and recording analysis-ready SIGPROC filterbank data — into a single,
 easy-to-use package driving an Ettus USRP B210 software-defined radio. On July 11,
 2026, a three-member team, none of them pulsar-processing experts, put the premise to
-the test at the Society's 60-foot dish in Haswell, Colorado. Both target pulsars were
-detected with high confidence — B0329+54 at ~20 sigma and B0950+08 at ~10 sigma — and
-the detections were reproduced independently on two operating systems, agreeing to
-three significant figures. The talk walks through the software, the observing
-session, the PRESTO analysis (including how dispersion separates a real pulsar from
-interference), some instructive field-engineering surprises, and the road ahead:
-training a new generation of DSES observers on a far gentler learning curve.
+the test at the Society's 60-foot dish in Haswell, Colorado. B0329+54 was ultimately
+detected at 28 sigma — a figure that grew from 20 when peer review of the trip report
+exposed, and repaired, a subtle recording-timebase defect — and B0950+08 produced a
+strong ~9-sigma candidate whose best-fit period and dispersion land on the catalog
+values. Field feedback drove two software releases within a week, and a documented
+upgrade queue — from a built-in pulsar visibility planner to one-click post-recording
+analysis — now charts the path to training a new generation of DSES observers on a
+far gentler learning curve.
 
 ---
 
-*Word count: ~210. Contact: rick@cnssys.com*
+*Word count: ~230. Contact: rick@cnssys.com*
