@@ -87,6 +87,7 @@ QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
 import numpy as np
 from scipy.signal import windows as scipy_windows
 from scipy.ndimage import median_filter
+from scipy import fft as scipy_fft   # ~2x numpy.fft for batch transforms + workers=
 
 from gnuradio import blocks
 from gnuradio import eng_notation
@@ -215,7 +216,11 @@ DEFAULTS = {
         # dBm calibration is stored PER DEVICE in the [calibration] section
         # (keyed by driver+serial), not here — radios differ in absolute scale.
         'avg_alpha':       0.1,     # ~19-frame integration by default (was 1.0 = none)
-        'power_avg':       False,   # dB (video) averaging; True = linear-power (radiometric)
+        'power_avg':       True,    # linear-power (radiometric, unbiased). False = legacy
+                                    # dB "video" averaging (read ~2.5 dB low for noise).
+                                    # v1.1.7: intra-tick Welch averaging is inherently
+                                    # linear, so linear is now the honest default; note
+                                    # the noise floor reads ~2.5 dB higher than <=1.1.6.
         'smooth_bins':     0,       # spectral smoothing off (harms narrow lines)
         'baseline_mode':   'off',   # 'off' | 'reference' (ON/OFF) | 'flatten' (median)
         'flatten_bins':    151,     # median window for the Flatten bandpass estimate
@@ -427,18 +432,30 @@ class Settings:
 
 
 # The flowgraph groups samples into CHUNK_SIZE-sample vectors (stream_to_vector)
-# and the sample sink keeps the most recent one. It MUST be >= the largest FFT
-# in FFT_SIZES so a full-length FFT gets that many *contiguous* samples. At the
-# sample rates this tool uses (~2-25 MHz) a 65536-sample vector is only ~3-33 ms
-# of data, so the display still refreshes at ~10 Hz.
+# and the sample sink queues them for the display integrator. It MUST be >= the
+# largest FFT in FFT_SIZES so a full-length FFT gets that many *contiguous*
+# samples, and every FFT_SIZES entry divides it exactly, so a queued chunk
+# reshapes into whole FFT blocks with no remainder.
 CHUNK_SIZE = 65536  # must be >= max(FFT_SIZES)
+
+# Bound on the sink's pending-chunk queue (memory/backlog guard). At the
+# highest supported rates the flowgraph delivers ~300-400 chunks/s and the
+# display drains ~10x/s, so ~40 chunks accumulate per tick; 96 gives ample
+# headroom (96 x 512 KB = 48 MB worst case) while a stalled GUI can't hoard
+# unbounded sample memory. Overflow drops the OLDEST chunks (display favors
+# fresh data) and is counted, so the integrator can report true coverage.
+MAX_PENDING_CHUNKS = 96
 
 
 class SampleBufferSink(gr.sync_block):
-    """Stores the most-recent CHUNK_SIZE-sample complex-baseband vector.
-    Fed by stream_to_vector + keep_one_in_n upstream so this Python block
-    only sees a handful of vectors per second — pure-Python sync_blocks
-    can't keep up with 20 MS/s sample-by-sample input."""
+    """Queues arriving CHUNK_SIZE-sample complex-baseband vectors for the
+    display integrator (drain()), and keeps the newest one for latest().
+    Fed by stream_to_vector (+ keep_one_in_n at extreme rates) so this
+    pure-Python sync_block sees whole vectors, not raw samples — Python
+    can't keep up with 20 MS/s sample-by-sample, but ~300 vector
+    callbacks/s is cheap. Sensitivity fix (v1.1.7): the queue lets the
+    display integrate (Welch-average) every sample the flowgraph delivers
+    instead of one FFT-frame snapshot per screen tick."""
 
     def __init__(self, chunk_size=CHUNK_SIZE):
         gr.sync_block.__init__(
@@ -451,6 +468,9 @@ class SampleBufferSink(gr.sync_block):
         self._chunk_size = int(chunk_size)
         self._buf = np.zeros(self._chunk_size, dtype=np.complex64)
         self._filled = False
+        self._pending = []        # queued chunk copies, oldest first
+        self._dropped = 0         # chunks discarded since the last drain()
+        self._blank = False       # discard the next non-empty drain (retune barrier)
 
     @property
     def chunk_size(self):
@@ -466,9 +486,14 @@ class SampleBufferSink(gr.sync_block):
         chunks = input_items[0]
         n = len(chunks)
         if n > 0:
-            latest = chunks[-1]
             with self._lock:
-                self._buf[:] = latest
+                for c in chunks:
+                    # Copy: GNU Radio reuses its buffers after work() returns.
+                    if len(self._pending) >= MAX_PENDING_CHUNKS:
+                        self._pending.pop(0)
+                        self._dropped += 1
+                    self._pending.append(np.array(c, dtype=np.complex64))
+                self._buf[:] = chunks[-1]
                 self._filled = True
         return n
 
@@ -480,6 +505,32 @@ class SampleBufferSink(gr.sync_block):
             if not self._filled or n > self._chunk_size or n <= 0:
                 return None
             return self._buf[-n:].copy()
+
+    def drain(self):
+        """Take every queued chunk (oldest first) plus the count of chunks
+        dropped to the queue bound since the previous drain. After a flush(),
+        the first NON-EMPTY drain is discarded (returned as empty): those
+        chunks can contain pre-retune samples that were already in flight in
+        the GR pipeline / partial stream_to_vector fill / LO settle when the
+        flush ran, which a Qt-side flush cannot see."""
+        with self._lock:
+            pending, self._pending = self._pending, []
+            dropped, self._dropped = self._dropped, 0
+            if self._blank and pending:
+                self._blank = False
+                return [], dropped
+        return pending, dropped
+
+    def flush(self):
+        """Retune barrier: discard queued chunks, invalidate latest(), and
+        arm drain-blanking so in-flight stale samples are dropped too. Call
+        on retune / rate change so stale-frequency samples never enter the
+        new average."""
+        with self._lock:
+            self._pending = []
+            self._dropped = 0
+            self._filled = False
+            self._blank = True
 
 
 def _fmt_hz(hz: float) -> str:
@@ -496,9 +547,18 @@ def _fmt_hz(hz: float) -> str:
 
 
 class SpectrumProcessor(QObject):
-    """Pulls samples from a SampleBufferSink on a QTimer, computes a windowed
-    FFT, applies exponential averaging plus optional max/min hold, and emits
-    `frame_ready(avg_db, max_db, min_db)` so plot widgets can update."""
+    """Drains a SampleBufferSink on a QTimer, Welch-averages a windowed FFT
+    over EVERY block that arrived since the last tick (the v1.1.7 display
+    sensitivity fix — previously one FFT-frame snapshot per tick, ~0.3% of
+    the stream), applies exponential averaging plus optional max/min hold,
+    and emits `frame_ready(avg_db, max_db, min_db)` for the plot widgets.
+
+    Numerics: per-block transforms run in single precision (complex64 — the
+    B210's 12-bit samples leave ~5 orders of magnitude of headroom) while
+    the across-blocks power average accumulates in float64: single-precision
+    transform, double-precision accumulate. An adaptive stride sheds blocks
+    if the per-tick math overruns its time budget (slow machines / huge
+    FFTs), degrading coverage gracefully instead of freezing the GUI."""
 
     frame_ready = Signal(object, object, object)  # avg_db, max_db|None, min_db|None
 
@@ -512,6 +572,16 @@ class SpectrumProcessor(QObject):
         self._fft_size = int(fft_size)
         self._window_name = window_name
         self._window = WINDOWS[window_name](self._fft_size).astype(np.float64)
+        self._window32 = self._window.astype(np.float32)   # batch-path window
+        # Per-tick CPU budget: the block count is bounded BEFORE the math via
+        # a learned per-block cost estimate, so even a full backlog (event
+        # loop stalled by a dialog/drag) can never freeze the GUI. Blocks are
+        # strided (not truncated) so the average still spans the whole tick.
+        self._tick_budget_frac = 0.4                    # fraction of the interval
+        self._sec_per_block = 2e-8 * self._fft_size     # learned each tick (EMA)
+        self._stride = 1               # diagnostics: last tick's stride
+        self._last_blocks_used = 0     # diagnostics: blocks in last average
+        self._last_dropped = 0         # diagnostics: chunks lost to backlog
         self._normalize = bool(normalize)
         self._dc_suppress = bool(dc_suppress)
         self._unit = unit if unit in ('relative', 'dbfs', 'dbm') else 'relative'
@@ -558,8 +628,10 @@ class SpectrumProcessor(QObject):
     def set_fft_size(self, n):
         self._fft_size = int(n)
         self._window = WINDOWS[self._window_name](self._fft_size).astype(np.float64)
+        self._window32 = self._window.astype(np.float32)
         self._sink.set_capacity(max(8192, self._fft_size * 2))
         self._recompute_window_norm()
+        self._sec_per_block = 2e-8 * self._fft_size   # re-learn cost at this size
         self._avg = self._max = self._min = None
         self._reference = None          # different bin count invalidates the OFF ref
 
@@ -569,6 +641,7 @@ class SpectrumProcessor(QObject):
             return
         self._window_name = name
         self._window = WINDOWS[name](self._fft_size).astype(np.float64)
+        self._window32 = self._window.astype(np.float32)
         self._recompute_window_norm()
 
     @Slot(float)
@@ -633,8 +706,14 @@ class SpectrumProcessor(QObject):
     @Slot()
     def reset_averaging(self):
         """Drop the running average + holds — call on any retune / sample-rate
-        change so a long integration doesn't smear across the new frequency axis."""
+        change so a long integration doesn't smear across the new frequency axis.
+        Also flushes the sink's pending-chunk queue: samples captured at the OLD
+        frequency must not be Welch-averaged into the new one (matters for Sweep
+        stepping, which retunes every few hundred ms)."""
         self._avg = self._max = self._min = None
+        flush = getattr(self._sink, "flush", None)
+        if flush is not None:
+            flush()
 
     @Slot(bool)
     def set_window_normalized(self, on):
@@ -674,19 +753,65 @@ class SpectrumProcessor(QObject):
 
     def _tick(self):
         n = self._fft_size
-        samples = self._sink.latest(n)
-        if samples is None:
-            return
-        if self._dc_suppress:
-            # Zero-IF radios (HackRF, RTL-SDR, …) put a DC-offset / LO-leakage
-            # spike in the center bin (= the tuned center frequency). Subtract
-            # the complex mean — a per-frame DC block — to remove it. This is
-            # display-only: the .fil / SigMF recorders tap the raw stream.
-            samples = samples - samples.mean()
-        windowed = samples * self._window
-        spec = np.fft.fftshift(np.fft.fft(windowed))
+        t_start = time.perf_counter()
+        chunks, dropped = self._sink.drain()
+        self._last_dropped = dropped
+        pk = mnm = None
+        if chunks:
+            # Welch path: every chunk splits into whole FFT blocks (each
+            # FFT_SIZES entry divides CHUNK_SIZE), all averaged in linear
+            # power into ONE low-variance frame for this tick.
+            blocks = np.concatenate(chunks).reshape(-1, n)
+            # Proactive budget: cap the block count BEFORE the math using
+            # the learned per-block cost, so even a 96-chunk backlog cannot
+            # stall the GUI thread.
+            budget = self._timer.interval() * 1e-3 * self._tick_budget_frac
+            cap = max(1, int(budget / max(self._sec_per_block, 1e-9)))
+            stride = -(-blocks.shape[0] // cap)          # ceil division
+            if stride > 1:
+                blocks = blocks[::stride]
+            self._stride = stride
+            if self._dc_suppress:
+                # Zero-IF radios (HackRF, RTL-SDR, …) put a DC-offset /
+                # LO-leakage spike in the center bin. Per-block complex-mean
+                # subtraction, display-only: the recorders tap the raw stream.
+                blocks = blocks - blocks.mean(axis=1, keepdims=True)
+            spec = scipy_fft.fft(blocks * self._window32, axis=1, workers=-1)
+            pblocks = np.abs(spec) ** 2                  # per-block power, float32
+            # Mean over blocks accumulates in float64 (single-precision
+            # transform, double-precision accumulate).
+            power = np.fft.fftshift(np.mean(pblocks, axis=0, dtype=np.float64))
+            # Holds are TRUE peak/min detectors: they see every FFT block,
+            # so a burst shorter than a tick registers at full amplitude
+            # instead of being diluted by the tick mean.
+            if self._max_on:
+                pk = np.fft.fftshift(pblocks.max(axis=0)).astype(np.float64)
+            if self._min_on:
+                mnm = np.fft.fftshift(pblocks.min(axis=0)).astype(np.float64)
+            nblk = blocks.shape[0]
+            self._last_blocks_used = nblk
+            elapsed = time.perf_counter() - t_start
+            self._sec_per_block = (0.7 * self._sec_per_block
+                                   + 0.3 * elapsed / max(1, nblk))
+        else:
+            # Fallback (flowgraph just started/stalled, or drain blanked
+            # after a retune flush): legacy single-frame snapshot; returns
+            # without painting if latest() was invalidated by the flush.
+            samples = self._sink.latest(n)
+            if samples is None:
+                return
+            if self._dc_suppress:
+                samples = samples - samples.mean()
+            spec = np.fft.fftshift(np.fft.fft(samples * self._window))
+            power = np.abs(spec) ** 2
+            self._last_blocks_used = 1
         # Base scale is dBFS: |X|² / (Σw)²  →  a full-scale tone reads 0 dBFS.
-        power = (np.abs(spec) ** 2) / (self._wsum * self._wsum)
+        scale = self._wsum * self._wsum
+        power = power / scale
+        if pk is not None:
+            pk = pk / scale
+        if mnm is not None:
+            mnm = mnm / scale
         # Average in the chosen domain. Linear power is the unbiased estimator of
         # mean power (correct for radiometry / weak-signal integration); dB/log
         # averaging is ~28% jaggier and reads ~2.5 dB low for noise.
@@ -698,15 +823,20 @@ class SpectrumProcessor(QObject):
         else:
             self._avg = a * val + (1.0 - a) * self._avg
         if self._max_on:
+            # Per-block peak when available (Welch path), else this tick's val.
+            src = val if pk is None else (
+                pk if self._power_avg else 10.0 * np.log10(pk + 1e-20))
             if self._max is None or len(self._max) != n:
-                self._max = self._avg.copy()
+                self._max = np.array(src, dtype=np.float64)
             else:
-                np.maximum(self._max, self._avg, out=self._max)
+                np.maximum(self._max, src, out=self._max)
         if self._min_on:
+            src = val if mnm is None else (
+                mnm if self._power_avg else 10.0 * np.log10(mnm + 1e-20))
             if self._min is None or len(self._min) != n:
-                self._min = self._avg.copy()
+                self._min = np.array(src, dtype=np.float64)
             else:
-                np.minimum(self._min, self._avg, out=self._min)
+                np.minimum(self._min, src, out=self._min)
 
         off = self._display_offset()
         self.frame_ready.emit(
@@ -4104,10 +4234,11 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         self._rx_group_layout.addWidget(self._device_button)
 
         # --- Spectrum display (replaces qtgui freq_sink + waterfall_sink) ---
-        # Decimate aggressively before the Python sink: at 20 MS/s a pure-Python
-        # sync_block can't keep up sample-by-sample. stream_to_vector groups
-        # samples into CHUNK_SIZE-sized vectors and keep_one_in_n drops most
-        # of them, so the sink sees ~20 vectors/sec.
+        # stream_to_vector groups samples into CHUNK_SIZE vectors so the pure-
+        # Python sink sees whole vectors (sample-by-sample can't keep up).
+        # keep_one_in_n only engages above ~26 MS/s (see _decim_for): at the
+        # rates we use, EVERY sample reaches the sink and the display
+        # Welch-averages the full stream (v1.1.7 sensitivity fix).
         self._sample_sink = SampleBufferSink(chunk_size=CHUNK_SIZE)
         self._stream_to_vec = blocks.stream_to_vector(gr.sizeof_gr_complex, CHUNK_SIZE)
         self._keep_one_in_n = blocks.keep_one_in_n(
@@ -4146,6 +4277,7 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         self._sweep_eff_center = 0.0
         self._sweep_eff_bw    = 0.0
         self._sweep_latest_avg_db = None
+        self._sweep_capture_retries = 0
         self._sweep_axis_needs_apply = False
         self._sweep_saved_alpha = None
         self._sweep_saved_max = None
@@ -4325,8 +4457,15 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         self._setup_update_checker()
 
     @staticmethod
-    def _decim_for(samp_rate, target_vec_per_sec=20):
-        """Pick keep_one_in_n's N so the Python sink sees ~target vectors/sec."""
+    def _decim_for(samp_rate, target_vec_per_sec=400):
+        """Pick keep_one_in_n's N so the Python sink sees ~target vectors/sec.
+
+        v1.1.7 sensitivity fix: 400 vec/s x 65536 samples ≈ 26 MS/s of
+        throughput, so N=1 (nothing dropped) at every rate the B210 pulsar
+        band uses; the display integrator then Welch-averages the WHOLE
+        stream instead of a 0.3% snapshot (Ray's weak-signal report). The
+        vector copies cost ~150 MB/s of memcpy at 20 MS/s — cheap; the FFT
+        cost is bounded separately by the integrator's adaptive stride."""
         return max(1, int(round(samp_rate / CHUNK_SIZE / float(target_vec_per_sec))))
 
     def _apply_playback_ui(self):
@@ -4554,9 +4693,11 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         # Restore the plots' frequency range to the tuned center.
         self._fft_plot.set_frequency_range(self.center_freq, self.samp_rate)
         self._waterfall_plot.set_frequency_range(self.center_freq, self.samp_rate)
-        # Retune the radio back to the user's chosen center frequency.
+        # Retune the radio back to the user's chosen center frequency, and
+        # drop sweep-step samples/averages so live view starts clean.
         if self._source is not None:
             self._source.set_center_freq(self.center_freq)
+        self._processor.reset_averaging()
         self._sweep_status_label.setText("Idle")
 
     def _start_sweep_pass(self):
@@ -4632,6 +4773,12 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
                   + (idx + 0.5) * self._sweep_step_actual_hz)
         if self._source is not None:
             self._source.set_center_freq(center)
+        # Retune barrier: reset the (alpha=1.0) average and flush the sink —
+        # the flush also blanks the next drain, so pre-retune samples still
+        # in flight in the GR pipeline are discarded rather than averaged
+        # into this step's tile. The first EMITTED frame therefore contains
+        # only post-retune data; capture retries until one exists.
+        self._processor.reset_averaging()
         self._sweep_status_label.setText(
             f"Step {idx + 1}/{self._sweep_n_steps} @ {_fmt_hz(center)}")
 
@@ -4643,6 +4790,16 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         if not self._sweep_active:
             return
         avg = self._sweep_latest_avg_db
+        # The retune flush blanks the first post-retune drain, so the first
+        # CLEAN frame can arrive up to ~2 tick intervals after the retune —
+        # possibly after a short settle timer. Re-wait briefly rather than
+        # writing a hole (or, worse, capturing nothing pass after pass with
+        # a very short settle_ms).
+        if avg is None and self._sweep_capture_retries < 5:
+            self._sweep_capture_retries += 1
+            self._sweep_timer.start(60)
+            return
+        self._sweep_capture_retries = 0
         kb = self._sweep_kept_bins
         si = self._sweep_start_idx
         i = self._sweep_step_idx

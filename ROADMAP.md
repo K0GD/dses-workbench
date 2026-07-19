@@ -9,7 +9,26 @@ Conventions: `[ ]` planned, `[x]` shipped (note the commit), `[-]` dropped
 ## v1.1.7 (planned)
 
 - [ ] **① TOP PRIORITY (Rick, 2026-07-17, for Ray): display sensitivity fix —
-      integrate the full stream** — Ray Uberecken (AA0L) reports (verbal)
+      integrate the full stream** — **IMPLEMENTED 2026-07-18 (Windows), needs
+      live-hardware smoke + the A/B with Ray's scenario before checking off.**
+      What shipped in the working tree: SampleBufferSink queues every chunk
+      (bounded, drop-oldest, counted); keep_one_in_n target 20→400 vec/s
+      (N=1 below ~26 MS/s); SpectrumProcessor Welch-averages every block per
+      tick (scipy.fft batch, workers=-1; float64 accumulation); proactive
+      per-tick CPU budget via a learned per-block cost (no GUI stalls, slow
+      boxes shed coverage gracefully); max/min holds are now TRUE per-block
+      peak/min detectors (a 51 µs burst reads full amplitude, not −27 dB);
+      retune barrier (flush + one-drain blanking) keeps stale-frequency
+      samples out of live view AND sweep tiles; sweep capture retries until
+      a clean post-retune frame exists. Verified: 7-test suite in
+      `test_display_sensitivity.py` (0 dBFS calibration exact; 34× noise-
+      floor scatter reduction ≈ √N; barrier; budget cap; peak holds) +
+      benchmarked 34–40 ms/tick at 26 MS/s for all FFT sizes (= stride 1,
+      full coverage, on the dev box). Adversarially reviewed (15-agent
+      workflow): 9 findings confirmed, all fixed. **Release note needed:**
+      default averaging is now linear power, so the displayed noise floor
+      reads ~+2.5 dB vs ≤1.1.6 (the old dB-domain average was biased low —
+      this is a correction, not a regression). Ray Uberecken (AA0L) reports (verbal)
       that in a different application the Spectrum Analyzer receives weak
       signals WORSE than other software on the SAME hardware.
       **PRIME SUSPECT FOUND (code inspection 2026-07-17):** the display FFT
