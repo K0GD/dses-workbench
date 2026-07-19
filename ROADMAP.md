@@ -45,6 +45,12 @@ Conventions: `[ ]` planned, `[x]` shipped (note the commit), `[-]` dropped
       headroom; scipy workers spreading the batch FFT). Remaining for this
       item: only the A/B against other SDR software on Ray's exact
       scenario (need his app/settings/signal details).
+      **SHIPPED in release 1.1.7 (2026-07-18, commit 0cf1648)** — cut
+      fast-track (including the hold-detector toggle) so Ray can test
+      tonight; the other roadmap items below continue toward a later
+      release. Sig-gen ground truth from Rick's bench for the A/B: at
+      1422 MHz center only the 1420.5 MHz line follows the generator
+      on/off; 1418 and 1425.6 MHz are internal B210 spurs.
       Ray Uberecken (AA0L) reports (verbal)
       that in a different application the Spectrum Analyzer receives weak
       signals WORSE than other software on the SAME hardware.
