@@ -226,6 +226,10 @@ DEFAULTS = {
         'flatten_bins':    151,     # median window for the Flatten bandpass estimate
         'max_hold':        False,
         'min_hold':        False,
+        'hold_detector':   'peak',  # 'peak' = per-FFT-block extremes (transient
+                                    # catcher; sits ~+10/-10*log10(N) dB from the
+                                    # mean on noise); 'average' = per-frame Welch
+                                    # means (holds stay near the baseline)
         'y_min':           -140.0,
         'y_max':           10.0,
         'linear_scale':    False,
@@ -592,6 +596,9 @@ class SpectrumProcessor(QObject):
         # smoothing: display-only boxcar over N bins (0 = off).
         self._power_avg = bool(power_avg)
         self._smooth_bins = max(0, int(smooth_bins))
+        # Hold detector: True = per-FFT-block peak/min (true transient
+        # detector), False = holds track the per-tick Welch mean.
+        self._hold_peak = True
         # Baseline / bandpass removal (display-only): 'off', 'reference'
         # (subtract a stored OFF-source spectrum → ON/OFF), or 'flatten'
         # (subtract a wide-median bandpass estimate). Flattens the floor to ~0.
@@ -681,6 +688,18 @@ class SpectrumProcessor(QObject):
     @Slot(int)
     def set_smooth_bins(self, n):
         self._smooth_bins = max(0, int(n))
+
+    @Slot(str)
+    def set_hold_detector(self, mode):
+        """'peak' = holds track per-FFT-block extremes (transient catcher;
+        on noise they sit ~+10*log10(ln N) / -10*log10(N) dB from the mean);
+        'average' = holds track the per-tick Welch mean and stay near the
+        baseline. Switching resets the holds — the accumulated extremes
+        change meaning between modes."""
+        peak = (mode != 'average')
+        if peak != self._hold_peak:
+            self._hold_peak = peak
+            self._max = self._min = None
 
     @Slot(str)
     def set_baseline_mode(self, mode):
@@ -781,12 +800,13 @@ class SpectrumProcessor(QObject):
             # Mean over blocks accumulates in float64 (single-precision
             # transform, double-precision accumulate).
             power = np.fft.fftshift(np.mean(pblocks, axis=0, dtype=np.float64))
-            # Holds are TRUE peak/min detectors: they see every FFT block,
-            # so a burst shorter than a tick registers at full amplitude
-            # instead of being diluted by the tick mean.
-            if self._max_on:
+            # In 'peak' detector mode the holds see every FFT block, so a
+            # burst shorter than a tick registers at full amplitude instead
+            # of being diluted by the tick mean. In 'average' mode pk/mnm
+            # stay None and the holds track the per-tick Welch mean below.
+            if self._max_on and self._hold_peak:
                 pk = np.fft.fftshift(pblocks.max(axis=0)).astype(np.float64)
-            if self._min_on:
+            if self._min_on and self._hold_peak:
                 mnm = np.fft.fftshift(pblocks.min(axis=0)).astype(np.float64)
             nblk = blocks.shape[0]
             self._last_blocks_used = nblk
@@ -926,6 +946,7 @@ class FftPlotWidget(QtWidgets.QWidget):
     request_average = Signal(float)
     request_max_hold = Signal(bool)
     request_min_hold = Signal(bool)
+    request_hold_detector = Signal(str)  # 'peak' | 'average'
     request_reset_max = Signal()
     request_reset_min = Signal()
     request_window_normalized = Signal(bool)
@@ -1190,6 +1211,23 @@ class FftPlotWidget(QtWidgets.QWidget):
         min_reset.clicked.connect(self.request_reset_min.emit)
         g.addWidget(self._min_check, 1, 0)
         g.addWidget(min_reset, 1, 1)
+        g.addWidget(QtWidgets.QLabel("Detector:"), 2, 0)
+        self._hold_detector_combo = QtWidgets.QComboBox()
+        self._hold_detector_combo.addItem("Peak (per FFT)", 'peak')
+        self._hold_detector_combo.addItem("Average (per frame)", 'average')
+        self._hold_detector_combo.setToolTip(
+            "What the hold traces accumulate.\n"
+            "Peak (per FFT): the extreme of every FFT block — catches even a\n"
+            "  single-block transient at full amplitude. On pure noise the max\n"
+            "  sits ~+10 dB above the average and the min keeps sinking\n"
+            "  (~-10·log10(N) dB): that is the statistics of extremes, not a\n"
+            "  bug. Min hold then shows what is ALWAYS present — steady\n"
+            "  carriers stand up out of the collapsing noise floor.\n"
+            "Average (per frame): the extreme of each display update's Welch\n"
+            "  average — both holds stay within a few dB of the baseline.")
+        self._hold_detector_combo.currentIndexChanged.connect(
+            self._on_hold_detector_changed)
+        g.addWidget(self._hold_detector_combo, 2, 1)
         v.addWidget(hold_group)
 
         # Baseline / bandpass-removal group (radio-astronomy: flatten the
@@ -1657,6 +1695,11 @@ class FftPlotWidget(QtWidgets.QWidget):
         if not on:
             self._min_curve.hide()
 
+    def _on_hold_detector_changed(self, _idx):
+        mode = self._hold_detector_combo.currentData() or 'peak'
+        self.request_hold_detector.emit(mode)
+        self.control_changed.emit('hold_detector', mode)
+
     def _on_color_clicked(self):
         c = QtWidgets.QColorDialog.getColor(self._line_color, self, "Trace color")
         if c.isValid():
@@ -1704,7 +1747,8 @@ class FftPlotWidget(QtWidgets.QWidget):
                             self._avg_slider, self._power_avg_check, self._smooth_spin,
                             self._baseline_combo, self._flatten_spin,
                             self._max_check,
-                            self._min_check, self._ymin_spin, self._ymax_spin,
+                            self._min_check, self._hold_detector_combo,
+                            self._ymin_spin, self._ymax_spin,
                             self._grid_check, self._labels_check, self._dark_bg_check,
                             self._width_spin, self._alpha_slider, self._label_edit,
                             self._linear_check):
@@ -1731,6 +1775,10 @@ class FftPlotWidget(QtWidgets.QWidget):
             self._flatten_spin.setValue(settings.get_int(section, 'flatten_bins'))
             self._max_check.setChecked(settings.get_bool(section, 'max_hold'))
             self._min_check.setChecked(settings.get_bool(section, 'min_hold'))
+            hidx = self._hold_detector_combo.findData(
+                settings.get_str(section, 'hold_detector'))
+            if hidx >= 0:
+                self._hold_detector_combo.setCurrentIndex(hidx)
             self._ymin_spin.setValue(settings.get_float(section, 'y_min'))
             self._ymax_spin.setValue(settings.get_float(section, 'y_max'))
             self._grid_check.setChecked(settings.get_bool(section, 'grid'))
@@ -1772,6 +1820,8 @@ class FftPlotWidget(QtWidgets.QWidget):
         self.request_average.emit(self._avg_slider.value() / 1000.0)
         self.request_max_hold.emit(self._max_check.isChecked())
         self.request_min_hold.emit(self._min_check.isChecked())
+        self.request_hold_detector.emit(
+            self._hold_detector_combo.currentData() or 'peak')
 
 
 class _SignalBlocker:
@@ -2695,7 +2745,16 @@ the sharpest peak but the worst sidelobes.</li>
 <li><b>Avg α</b>: exponential averaging. 1.0 = no smoothing (every frame
 is a fresh measurement). Smaller = more smoothing.</li>
 <li><b>Max / Min hold</b>: overlay traces showing the highest/lowest value
-ever seen at each bin. Use <b>Reset</b> to clear.</li>
+ever seen at each bin. Use <b>Reset</b> to clear. The <b>Detector</b> combo
+picks what they accumulate. <i>Peak (per FFT)</i>: the extreme of every FFT
+block — even a sub-millisecond burst registers at full amplitude, making Max
+hold a true transient-RFI catcher; on pure noise the Max trace settles
+~10&nbsp;dB above the average and the Min trace keeps sinking (the statistics
+of extremes over many samples — not a malfunction), so Min hold reveals
+what is <i>always</i> present: steady carriers stand up out of the collapsing
+noise floor. <i>Average (per frame)</i>: extremes of each display update's
+deep average — both holds stay within a few dB of the baseline, useful for
+tracking slow drifts.</li>
 <li><b>Y-Axis</b>: dB min/max, or click <b>Autoscale</b> to fit the
 current data. <b>Reset Axes</b> snaps the plot back to the default dB range
 and full-span frequency view — handy after you've zoomed/panned with the
@@ -4337,6 +4396,7 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         self._fft_plot.request_average.connect(self._processor.set_average_alpha)
         self._fft_plot.request_max_hold.connect(self._processor.set_max_hold)
         self._fft_plot.request_min_hold.connect(self._processor.set_min_hold)
+        self._fft_plot.request_hold_detector.connect(self._processor.set_hold_detector)
         self._fft_plot.request_reset_max.connect(self._processor.reset_max_hold)
         self._fft_plot.request_reset_min.connect(self._processor.reset_min_hold)
         self._fft_plot.request_window_normalized.connect(self._processor.set_window_normalized)

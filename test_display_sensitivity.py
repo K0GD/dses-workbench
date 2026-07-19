@@ -147,4 +147,19 @@ assert mx.max() > avg_frame.max() + dilution - 6, (
 print(f"7. per-block max hold OK: burst reads {mx.max():.1f} dB on hold vs {avg_frame.max():.1f} dB "
       f"on the tick mean ({nblocks} blocks -> {dilution:.0f} dB dilution avoided)")
 
+# --- 8. hold detector toggle: 'average' mode tracks the tick mean ---
+proc2.set_hold_detector('average')          # resets holds, switches source
+assert proc2._max is None, "switching detector mode must reset holds"
+captured.clear()
+proc2._sink.pending = [burst[i*CHUNK:(i+1)*CHUNK] for i in range(8)]
+proc2._tick()
+mx_avg = proc2._base_db(proc2._max)
+frame = captured[-1]
+gap = abs(mx_avg.max() - frame.max())
+assert gap < 1.0, f"average-mode max hold should hug the tick mean (gap {gap:.1f} dB)"
+proc2.set_hold_detector('peak')
+assert proc2._max is None, "switching back must reset holds too"
+print(f"8. hold detector toggle OK: average mode gap {gap:.2f} dB from tick mean; "
+      f"mode switches reset holds")
+
 print("\nALL DISPLAY-FIX TESTS PASSED")
