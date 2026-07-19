@@ -37,6 +37,14 @@ Conventions: `[ ]` planned, `[x]` shipped (note the commit), `[-]` dropped
       FFT-size change 65536→1024 instant and clean, GUI responsive
       throughout. (Dev note: launching outside the launcher needs
       UHD_IMAGES_DIR pointed at radioconda's images for live B210 use.)
+      **LIVE B210 leg PASSED 2026-07-18** (serial 8003886, 1422 MHz,
+      16 MS/s, RX2, 40 dB): razor-flat Welch floor at −116 dBm with sub-dB
+      scatter, three weak narrowband signals clearly visible above it (the
+      Ray demonstration), max hold ~+10 dB with correct order statistics,
+      waterfall smooth, ~242% of one core used (64-core box → huge
+      headroom; scipy workers spreading the batch FFT). Remaining for this
+      item: only the A/B against other SDR software on Ray's exact
+      scenario (need his app/settings/signal details).
       Ray Uberecken (AA0L) reports (verbal)
       that in a different application the Spectrum Analyzer receives weak
       signals WORSE than other software on the SAME hardware.
