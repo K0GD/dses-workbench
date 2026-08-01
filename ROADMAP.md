@@ -6,11 +6,20 @@ cross-machine record (Mac + Windows) — keep it committed and pushed.
 Conventions: `[ ]` planned, `[x]` shipped (note the commit), `[-]` dropped
 (note why). Move items between versions freely until they ship.
 
-## v1.1.7 (planned)
+## v1.1.8 (planned)
 
-- [ ] **① TOP PRIORITY (Rick, 2026-07-17, for Ray): display sensitivity fix —
-      integrate the full stream** — **IMPLEMENTED 2026-07-18 (Windows), needs
-      live-hardware smoke + the A/B with Ray's scenario before checking off.**
+- [ ] **Ray's weak-signal A/B verification** — the one open piece of the
+      shipped 1.1.7 display fix: reproduce Ray's exact scenario (need his
+      app/settings/signal details) against SDR#/GQRX/SDRangel on the same
+      hardware, before/after screenshots for Ray + the SARA deck. Bench
+      ground truth: at 1422 MHz center only the 1420.5 MHz sig-gen line
+      follows the generator on/off; 1418 and 1425.6 MHz are internal B210
+      spurs. If his case still underperforms, chase the receive-chain
+      candidates in the shipped item's checklist (gain/AGC, antenna path,
+      wire format, overflows).
+
+- [x] **① Display sensitivity fix — integrate the full stream — SHIPPED in
+      release 1.1.7 (2026-07-18, commit 0cf1648).** History:
       What shipped in the working tree: SampleBufferSink queues every chunk
       (bounded, drop-oldest, counted); keep_one_in_n target 20→400 vec/s
       (N=1 below ~26 MS/s); SpectrumProcessor Welch-averages every block per
