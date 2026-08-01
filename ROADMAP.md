@@ -8,15 +8,27 @@ Conventions: `[ ]` planned, `[x]` shipped (note the commit), `[-]` dropped
 
 ## v1.1.8 (planned)
 
-- [ ] **Ray's weak-signal A/B verification** — the one open piece of the
-      shipped 1.1.7 display fix: reproduce Ray's exact scenario (need his
-      app/settings/signal details) against SDR#/GQRX/SDRangel on the same
-      hardware, before/after screenshots for Ray + the SARA deck. Bench
-      ground truth: at 1422 MHz center only the 1420.5 MHz sig-gen line
-      follows the generator on/off; 1418 and 1425.6 MHz are internal B210
-      spurs. If his case still underperforms, chase the receive-chain
-      candidates in the shipped item's checklist (gain/AGC, antenna path,
-      wire format, overflows).
+- [x] **Ray's weak-signal A/B verification — CLOSED 2026-08-01 by field
+      results:** on 1.1.7, Ray's morning data was "the best Hydrogen line
+      measurements he has ever made" (via Rick). No further A/B needed; the
+      1420.5/1418/1425.6 sig-gen ground truth stays on record above.
+
+- [ ] **Ray bug: RX gain slider clipped on his screen** — the right end of
+      the gain slider is cut off so he cannot drag to max gain. Likely a
+      sidebar layout/minimum-width (or DPI/scaling) issue. Workaround NOW:
+      type the value into the RX Gain spin box next to the slider. Fix:
+      make sure the slider stretches/shrinks with the panel and the max is
+      always reachable; test at small window sizes + 125/150% display
+      scaling.
+
+- [ ] **Ray bug: waterfall doesn't track spectrum x-axis zoom/pan** — when
+      the spectrum plot's horizontal scale changes (interactive zoom/pan),
+      the waterfall keeps showing the full band, so rows no longer line up
+      with the spectrum above — "useless in that case." Fix: link the
+      waterfall ViewBox x-range to the spectrum plot's (pyqtgraph
+      setXLink or an x-range-changed handler), so both views always show
+      the same frequency span. Check the axis stays correct in Sweep mode
+      and after retune/sample-rate changes.
 
 - [x] **① Display sensitivity fix — integrate the full stream — SHIPPED in
       release 1.1.7 (2026-07-18, commit 0cf1648).** History:
