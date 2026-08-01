@@ -294,11 +294,22 @@ Conventions: `[ ]` planned, `[x]` shipped (note the commit), `[-]` dropped
         DSES-Drift-Scan box; complements (not replaces) the `.fil`/SigMF
         pulsar recording modes — this is a third recording format targeting
         long-timescale integrated spectra rather than fast time series.
-      - Get the exact `.txt` column/header spec from the ezRA docs/ezCol
-        source at implementation time; validate output by running real
-        captures through ezCon/ezPlot end-to-end (they are the acceptance
-        test). ezRA also ships converters (ezColBAA etc.) that hint at the
-        format's flexibility.
+      - **Recon done 2026-08-01 (GitHub):** the whole suite is Python3 on
+        **Windows AND Linux** (numpy/matplotlib), so the downstream chain
+        (ezCon/ezPlot/ezSky) runs on our dev boxes, WSL, and the site box —
+        install it there and use it as the acceptance test on our output.
+        **ezCol itself is RTL-SDR-only (pyrtlsdr)** — it cannot drive the
+        B210 at all, which is exactly the gap our collector fills for the
+        drift-scan dish.
+      - Format is fully recoverable from `ezCol.py` source (no spec-only
+        development needed): header = `from <rev> <cmd>`, `lat/long/amsl/
+        name`, `freqMin/freqMax/freqBinQty`, a coordinate line (azDeg/elDeg
+        or raH/decDeg …), `# times are in UTC`, `# gain`, then one row per
+        integration: `<UTC timestamp> <RMS power per bin> <flags>`; RMS
+        power = sqrt(mean of squares) over ezColIntegQty FFTs; filename
+        `data/<prefix>YYMMDD_HH<letter>.txt`. Still worth getting one real
+        `.txt` from the group (or from ezCol + any RTL-SDR dongle) as a
+        byte-level reference.
       - Natural fit with the existing recording panel (Source name, timed
         recording, elapsed counter) and the site/az-el metadata from the
         visibility-planner item (drift scans want LST + pointing recorded).
