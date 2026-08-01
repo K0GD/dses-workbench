@@ -307,9 +307,28 @@ Conventions: `[ ]` planned, `[x]` shipped (note the commit), `[-]` dropped
         or raH/decDeg …), `# times are in UTC`, `# gain`, then one row per
         integration: `<UTC timestamp> <RMS power per bin> <flags>`; RMS
         power = sqrt(mean of squares) over ezColIntegQty FFTs; filename
-        `data/<prefix>YYMMDD_HH<letter>.txt`. Still worth getting one real
-        `.txt` from the group (or from ezCol + any RTL-SDR dongle) as a
-        byte-level reference.
+        `data/<prefix>YYMMDD_HH<letter>.txt`.
+      - **LOCAL TREASURE (found 2026-08-01):**
+        `~/Documents/DSES/Science/HI_and_Drift_Scan/ezRABase/` holds a full
+        ezRA install (incl. doc PDFs for ezCon/ezPlot/ezSky), the site's
+        actual collector variant `ezColS251110aP.py` (SoapySDR-based — CAN
+        drive the B210 via Soapy's uhd factory; `ezColS251110a_B210.py` is
+        its B210 copy), the exact dish command line (`ezCol Command.txt`:
+        center 1418.405 MHz, 10 MS/s, 4096 bins, integQty 31e3 → ~12.7 s
+        per row, lat 38.3808 lon -103.156 amsl 4400 name DSES, az 180
+        el 45), and TWO real reference datasets: Nov 2025 dish drift scans
+        in `ezRA_Data_Collected_with_ezCol/` (4096-bin, "RMS power in dB")
+        and Aug-Sep 2025 in `ezRA_Data_Collected_with_GNURadio/` (2048-bin,
+        stamped `from ezColG.py` — a prior GNU Radio collector whose source
+        is NOT on this machine, maybe on the site box; its output shows the
+        downstream tools tolerate header variations). Correction to the
+        note above: stock ezCol is RTL-only, but the group's Soapy variant
+        did drive the B210 — our in-app writer is the BETTER path (one
+        tool, Welch integrator, timebase fix, recording panel), not the
+        only one.
+      - Validation plan: clone the real Nov-2025 header verbatim (swap
+        provenance line), match its dB-RMS row format and cadence, and diff/
+        run through the local ezCon/ezPlot against those reference files.
       - Natural fit with the existing recording panel (Source name, timed
         recording, elapsed counter) and the site/az-el metadata from the
         visibility-planner item (drift scans want LST + pointing recorded).
