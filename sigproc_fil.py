@@ -36,6 +36,8 @@ it VLA -> observatory 'c' -> Haswell.
 import json
 import re
 import struct
+import threading
+import time as _time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -396,12 +398,23 @@ if _HAVE_GR:
         (``gap_events`` / ``gap_seconds``) and written to a ``.gaps.json``
         sidecar on close.
 
+        Threaded (v1.1.9): ``work()`` only reads tags, does the (cheap) gap
+        arithmetic, and enqueues data/pad commands; a daemon worker performs
+        the channelize/integrate/write DSP. Inline DSP on the GNU Radio
+        thread could not keep up at 16 MS/s and caused the very overflows
+        this sink exists to survive. If the worker ever falls behind the
+        queue bound, the overflowing DATA is replaced by an equivalent-length
+        pad command — signal is lost (zeros), but the sample clock NEVER
+        breaks (``queue_padded_samples`` counts the loss).
+
         The file is finalized when :meth:`stop` runs (flowgraph stop) or when
         :meth:`close` is called explicitly.
         """
 
         # Ignore sub-100 µs "gaps": re-timing jitter, not real drops.
         GAP_MIN_SECONDS = 1e-4
+        # Bound on queued DATA samples awaiting the worker (~64 MB).
+        MAX_QUEUE_SAMPLES = 1 << 23
         # Per-event and per-recording padding caps: a wedged source must not
         # inflate the file without bound. Beyond the total cap the sink
         # keeps recording but stops padding and flags the timebase broken.
@@ -431,7 +444,17 @@ if _HAVE_GR:
             self.gap_events = 0
             self.gap_samples = 0
             self.timebase_broken = False
+            self.queue_padded_samples = 0   # data lost to worker overload
             self._events = []           # dicts for the .gaps.json sidecar
+            # Worker-thread queue: ('data', ndarray) / ('pad', nsamples).
+            self._q = []
+            self._q_samples = 0
+            self._qlock = threading.Lock()
+            self._stopping = threading.Event()
+            self._closed = False
+            self._worker = threading.Thread(
+                target=self._worker_loop, name="fil-sink-worker", daemon=True)
+            self._worker.start()
 
         @property
         def path(self):
@@ -445,8 +468,50 @@ if _HAVE_GR:
         def gap_seconds(self):
             return self.gap_samples / self._writer.samp_rate
 
-        def _pad_zeros(self, nsamples):
-            """Insert nsamples of complex zeros, chunked to bound memory."""
+        # ---- queue plumbing (GR thread side: cheap; worker does the DSP) --
+        def _enqueue_data(self, arr):
+            n = len(arr)
+            if n == 0:
+                return
+            with self._qlock:
+                if self._q_samples + n > self.MAX_QUEUE_SAMPLES:
+                    # Worker overloaded: substitute an equivalent-length pad
+                    # so the sample clock stays intact (signal lost, counted).
+                    self._q.append(('pad', n))
+                    self.queue_padded_samples += n
+                else:
+                    self._q.append(('data', np.array(arr, dtype=np.complex64)))
+                    self._q_samples += n
+
+        def _enqueue_pad(self, n):
+            if n > 0:
+                with self._qlock:
+                    self._q.append(('pad', int(n)))   # pads cost no memory
+
+        def _worker_loop(self):
+            while not self._stopping.is_set():
+                if not self._drain():
+                    _time.sleep(0.005)
+            self._drain()      # final drain: nothing queued is ever lost
+
+        def _drain(self):
+            with self._qlock:
+                batch, self._q = self._q, []
+                self._q_samples = 0
+            if not batch:
+                return False
+            for kind, item in batch:
+                if self._writer._fh is None:
+                    break
+                if kind == 'data':
+                    self._writer.push(item)
+                else:
+                    self._write_zeros(item)
+            return True
+
+        def _write_zeros(self, nsamples):
+            """Insert nsamples of complex zeros, chunked to bound memory.
+            Worker-thread side."""
             CHUNK = 1 << 20
             remaining = int(nsamples)
             zeros = np.zeros(min(CHUNK, remaining), dtype=np.complex64)
@@ -456,6 +521,9 @@ if _HAVE_GR:
                 remaining -= take
 
         def _handle_gap(self, gap, abs_offset):
+            """Account for a measured gap and return the number of samples
+            to pad (capped). Runs on the GR thread; the pad itself is
+            enqueued for the worker."""
             cap = int(self.GAP_EVENT_CAP_SECONDS * self._writer.samp_rate)
             total_cap = int(self.GAP_TOTAL_CAP_SECONDS * self._writer.samp_rate)
             truncated = gap > cap
@@ -463,8 +531,6 @@ if _HAVE_GR:
             if self.gap_samples + pad > total_cap:
                 pad = max(0, total_cap - self.gap_samples)
                 self.timebase_broken = True
-            if pad > 0:
-                self._pad_zeros(pad)
             self.gap_events += 1
             self.gap_samples += pad
             if len(self._events) < self.MAX_EVENTS_LOGGED:
@@ -482,17 +548,17 @@ if _HAVE_GR:
         def work(self, input_items, output_items):
             buf = input_items[0]
             n = len(buf)
-            if self._writer._fh is None:
+            if self._writer._fh is None or self._closed:
                 return n
             if not self._pad_gaps:
-                self._writer.push(buf)
+                self._enqueue_data(buf)
                 return n
             start = self.nitems_read(0)
             tags = self.get_tags_in_window(0, 0, n, self._rx_time_key)
             if not tags:
-                self._writer.push(buf)
+                self._enqueue_data(buf)
                 return n
-            seg = 0   # start of the not-yet-pushed segment (window-relative)
+            seg = 0   # start of the not-yet-enqueued segment (window-relative)
             for tag in sorted(tags, key=lambda t: t.offset):
                 t = _parse_rx_time(tag.value)
                 if t is None:
@@ -508,11 +574,12 @@ if _HAVE_GR:
                                           self._pads_since_ref)
                 if gap >= self._gap_min:
                     rel = tag.offset - start
-                    self._writer.push(buf[seg:rel])
+                    self._enqueue_data(buf[seg:rel])
                     seg = rel
                     padded = self._handle_gap(gap, tag.offset)
+                    self._enqueue_pad(padded)
                     self._pads_since_ref += padded
-            self._writer.push(buf[seg:])
+            self._enqueue_data(buf[seg:])
             return n
 
         def stop(self):
@@ -520,13 +587,21 @@ if _HAVE_GR:
             return True
 
         def close(self):
+            if self._closed:
+                return getattr(self, '_close_info', None) \
+                    or self._writer.close()
+            self._closed = True
+            self._stopping.set()
+            self._worker.join(timeout=15.0)
             info = self._writer.close()
             if info is not None:
                 info = dict(info)
                 info.update(gap_events=self.gap_events,
                             gap_samples=self.gap_samples,
-                            timebase_broken=self.timebase_broken)
-            if self._events or self.timebase_broken:
+                            timebase_broken=self.timebase_broken,
+                            queue_padded_samples=self.queue_padded_samples)
+            if self._events or self.timebase_broken \
+                    or self.queue_padded_samples:
                 try:
                     sidecar = self._writer.path.with_suffix(
                         self._writer.path.suffix + ".gaps.json")
@@ -536,6 +611,7 @@ if _HAVE_GR:
                             "samp_rate": self._writer.samp_rate,
                             "gap_events": self.gap_events,
                             "gap_samples_padded": self.gap_samples,
+                            "queue_padded_samples": self.queue_padded_samples,
                             "timebase_broken": self.timebase_broken,
                             "note": ("Gaps measured from gr-uhd rx_time "
                                      "overflow tags; each gap zero-padded "
@@ -545,4 +621,5 @@ if _HAVE_GR:
                         }, f, indent=1)
                 except OSError:
                     pass
+            self._close_info = info
             return info
