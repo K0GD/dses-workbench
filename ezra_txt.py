@@ -36,8 +36,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
-
-from sigproc_fil import channelize_detect
+from scipy import fft as scipy_fft
 
 
 def ezra_filename(prefix, utc=None):
@@ -140,10 +139,28 @@ class EzraIntegrator:
             iq = np.concatenate([self._resid, iq])
         nfull = (len(iq) // self.fft_bins) * self.fft_bins
         if nfull:
-            power = channelize_detect(iq[:nfull], self.fft_bins, window=False)
-            for frame in power:
-                self._acc += frame
-                self._nacc += 1
+            # Local channelizer (NOT sigproc_fil.channelize_detect, whose
+            # numpy FFT is byte-validated for the .fil path and must not
+            # change): scipy's pocketfft with workers=-1 releases the GIL
+            # and spreads across cores, which matters here — this runs on
+            # the sink's worker thread beside the GNU Radio Python
+            # callbacks, and a GIL-bound FFT starved them into RX
+            # overflows at 16 MS/s (observed live 2026-08-02).
+            blocks = iq[:nfull].reshape(-1, self.fft_bins)
+            spec = scipy_fft.fft(blocks, axis=1, workers=-1)
+            power = np.fft.fftshift(
+                (spec.real.astype(np.float64) ** 2
+                 + spec.imag.astype(np.float64) ** 2), axes=1)
+            # Bulk accumulation: one vectorized sum per push (plus one per
+            # row boundary, which at ~31e3 frames/row is rare). The original
+            # per-frame Python loop could not keep up at 16 MS/s and caused
+            # RX overflows during recording.
+            i, nfr = 0, power.shape[0]
+            while i < nfr:
+                take = min(self.integ_frames - self._nacc, nfr - i)
+                self._acc += power[i:i + take].sum(axis=0, dtype=np.float64)
+                self._nacc += take
+                i += take
                 if self._nacc >= self.integ_frames:
                     mean = self._acc[self._lo:self._hi] / self._nacc
                     self._on_row(mean)
@@ -154,6 +171,8 @@ class EzraIntegrator:
 
 try:
     from gnuradio import gr
+    import threading
+    import time as _time
     _HAVE_GR = True
 except Exception:              # pragma: no cover
     _HAVE_GR = False
@@ -166,7 +185,16 @@ if _HAVE_GR:
         One output row per ``integ_frames`` FFTs of ``fft_bins`` bins,
         timestamped at row completion (UTC), central ``keep_fraction`` of
         the band kept.
+
+        Threaded: ``work()`` only copies the incoming buffer into a bounded
+        queue; a daemon worker does the FFT/integration/writing. Doing the
+        DSP inline on the GNU Radio thread caused RX overflows at 16 MS/s
+        (observed live 2026-08-02). If the worker ever falls behind the
+        queue bound, excess samples are counted in ``dropped_samples``
+        (each drop only shortens one ~13 s integration slightly).
         """
+
+        MAX_QUEUE_SAMPLES = 1 << 23    # 8 M samples ≈ 64 MB of backlog
 
         def __init__(self, path, *, fft_bins, integ_frames, samp_rate,
                      center_freq_mhz, lat_deg, lon_deg, amsl, site_name,
@@ -184,6 +212,15 @@ if _HAVE_GR:
                 site_name=site_name, freq_min_mhz=fmin, freq_max_mhz=fmax,
                 bin_qty=self._integ.kept_bins, az_deg=az_deg, el_deg=el_deg,
                 gain_text=gain_text, provenance=provenance)
+            self.dropped_samples = 0
+            self._q = []
+            self._q_samples = 0
+            self._lock = threading.Lock()
+            self._stopping = threading.Event()
+            self._closed = False
+            self._worker = threading.Thread(
+                target=self._worker_loop, name="ezra-txt-worker", daemon=True)
+            self._worker.start()
 
         def _emit_row(self, power_linear):
             if self._writer._fh is not None:
@@ -198,14 +235,43 @@ if _HAVE_GR:
             return self._writer.nrows
 
         def work(self, input_items, output_items):
-            n = len(input_items[0])
-            if self._writer._fh is not None:
-                self._integ.push(input_items[0])
+            buf = input_items[0]
+            n = len(buf)
+            with self._lock:
+                if self._q_samples + n <= self.MAX_QUEUE_SAMPLES:
+                    self._q.append(np.array(buf, dtype=np.complex64))
+                    self._q_samples += n
+                else:
+                    self.dropped_samples += n
             return n
+
+        def _drain(self):
+            with self._lock:
+                batch, self._q = self._q, []
+                self._q_samples = 0
+            if not batch:
+                return False
+            # One big slab per pass: fewer, larger FFT/ufunc calls hold the
+            # GIL far less than many small ones (the GR Python callbacks
+            # must stay responsive or the radio overflows).
+            self._integ.push(np.concatenate(batch) if len(batch) > 1
+                             else batch[0])
+            return True
+
+        def _worker_loop(self):
+            while not self._stopping.is_set():
+                if not self._drain():
+                    _time.sleep(0.005)
+            self._drain()          # final drain so no queued samples are lost
 
         def stop(self):
             self.close()
             return True
 
         def close(self):
+            if self._closed:
+                return self._writer.close()
+            self._closed = True
+            self._stopping.set()
+            self._worker.join(timeout=10.0)
             return self._writer.close()

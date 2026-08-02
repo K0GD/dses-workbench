@@ -98,6 +98,7 @@ from gnuradio import uhd
 # iq_to_fil converter and PulsarLab's engine use) — provides the live .fil
 # recording sink. Lives next to this script.
 import sigproc_fil
+import ezra_txt
 
 # In-app upgrade helper (download/verify/extract/install). OS-neutral core; the
 # Qt install dialog + per-OS shortcut/relaunch live here in the app.
@@ -206,6 +207,25 @@ DEFAULTS = {
         # Optional target recording length; blank = record until stopped. Accepts
         # minutes ("30") or H:MM / HH:MM:SS ("1:30"); auto-stops when reached.
         'rec_duration':    '',
+        # --- Drift-scan (ezRA .txt) format geometry. Defaults mirror the
+        # dish's own ezCol command line (Nov-2025 campaign): 4096-bin FFT,
+        # 31e3 integrations (~12.7 s/row at 10 MS/s), central 80% of the
+        # band kept (trims the anti-alias skirts), az 180 / el 45.
+        'ez_fft_bins':      4096,
+        'ez_integ_frames':  31000,
+        'ez_keep_fraction': 0.8,
+        'ez_prefix':        'DSES',   # ezCol filename prefix: <prefix>YYMMDD_HH.txt
+        'ez_az_deg':        180.0,
+        'ez_el_deg':        45.0,
+    },
+    # Observing-site identity written into ezRA drift-scan files (and, later,
+    # used by the pulsar visibility planner). Defaults = DSES Haswell 60-ft,
+    # from the dish's ezCol command line.
+    'site': {
+        'lat_deg':  38.3808,
+        'lon_deg':  -103.156,
+        'amsl':     4400.0,
+        'name':     'DSES',
     },
     'spectrum': {
         'fft_size':        1024,
@@ -582,6 +602,8 @@ class SpectrumProcessor(QObject):
         # loop stalled by a dialog/drag) can never freeze the GUI. Blocks are
         # strided (not truncated) so the average still spans the whole tick.
         self._tick_budget_frac = 0.4                    # fraction of the interval
+        self._budget_frac_normal = 0.4
+        self._budget_frac_recording = 0.12  # yield GIL/CPU to recording sinks
         self._sec_per_block = 2e-8 * self._fft_size     # learned each tick (EMA)
         self._stride = 1               # diagnostics: last tick's stride
         self._last_blocks_used = 0     # diagnostics: blocks in last average
@@ -688,6 +710,16 @@ class SpectrumProcessor(QObject):
     @Slot(int)
     def set_smooth_bins(self, n):
         self._smooth_bins = max(0, int(n))
+
+    @Slot(bool)
+    def set_recording_active(self, on):
+        """While ANY recording runs, shrink the display's per-tick CPU
+        budget: the Welch math's GIL time otherwise starves the Python
+        recording sinks on the GNU Radio threads and the radio overflows
+        (observed live at 16 MS/s, 2026-08-02). The adaptive stride sheds
+        display coverage automatically; the recording gets the cycles."""
+        self._tick_budget_frac = (self._budget_frac_recording if on
+                                  else self._budget_frac_normal)
 
     @Slot(str)
     def set_hold_detector(self, mode):
@@ -2728,11 +2760,24 @@ large (e.g. ~192&nbsp;MB/s at 24&nbsp;Msps). <i>Filterbank (.fil)</i>
 channelizes the stream live and writes a SIGPROC filterbank
 (<code>telescope_id&nbsp;12</code>) straight to disk, so the giant raw I/Q is
 never stored. The <code>.fil</code> is what PRESTO folds; it is produced by
-the same validated code as the offline <code>iq_to_fil.py</code> converter.</li>
+the same validated code as the offline <code>iq_to_fil.py</code> converter.
+<i>Drift scan (ezRA .txt)</i> writes integrated spectra (one row every
+~10&ndash;15&nbsp;s with the default geometry) in the ezRA data format, so the
+file feeds Ted Cline's free ezRA suite (ezCon&nbsp;&rarr;&nbsp;ezPlot/ezSky/ezGal)
+directly &mdash; hydrogen-line drift scans with the same radio that records
+pulsars. The filename follows the ezCol convention
+(<code>&lt;prefix&gt;YYMMDD_HH.txt</code>).</li>
 <li><b>Channels</b> / <b>Integrate</b> (filterbank only): the FFT channel
 count and how many power frames are summed per output sample, so
 <code>tsamp&nbsp;=&nbsp;channels&nbsp;&times;&nbsp;integrate&nbsp;/&nbsp;sample&nbsp;rate</code>.
 Locked while recording.</li>
+<li><b>Az / El</b> (drift scan only): the dish pointing written into the
+ezRA file header (<code>azDeg</code>/<code>elDeg</code>). The observing-site
+identity (latitude, longitude, altitude, name) comes from the
+<code>[site]</code> section of the settings file &mdash; defaults are the DSES
+Haswell 60-ft dish. FFT bins, integration count, and the band-edge trim
+follow the dish's proven ezCol geometry and are adjustable via
+<code>[recording]</code> <code>ez_*</code> settings.</li>
 <li><b>Record for</b>: optional fixed length — minutes (e.g. <code>30</code>) or
 <code>H:MM</code> / <code>HH:MM:SS</code> (e.g. <code>1:30</code>). The recording
 auto-stops when it is reached and the counter shows a countdown; blank records
@@ -3508,6 +3553,14 @@ class UhdB200Source(RadioSource):
                 channels=list(range(0, 1)),
             ),
         )
+        # Deep output buffers on every edge leaving the source: at 16 MS/s
+        # the GR default gives a downstream Python sink only a few ms of
+        # slack, so ANY GIL pause longer than that backs the chain up and
+        # the radio prints 'O' (the constant Haswell-recording overflows,
+        # root-caused 2026-08-02). 4 Mi samples ≈ 32 MB/edge ≈ 260 ms of
+        # cushion at 16 MS/s — Python-thread scheduling jitter is absorbed
+        # instead of dropped.
+        self.block.set_min_output_buffer(1 << 22)
         self.block.set_samp_rate(samp_rate)
         self.block.set_time_unknown_pps(uhd.time_spec(0))
         self.block.set_center_freq(center_freq, 0)
@@ -4002,10 +4055,19 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
 
         # Recording format + .fil geometry (loaded from settings).
         fmt = self._app_settings.get_str('recording', 'format').strip().lower()
-        self._record_format = fmt if fmt in ('iq', 'fil') else 'iq'
+        self._record_format = fmt if fmt in ('iq', 'fil', 'ezra') else 'iq'
         self._fil_nchans = max(2, int(self._app_settings.get_int('recording', 'fil_nchans')))
         self._fil_integrate = max(1, int(self._app_settings.get_int('recording', 'fil_integrate')))
         self._fil_sink = None  # current FilterbankSink, or None when not recording
+        # Drift-scan (ezRA .txt) geometry + pointing (loaded from settings).
+        st = self._app_settings
+        self._ez_fft_bins = max(64, int(st.get_int('recording', 'ez_fft_bins')))
+        self._ez_integ_frames = max(1, int(st.get_int('recording', 'ez_integ_frames')))
+        self._ez_keep_fraction = min(1.0, max(0.1, st.get_float('recording', 'ez_keep_fraction')))
+        self._ez_prefix = (st.get_str('recording', 'ez_prefix').strip() or 'DSES')
+        self._ez_az_deg = st.get_float('recording', 'ez_az_deg')
+        self._ez_el_deg = st.get_float('recording', 'ez_el_deg')
+        self._ezra_sink = None  # current EzraTxtSink, or None when not recording
         # Optional source name + timed-recording state (features: name-in-filename,
         # elapsed counter, red REC indicator, "record for" duration + auto-stop).
         self._source_name = self._app_settings.get_str('recording', 'source_name')
@@ -4170,9 +4232,11 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         self._refresh_samp_rate_limits_tooltip()
         self._sync_samp_rate_widgets()
 
-        # --- Format selector: raw I/Q (SigMF) vs live filterbank (.fil) ---
-        self._record_format_options = ['iq', 'fil']
-        self._record_format_labels = ['Raw I/Q (SigMF)', 'Filterbank (.fil)']
+        # --- Format selector: raw I/Q (SigMF) vs live filterbank (.fil)
+        #     vs drift-scan integrated spectra (ezRA .txt) ---
+        self._record_format_options = ['iq', 'fil', 'ezra']
+        self._record_format_labels = ['Raw I/Q (SigMF)', 'Filterbank (.fil)',
+                                      'Drift scan (ezRA .txt)']
         self._record_format_tool_bar = QtWidgets.QToolBar(self)
         self._record_format_tool_bar.addWidget(QtWidgets.QLabel("Format: "))
         self._record_format_combo = QtWidgets.QComboBox()
@@ -4183,7 +4247,11 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         self._record_format_combo.setToolTip(
             "Raw I/Q: full-rate complex samples to a SigMF pair (large).\n"
             "Filterbank: channelize live and write a SIGPROC .fil directly "
-            "(telescope_id 12) — the raw I/Q is never stored.")
+            "(telescope_id 12) — the raw I/Q is never stored.\n"
+            "Drift scan: integrated spectra (~one row per 10-15 s) in the\n"
+            "ezRA .txt format for Ted Cline's ezRA suite (ezCon → ezPlot/\n"
+            "ezSky). Site identity comes from the [site] settings; set the\n"
+            "dish Az/El below.")
         self._record_format_combo.currentIndexChanged.connect(
             lambda i: self.set_record_format(self._record_format_options[i]))
         self._record_format_tool_bar.addWidget(self._record_format_combo)
@@ -4228,6 +4296,33 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         self._fil_integrate_spin.valueChanged.connect(self.set_fil_integrate)
         _fil_geom_grid.addWidget(self._fil_integrate_spin, 1, 1)
         self._record_group_layout.addWidget(self._fil_geom_widget)
+
+        # --- Dish pointing (only meaningful in drift-scan / ezRA mode):
+        #     written into the ezRA .txt header's azDeg/elDeg line. Manual
+        #     entry for now; System-1 steering readback can populate it
+        #     later (see ROADMAP). Same plain-grid pattern as .fil geometry.
+        self._ezra_point_widget = QtWidgets.QWidget(self)
+        _ez_grid = QtWidgets.QGridLayout(self._ezra_point_widget)
+        _ez_grid.setContentsMargins(0, 0, 0, 0)
+        _ez_grid.addWidget(QtWidgets.QLabel("Az (deg):"), 0, 0)
+        self._ez_az_spin = QtWidgets.QDoubleSpinBox()
+        self._ez_az_spin.setRange(0.0, 360.0)
+        self._ez_az_spin.setDecimals(1)
+        self._ez_az_spin.setValue(self._ez_az_deg)
+        self._ez_az_spin.setToolTip(
+            "Dish azimuth written into the ezRA drift-scan file header.")
+        self._ez_az_spin.valueChanged.connect(self._on_ez_az_changed)
+        _ez_grid.addWidget(self._ez_az_spin, 0, 1)
+        _ez_grid.addWidget(QtWidgets.QLabel("El (deg):"), 1, 0)
+        self._ez_el_spin = QtWidgets.QDoubleSpinBox()
+        self._ez_el_spin.setRange(0.0, 90.0)
+        self._ez_el_spin.setDecimals(1)
+        self._ez_el_spin.setValue(self._ez_el_deg)
+        self._ez_el_spin.setToolTip(
+            "Dish elevation written into the ezRA drift-scan file header.")
+        self._ez_el_spin.valueChanged.connect(self._on_ez_el_changed)
+        _ez_grid.addWidget(self._ez_el_spin, 1, 1)
+        self._record_group_layout.addWidget(self._ezra_point_widget)
 
         # --- Optional recording duration (auto-stop) ---
         self._rec_duration_widget = QtWidgets.QWidget(self)
@@ -5516,18 +5611,31 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
             self._stop_recording()
 
     def _update_fil_geom_enabled(self):
-        """The .fil geometry row only applies in filterbank format, and must
-        not change mid-recording."""
-        editable = (self._record_format == 'fil') and not self.record
-        self._fil_geom_widget.setEnabled(editable)
+        """Format-specific rows only apply to their format, and must not
+        change mid-recording."""
+        self._fil_geom_widget.setEnabled(
+            (self._record_format == 'fil') and not self.record)
+        self._ezra_point_widget.setEnabled(
+            (self._record_format == 'ezra') and not self.record)
+
+    def _on_ez_az_changed(self, v):
+        self._ez_az_deg = float(v)
+        self._save_setting('recording', 'ez_az_deg', float(v))
+
+    def _on_ez_el_changed(self, v):
+        self._ez_el_deg = float(v)
+        self._save_setting('recording', 'ez_el_deg', float(v))
 
     def get_record_format(self):
         return self._record_format
 
     def set_record_format(self, fmt):
-        """Switch between raw-I/Q (SigMF) and live-filterbank (.fil) recording.
-        Disallowed mid-recording — stop first."""
-        fmt = 'fil' if str(fmt).lower() == 'fil' else 'iq'
+        """Switch between raw-I/Q (SigMF), live-filterbank (.fil), and
+        drift-scan (ezRA .txt) recording. Disallowed mid-recording — stop
+        first."""
+        fmt = str(fmt).lower()
+        if fmt not in ('iq', 'fil', 'ezra'):
+            fmt = 'iq'
         if fmt == self._record_format:
             return
         if self.record:
@@ -5562,8 +5670,104 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         self._update_fil_geom_enabled()  # lock geometry while live
         if self._record_format == 'fil':
             self._start_fil_recording()
+        elif self._record_format == 'ezra':
+            self._start_ezra_recording()
         else:
             self._start_sigmf_recording()
+
+    def _start_ezra_recording(self):
+        """Splice an EzraTxtSink into the running flowgraph: integrated
+        spectra stream straight into an ezRA .txt drift-scan file that the
+        ezRA suite (ezCon -> ezPlot/ezSky) consumes directly."""
+        if self._ezra_sink is not None:
+            return  # already recording
+        st = self._app_settings
+        name = ezra_txt.ezra_filename(self._ez_prefix)
+        path = os.path.join(self.recording_dir, name)
+        # ezCol convention for a same-hour rerun: append a letter.
+        for letter in 'abcdefghijklmnopqrstuvwxyz':
+            if not os.path.exists(path):
+                break
+            path = os.path.join(self.recording_dir,
+                                name[:-4] + letter + ".txt")
+        try:
+            sink = ezra_txt.EzraTxtSink(
+                path, fft_bins=self._ez_fft_bins,
+                integ_frames=self._ez_integ_frames,
+                samp_rate=self.samp_rate,
+                center_freq_mhz=self.center_freq / 1e6,
+                lat_deg=st.get_float('site', 'lat_deg'),
+                lon_deg=st.get_float('site', 'lon_deg'),
+                amsl=st.get_float('site', 'amsl'),
+                site_name=(st.get_str('site', 'name').strip() or 'DSES'),
+                az_deg=self._ez_az_deg, el_deg=self._ez_el_deg,
+                gain_text=f"{self.gain:g}",
+                keep_fraction=self._ez_keep_fraction,
+                provenance=f"DSES_Spectrum_Analyzer {APP_VERSION}")
+        except Exception as exc:
+            QtWidgets.QMessageBox.critical(
+                self, "Recording failed to start",
+                f"Could not create ezRA drift-scan writer:\n\n{exc}")
+            self.record = 0
+            self._record_callback(0)
+            self._update_fil_geom_enabled()
+            return
+        try:
+            self.lock()
+            try:
+                self.connect((self.uhd_usrp_source_0, 0), (sink, 0))
+            finally:
+                self.unlock()
+        except Exception as exc:
+            QtWidgets.QMessageBox.critical(
+                self, "Recording failed to start",
+                f"Could not splice ezRA sink into flowgraph:\n\n{exc}")
+            try:
+                sink.close()
+            except Exception:
+                pass
+            self.record = 0
+            self._record_callback(0)
+            self._update_fil_geom_enabled()
+            return
+        self._ezra_sink = sink
+        self._ezra_sink_path = path
+        row_s = self._ez_fft_bins * self._ez_integ_frames / self.samp_rate
+        self._recording_status.setText(
+            f"Recording → {os.path.basename(path)} "
+            f"({sink._integ.kept_bins} bins, {row_s:.1f} s/row)")
+        self._recording_status.setToolTip(path)
+        self._on_recording_started()
+
+    def _stop_ezra_recording(self):
+        """Disconnect the EzraTxtSink and close it so the .txt is flushed."""
+        sink = self._ezra_sink
+        if sink is None:
+            return
+        self._ezra_sink = None
+        try:
+            self.lock()
+            try:
+                self.disconnect((self.uhd_usrp_source_0, 0), (sink, 0))
+            finally:
+                self.unlock()
+        except Exception as exc:
+            print(f"Recording disconnect failed: {exc}", file=sys.stderr)
+        info = None
+        try:
+            info = sink.close()
+        except Exception as exc:
+            print(f"ezRA close failed: {exc}", file=sys.stderr)
+        self._on_recording_stopped()
+        path = getattr(self, '_ezra_sink_path', '')
+        if path:
+            rows = (info or {}).get('nrows', 0)
+            self._recording_status.setText(
+                f"Saved → {os.path.basename(path)} ({rows} rows)")
+            self._recording_status.setToolTip(path)
+        else:
+            self._recording_status.setText("Idle")
+            self._recording_status.setToolTip("")
 
     def _start_fil_recording(self):
         """Splice a live FilterbankSink into the running flowgraph: it
@@ -5671,6 +5875,8 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         finalize its file."""
         if self._fil_sink is not None:
             self._stop_fil_recording()
+        elif self._ezra_sink is not None:
+            self._stop_ezra_recording()
         else:
             self._stop_sigmf_recording()
         self._update_fil_geom_enabled()  # geometry editable again once stopped
@@ -5795,6 +6001,7 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         countdown counter, turn the status indicator red, and arm the auto-stop."""
         self._rec_start_time = time.monotonic()
         self._rec_duration_s = self._parse_duration_s(self._rec_duration_text)
+        self._processor.set_recording_active(True)  # yield display CPU to the sink
         self._recording_status.setStyleSheet(
             "color: white; background-color: #c0392b;"
             " padding: 2px 4px; border-radius: 3px;")     # red = RECORDING
@@ -5809,6 +6016,7 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         the red indicator. Idempotent (safe if nothing was running)."""
         self._rec_timer.stop()
         self._rec_start_time = None
+        self._processor.set_recording_active(False)  # full display budget again
         self._recording_status.setStyleSheet("")           # back to normal colour
         self._source_name_widget.setEnabled(True)
         self._rec_duration_widget.setEnabled(True)

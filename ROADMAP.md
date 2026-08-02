@@ -320,7 +320,23 @@ flagging for Soapy sources.
         no astropy dependency): cos(HA_set) = (sin el_min − sin lat · sin dec)
         / (cos lat · cos dec); circumpolar → "always up".
 
-- [ ] **Drift-scan recording support (ezRA `.txt` format)** — incorporate
+- [ ] **Drift-scan recording support (ezRA `.txt` format) — IMPLEMENTED +
+      FIELD-VERIFIED 2026-08-02, ship in 1.1.8:** third recording format
+      "Drift scan (ezRA .txt)" with Az/El fields in the recording panel,
+      `[site]` settings (Haswell defaults), ezCol filename convention with
+      same-hour letter suffixes, dish-proven geometry defaults (4096 bins,
+      31e3 integrations, central-80% band trim). Threaded sink (GR callback
+      only copies; scipy-FFT worker integrates). VERIFIED with three live
+      B210 GUI captures: format/rows/header correct, and the group's own
+      ezCon.py produced a `.ezb` from a real off-air capture (exit 0).
+      **Bonus root-cause fix for the systemic RX overflows:** the GR default
+      source-edge buffer gives a Python sink only a few ms of slack at
+      16 MS/s, so any GIL pause overflowed the radio (this is what plagued
+      the Haswell .fil recordings). `set_min_output_buffer(4 Mi samples)`
+      on the UHD source (~260 ms cushion) + a display-CPU throttle while
+      recording → THIRD live capture ran overflow-free at full 7.9 s/row
+      cadence. Remaining: release-time docs sync only.
+      Original notes: incorporate
       the role of **ezCol** (the data-collection module of Ted Cline's free
       open-source **ezRA** — Easy Radio Astronomy — suite,
       https://github.com/tedcline/ezRA) so the Spectrum Analyzer can serve
