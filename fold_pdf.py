@@ -18,6 +18,13 @@ import textwrap
 
 import matplotlib
 matplotlib.use("Agg")
+# Embed TrueType (type 42) fonts, NOT matplotlib's default Type 3. Type 3
+# stores each glyph as a PDF XObject procedure, and Adobe Acrobat crashes on
+# these (observed 2026-08-02: "unhandled win32 exception in Acrobat.exe" when
+# opening a fold PDF that rendered fine everywhere else — the em-dash glyphs
+# were the Type 3 XObjects). Type 42 is also selectable/searchable text.
+matplotlib.rcParams["pdf.fonttype"] = 42
+matplotlib.rcParams["ps.fonttype"] = 42
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 from PIL import Image
