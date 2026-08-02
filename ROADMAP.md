@@ -274,8 +274,19 @@ flagging for Soapy sources.
       panel (mode, squelch, volume, audio-record), tuned marker shown on
       the spectrum. Settings persist in a new `[audio]`/`[demod]` group.
 
-- [ ] **Recording timebase integrity: log overflows, keep the `.fil` clock
-      honest** — root-caused 2026-07-17 while re-folding the Haswell
+- [ ] **Recording timebase integrity — IMPLEMENTED 2026-08-02, ship in
+      1.1.8:** `FilterbankSink` now reads gr-uhd `rx_time` overflow tags,
+      measures each gap exactly, and zero-pads it live (100 µs threshold;
+      10 s/event and 60 s/recording caps → beyond that the file keeps
+      recording but is flagged TIMEBASE BROKEN); live gap readout in the
+      REC counter, summary in the saved-status line, full event log in a
+      `.gaps.json` sidecar; Soapy sources (Ray's HackRF etc.) record
+      classically with the overflow panel as their indicator. 5-test suite
+      `test_timebase_padding.py` incl. an end-to-end GR flowgraph with
+      injected rx_time tags. Remaining before checking off: a live-B210
+      recording with induced overflows (CPU-stress during capture) to see
+      a real tag round-trip, and a Help/guide PDF sync at release time.
+      Original notes: — root-caused 2026-07-17 while re-folding the Haswell
       B0329+54 recording per Dan Layne's review: a rigid no-search
       ephemeris fold exposes a smooth ~1.2-rotation phase drift over the
       36.6-min recording ≈ **3.9×10⁻⁴ fractional timebase error** — five

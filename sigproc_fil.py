@@ -33,8 +33,10 @@ The header is tagged ``telescope_id = 12`` so the DSES processing side routes
 it VLA -> observatory 'c' -> Haswell.
 """
 
+import json
 import re
 import struct
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -343,7 +345,36 @@ except Exception:             # pragma: no cover - environments without GNU Radi
     _HAVE_GR = False
 
 
+def compute_gap_samples(ref_offset, ref_time, tag_offset, tag_time,
+                        samp_rate, pads_since_ref):
+    """Samples MISSING from the stream at `tag_offset`, given a reference
+    (`ref_offset` arrived at radio time `ref_time`) and the total padding
+    already inserted since that reference.
+
+    gr-uhd stamps an ``rx_time`` tag on the first sample after every RX
+    overflow: real time advanced but the sample index did not, so
+        missing = (elapsed real time) * rate - (elapsed input samples)
+                  - (already-inserted padding)
+    Pure function so the timebase arithmetic is unit-testable without a
+    GNU Radio runtime."""
+    real_elapsed = (tag_time - ref_time) * samp_rate
+    input_elapsed = tag_offset - ref_offset
+    return int(round(real_elapsed - input_elapsed - pads_since_ref))
+
+
 if _HAVE_GR:
+    import pmt
+
+    def _parse_rx_time(value):
+        """(full_secs, frac_secs) pmt tuple -> float seconds, or None."""
+        try:
+            if pmt.is_tuple(value) and pmt.length(value) >= 2:
+                return (pmt.to_uint64(pmt.tuple_ref(value, 0))
+                        + pmt.to_double(pmt.tuple_ref(value, 1)))
+        except Exception:
+            pass
+        return None
+
     class FilterbankSink(gr.sync_block):
         """GNU Radio sink: complex baseband in -> SIGPROC ``.fil`` on disk.
 
@@ -352,13 +383,36 @@ if _HAVE_GR:
         write logic lives entirely in :class:`FilterbankWriter`, so the
         standalone analyzer and ``engine/capture.py`` share identical DSP.
 
+        Timebase integrity (v1.1.8): RX overflows silently DROP samples,
+        which shortens the file's sample-count clock relative to real time —
+        the Haswell B0329+54 recording drifted ~1.2 pulse rotations that way
+        (a 0.56 s gap split the folded profile until it was hand-padded, see
+        ROADMAP). gr-uhd stamps an ``rx_time`` tag on the first sample after
+        each overflow; this sink measures every gap from those tags and
+        inserts the exact number of zero samples, so the ``.fil`` timebase
+        tracks real time. Sources that never tag (gr-soapy: HackRF, RTL,
+        SDRplay) simply record as before — gaps there are counted only via
+        the app-level overflow monitor. Gap events are exposed live
+        (``gap_events`` / ``gap_seconds``) and written to a ``.gaps.json``
+        sidecar on close.
+
         The file is finalized when :meth:`stop` runs (flowgraph stop) or when
         :meth:`close` is called explicitly.
         """
 
+        # Ignore sub-100 µs "gaps": re-timing jitter, not real drops.
+        GAP_MIN_SECONDS = 1e-4
+        # Per-event and per-recording padding caps: a wedged source must not
+        # inflate the file without bound. Beyond the total cap the sink
+        # keeps recording but stops padding and flags the timebase broken.
+        GAP_EVENT_CAP_SECONDS = 10.0
+        GAP_TOTAL_CAP_SECONDS = 60.0
+        MAX_EVENTS_LOGGED = 1000
+
         def __init__(self, path, *, nchans, samp_rate, center_freq_mhz,
                      total_bw_mhz=None, tstart_mjd, integrate=1,
-                     source_name="capture", window=True, telescope_id=12):
+                     source_name="capture", window=True, telescope_id=12,
+                     pad_gaps=True):
             gr.sync_block.__init__(self, name="filterbank_sink",
                                    in_sig=[np.complex64], out_sig=None)
             self._writer = FilterbankWriter(
@@ -367,6 +421,17 @@ if _HAVE_GR:
                 tstart_mjd=tstart_mjd, integrate=integrate,
                 source_name=source_name, window=window,
                 telescope_id=telescope_id)
+            self._pad_gaps = bool(pad_gaps)
+            self._rx_time_key = pmt.intern("rx_time")
+            self._time_ref = None       # (abs input offset, radio seconds)
+            self._pads_since_ref = 0    # samples inserted since the reference
+            self._gap_min = max(1, int(round(
+                self.GAP_MIN_SECONDS * self._writer.samp_rate)))
+            # Live stats (read from the GUI thread; int reads are atomic).
+            self.gap_events = 0
+            self.gap_samples = 0
+            self.timebase_broken = False
+            self._events = []           # dicts for the .gaps.json sidecar
 
         @property
         def path(self):
@@ -376,10 +441,78 @@ if _HAVE_GR:
         def nrows(self):
             return self._writer.nrows
 
+        @property
+        def gap_seconds(self):
+            return self.gap_samples / self._writer.samp_rate
+
+        def _pad_zeros(self, nsamples):
+            """Insert nsamples of complex zeros, chunked to bound memory."""
+            CHUNK = 1 << 20
+            remaining = int(nsamples)
+            zeros = np.zeros(min(CHUNK, remaining), dtype=np.complex64)
+            while remaining > 0:
+                take = min(CHUNK, remaining)
+                self._writer.push(zeros[:take])
+                remaining -= take
+
+        def _handle_gap(self, gap, abs_offset):
+            cap = int(self.GAP_EVENT_CAP_SECONDS * self._writer.samp_rate)
+            total_cap = int(self.GAP_TOTAL_CAP_SECONDS * self._writer.samp_rate)
+            truncated = gap > cap
+            pad = min(gap, cap)
+            if self.gap_samples + pad > total_cap:
+                pad = max(0, total_cap - self.gap_samples)
+                self.timebase_broken = True
+            if pad > 0:
+                self._pad_zeros(pad)
+            self.gap_events += 1
+            self.gap_samples += pad
+            if len(self._events) < self.MAX_EVENTS_LOGGED:
+                self._events.append({
+                    "input_sample": int(abs_offset),
+                    "missing_samples": int(gap),
+                    "padded_samples": int(pad),
+                    "missing_ms": round(gap / self._writer.samp_rate * 1e3, 3),
+                    "truncated": bool(truncated),
+                    "utc": datetime.now(timezone.utc).isoformat(
+                        timespec="seconds"),
+                })
+            return pad
+
         def work(self, input_items, output_items):
-            n = len(input_items[0])
-            if self._writer._fh is not None:
-                self._writer.push(input_items[0])
+            buf = input_items[0]
+            n = len(buf)
+            if self._writer._fh is None:
+                return n
+            if not self._pad_gaps:
+                self._writer.push(buf)
+                return n
+            start = self.nitems_read(0)
+            tags = self.get_tags_in_window(0, 0, n, self._rx_time_key)
+            if not tags:
+                self._writer.push(buf)
+                return n
+            seg = 0   # start of the not-yet-pushed segment (window-relative)
+            for tag in sorted(tags, key=lambda t: t.offset):
+                t = _parse_rx_time(tag.value)
+                if t is None:
+                    continue
+                if self._time_ref is None:
+                    # Stream-start tag: establish the reference, no gap.
+                    self._time_ref = (tag.offset, t)
+                    self._pads_since_ref = 0
+                    continue
+                ref_off, ref_t = self._time_ref
+                gap = compute_gap_samples(ref_off, ref_t, tag.offset, t,
+                                          self._writer.samp_rate,
+                                          self._pads_since_ref)
+                if gap >= self._gap_min:
+                    rel = tag.offset - start
+                    self._writer.push(buf[seg:rel])
+                    seg = rel
+                    padded = self._handle_gap(gap, tag.offset)
+                    self._pads_since_ref += padded
+            self._writer.push(buf[seg:])
             return n
 
         def stop(self):
@@ -387,4 +520,29 @@ if _HAVE_GR:
             return True
 
         def close(self):
-            return self._writer.close()
+            info = self._writer.close()
+            if info is not None:
+                info = dict(info)
+                info.update(gap_events=self.gap_events,
+                            gap_samples=self.gap_samples,
+                            timebase_broken=self.timebase_broken)
+            if self._events or self.timebase_broken:
+                try:
+                    sidecar = self._writer.path.with_suffix(
+                        self._writer.path.suffix + ".gaps.json")
+                    with open(sidecar, "w") as f:
+                        json.dump({
+                            "file": self._writer.path.name,
+                            "samp_rate": self._writer.samp_rate,
+                            "gap_events": self.gap_events,
+                            "gap_samples_padded": self.gap_samples,
+                            "timebase_broken": self.timebase_broken,
+                            "note": ("Gaps measured from gr-uhd rx_time "
+                                     "overflow tags; each gap zero-padded "
+                                     "so the sample clock tracks real "
+                                     "time."),
+                            "events": self._events,
+                        }, f, indent=1)
+                except OSError:
+                    pass
+            return info

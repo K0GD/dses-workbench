@@ -2740,6 +2740,17 @@ until you stop it. Locked while recording.</li>
 <li><b>Record</b>: <i>Stopped</i> / <i>Recording</i>. Recording always
 starts <i>Stopped</i> on launch. While recording, a red <b>REC</b> counter
 shows elapsed time (or the countdown when a duration is set).</li>
+<li><b>Timebase integrity</b> (filterbank, USRP/UHD radios): if the host
+briefly can't drain samples (an RX overflow — the 'O' characters in the
+sidebar), the dropped stretch would silently shorten the file's sample
+clock and smear a later pulsar fold. The recorder measures each gap from
+the radio's own timestamps and inserts the exact number of zero samples,
+so the <code>.fil</code> timebase keeps tracking real time. The REC counter
+shows any gaps live (e.g. <i>2 gaps, 45&nbsp;ms padded</i>) and a
+<code>.gaps.json</code> file with the details is written next to the
+recording. Non-UHD radios (HackRF, RTL-SDR, SDRplay) don't provide
+per-gap timestamps; for them, watch the Overflow panel — a clean panel
+means a clean timebase.</li>
 </ul>
 
 <h3>Spectrum (top plot)</h3>
@@ -5678,15 +5689,29 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
                 self.unlock()
         except Exception as exc:
             print(f"Recording disconnect failed: {exc}", file=sys.stderr)
+        info = None
         try:
-            sink.close()  # flush + close the .fil
+            info = sink.close()  # flush + close the .fil
         except Exception as exc:
             print(f"Filterbank close failed: {exc}", file=sys.stderr)
         self._on_recording_stopped()   # stop the counter, clear the red indicator
         path = getattr(self, '_fil_sink_path', '')
         if path:
-            self._recording_status.setText(f"Saved → {os.path.basename(path)}")
-            self._recording_status.setToolTip(path)
+            saved = f"Saved → {os.path.basename(path)}"
+            tip = path
+            ge = (info or {}).get('gap_events', 0)
+            if (info or {}).get('timebase_broken'):
+                saved += "  ⚠ TIMEBASE BROKEN"
+                tip += ("\nOverflow padding cap exceeded — sample clock no "
+                        "longer tracks real time; see the .gaps.json sidecar.")
+            elif ge:
+                gs = info.get('gap_samples', 0) / max(1.0, self.samp_rate)
+                saved += f"  ({ge} gap{'s' if ge != 1 else ''} padded, {gs*1e3:.0f} ms)"
+                tip += (f"\n{ge} RX-overflow gap(s) zero-padded so the .fil "
+                        f"timebase tracks real time; details in the "
+                        f".gaps.json sidecar.")
+            self._recording_status.setText(saved)
+            self._recording_status.setToolTip(tip)
         else:
             self._recording_status.setText("Idle")
             self._recording_status.setToolTip("")
@@ -5790,24 +5815,40 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         self._rec_elapsed_label.setVisible(False)
         self._rec_elapsed_label.setText("")
 
+    def _rec_gap_suffix(self):
+        """Live timebase-gap annotation for the recording counter (v1.1.8):
+        shows UHD-tagged overflow gaps as they are detected and padded."""
+        sink = self._fil_sink
+        if sink is None:
+            return ""
+        if getattr(sink, 'timebase_broken', False):
+            return "   ⚠ TIMEBASE BROKEN (pad cap exceeded)"
+        ge = getattr(sink, 'gap_events', 0)
+        if not ge:
+            return ""
+        return (f"   ⚠ {ge} gap{'s' if ge != 1 else ''}, "
+                f"{sink.gap_seconds * 1e3:.0f} ms padded")
+
     def _tick_recording(self):
         """1 Hz: refresh the elapsed/countdown text; auto-stop at the target."""
         if self._rec_start_time is None:
             return
         elapsed = time.monotonic() - self._rec_start_time
+        gaps = self._rec_gap_suffix()
         if self._rec_duration_s > 0:
             if elapsed >= self._rec_duration_s:
                 self._rec_elapsed_label.setText(
                     "⏺ REC  " + self._fmt_hms(self._rec_duration_s)
-                    + " / " + self._fmt_hms(self._rec_duration_s))
+                    + " / " + self._fmt_hms(self._rec_duration_s) + gaps)
                 self.set_record(0)          # target reached -> stop_recording
                 return
             self._rec_elapsed_label.setText(
                 "⏺ REC  " + self._fmt_hms(elapsed)
                 + "  (−" + self._fmt_hms(self._rec_duration_s - elapsed)
-                + " left)")
+                + " left)" + gaps)
         else:
-            self._rec_elapsed_label.setText("⏺ REC  " + self._fmt_hms(elapsed))
+            self._rec_elapsed_label.setText(
+                "⏺ REC  " + self._fmt_hms(elapsed) + gaps)
 
     def get_gain(self):
         return self.gain
