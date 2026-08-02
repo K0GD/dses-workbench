@@ -210,13 +210,15 @@ DEFAULTS = {
         # --- Drift-scan (ezRA .txt) format geometry. Defaults mirror the
         # dish's own ezCol command line (Nov-2025 campaign): 4096-bin FFT,
         # 31e3 integrations (~12.7 s/row at 10 MS/s), central 80% of the
-        # band kept (trims the anti-alias skirts), az 180 / el 45.
+        # band kept (trims the anti-alias skirts). Pointing defaults to the
+        # dish's drift-scan park position, az 0 / el 87 (Rick, 2026-08-02);
+        # user edits persist here.
         'ez_fft_bins':      4096,
         'ez_integ_frames':  31000,
         'ez_keep_fraction': 0.8,
         'ez_prefix':        'DSES',   # ezCol filename prefix: <prefix>YYMMDD_HH.txt
-        'ez_az_deg':        180.0,
-        'ez_el_deg':        45.0,
+        'ez_az_deg':        0.0,
+        'ez_el_deg':        87.0,
     },
     # Observing-site identity written into ezRA drift-scan files (and, later,
     # used by the pulsar visibility planner). Defaults = DSES Haswell 60-ft,
