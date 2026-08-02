@@ -2015,6 +2015,15 @@ class WaterfallPlotWidget(QtWidgets.QWidget):
         if self._data is not None:
             self._update_rect()
 
+    def link_x_to(self, fft_widget):
+        """Slave this waterfall's frequency axis to the spectrum plot's, so
+        interactive zoom/pan on either plot keeps both views showing the
+        SAME frequency span (Ray's report 2026-08-01: an unlinked waterfall
+        goes 'useless' the moment the spectrum's horizontal scale changes).
+        Retunes stay coherent too: the spectrum's setXRange propagates
+        through the link."""
+        self._plot.setXLink(fft_widget._plot.getPlotItem())
+
     def set_intensity_range(self, lo, hi):
         self._intensity_min = float(lo); self._intensity_max = float(hi)
         self._img.setLevels((lo, hi))
@@ -3926,7 +3935,13 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         self._sidebar_scroll.setWidget(self.sidebar)
         self._sidebar_scroll.setWidgetResizable(True)
         self._sidebar_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
-        self._sidebar_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        # AsNeeded, not AlwaysOff: if the sidebar content's minimum width
+        # exceeds the viewport (bigger system fonts / narrow windows), an
+        # AlwaysOff policy silently CLIPS the right edge — Ray hit this as
+        # an unreachable right end of the RX-gain slider (2026-08-01). A
+        # scrollbar that appears only in that situation keeps every control
+        # reachable on any screen.
+        self._sidebar_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self._sidebar_scroll.setVerticalScrollBarPolicy(_VBAR_POLICY)
         self._sidebar_scroll.verticalScrollBar().setStyleSheet(_SCROLLBAR_QSS)
         self._sidebar_scroll.setMinimumWidth(290)
@@ -4308,6 +4323,9 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         self._fft_plot.set_frequency_range(center_freq, samp_rate)
         self._waterfall_plot = WaterfallPlotWidget(center_freq, samp_rate, rows=256)
         self._waterfall_plot.set_intensity_range(-140, 10)
+        # Keep spectrum + waterfall showing the same frequency span under
+        # interactive zoom/pan (Ray's 2026-08-01 report).
+        self._waterfall_plot.link_x_to(self._fft_plot)
 
         self._processor = SpectrumProcessor(
             self._sample_sink, fft_size=1024, window_name="blackman-harris",

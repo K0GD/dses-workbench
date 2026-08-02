@@ -13,7 +13,14 @@ Conventions: `[ ]` planned, `[x]` shipped (note the commit), `[-]` dropped
       measurements he has ever made" (via Rick). No further A/B needed; the
       1420.5/1418/1425.6 sig-gen ground truth stays on record above.
 
-- [ ] **Ray bug: RX gain slider clipped on his screen** — the right end of
+- [x] **Ray bug: RX gain slider clipped on his screen — FIXED 2026-08-02:**
+      the sidebar scroll area forced its horizontal scrollbar OFF, so when
+      the content minimum exceeded the viewport (bigger fonts / narrow
+      window) the right edge clipped with no recourse. Policy is now
+      AsNeeded — a scrollbar appears only when needed; verified no bar at
+      normal widths. Ray's screen is the acceptance test. (Original
+      symptom notes below.)
+      Original report: the right end of
       the gain slider is cut off so he cannot drag to max gain. Likely a
       sidebar layout/minimum-width (or DPI/scaling) issue. Workaround NOW:
       type the value into the RX Gain spin box next to the slider. Fix:
@@ -21,7 +28,15 @@ Conventions: `[ ]` planned, `[x]` shipped (note the commit), `[-]` dropped
       always reachable; test at small window sizes + 125/150% display
       scaling.
 
-- [ ] **Ray bug: waterfall doesn't track spectrum x-axis zoom/pan** — when
+- [x] **Ray bug: waterfall doesn't track spectrum x-axis zoom/pan — FIXED
+      2026-08-02:** waterfall ViewBox x-axis now linked to the spectrum
+      plot's (`link_x_to` / pyqtgraph setXLink; the waterfall image was
+      already in true frequency coordinates). Verified live on the B210:
+      zooming the spectrum to 1.4185–1.4225 GHz moved the waterfall to the
+      identical span with carrier stripes aligned under the spectrum
+      peaks; retunes propagate through the link. (Original symptom notes
+      below.)
+      Original report: when
       the spectrum plot's horizontal scale changes (interactive zoom/pan),
       the waterfall keeps showing the full band, so rows no longer line up
       with the spectrum above — "useless in that case." Fix: link the
