@@ -6055,6 +6055,15 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
             saved = f"Saved → {os.path.basename(path)}"
             tip = path
             ge = (info or {}).get('gap_events', 0)
+            qp = (info or {}).get('queue_padded_samples', 0)
+            if qp:
+                lost = qp / max(1.0, self.samp_rate)
+                saved += f"  ⚠ {lost:.0f} s DATA LOST"
+                tip += (f"\n\nWARNING: the writer could not keep up and "
+                        f"{lost:.0f} s of signal was replaced by zeros (the "
+                        f"timebase is still correct). Reduce Channels, raise "
+                        f"Integrate, or lower the sample rate for this "
+                        f"geometry; see the .gaps.json sidecar.")
             if (info or {}).get('timebase_broken'):
                 saved += "  ⚠ TIMEBASE BROKEN"
                 tip += ("\nOverflow padding cap exceeded — sample clock no "
@@ -6187,11 +6196,18 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
             return ""
         if getattr(sink, 'timebase_broken', False):
             return "   ⚠ TIMEBASE BROKEN (pad cap exceeded)"
+        parts = []
         ge = getattr(sink, 'gap_events', 0)
-        if not ge:
-            return ""
-        return (f"   ⚠ {ge} gap{'s' if ge != 1 else ''}, "
-                f"{sink.gap_seconds * 1e3:.0f} ms padded")
+        if ge:
+            parts.append(f"{ge} gap{'s' if ge != 1 else ''}, "
+                         f"{sink.gap_seconds * 1e3:.0f} ms padded")
+        # Worker-deficit padding means SIGNAL was replaced by zeros — a much
+        # louder problem than a tagged gap, so surface it prominently.
+        qp = getattr(sink, 'queue_padded_samples', 0)
+        if qp:
+            lost = qp / max(1.0, self.samp_rate)
+            parts.append(f"⚠⚠ {lost:.0f} s OF DATA LOST (writer too slow)")
+        return ("   ⚠ " + "; ".join(parts)) if parts else ""
 
     def _tick_recording(self):
         """1 Hz: refresh the elapsed/countdown text; auto-stop at the target."""

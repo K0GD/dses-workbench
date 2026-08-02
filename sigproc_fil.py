@@ -413,8 +413,18 @@ if _HAVE_GR:
 
         # Ignore sub-100 µs "gaps": re-timing jitter, not real drops.
         GAP_MIN_SECONDS = 1e-4
-        # Bound on queued DATA samples awaiting the worker (~64 MB).
-        MAX_QUEUE_SAMPLES = 1 << 23
+        # Bound on queued DATA samples awaiting the worker. 64 Mi samples =
+        # 512 MB of complex64 = ~4 s at 16 MS/s: deep enough to ride out
+        # scheduling hiccups and momentary worker deficits. Sized after the
+        # 2026-08-02 simulator tests, where a 8 Mi cap silently pad-replaced
+        # ~70% of a 2044-channel recording (the DSP is ~8x heavier per
+        # sample than the 4096-bin ezRA case, so the worker runs a deficit
+        # that only a deep buffer absorbs).
+        MAX_QUEUE_SAMPLES = 1 << 26
+        # If the queue stays full, BLOCK the GR thread briefly rather than
+        # discarding data: an RX overflow (recoverable, tagged, padded with
+        # the true gap length) is far better than silently zeroing signal.
+        BACKPRESSURE_WAIT_S = 0.25
         # Per-event and per-recording padding caps: a wedged source must not
         # inflate the file without bound. Beyond the total cap the sink
         # keeps recording but stops padding and flags the timebase broken.
@@ -473,15 +483,26 @@ if _HAVE_GR:
             n = len(arr)
             if n == 0:
                 return
+            # Backpressure first: wait (bounded) for the worker to catch up.
+            # Blocking here throttles the flowgraph, and if the radio can't
+            # be held back it declares an RX overflow — which is TAGGED, so
+            # the true gap is measured and padded exactly. That is strictly
+            # better than inventing zeros and calling it data.
+            deadline = _time.monotonic() + self.BACKPRESSURE_WAIT_S
+            while True:
+                with self._qlock:
+                    if self._q_samples + n <= self.MAX_QUEUE_SAMPLES:
+                        self._q.append(('data', np.array(arr,
+                                                        dtype=np.complex64)))
+                        self._q_samples += n
+                        return
+                if _time.monotonic() >= deadline or self._stopping.is_set():
+                    break
+                _time.sleep(0.002)
+            # Still full after the wait: last resort, keep the clock honest.
             with self._qlock:
-                if self._q_samples + n > self.MAX_QUEUE_SAMPLES:
-                    # Worker overloaded: substitute an equivalent-length pad
-                    # so the sample clock stays intact (signal lost, counted).
-                    self._q.append(('pad', n))
-                    self.queue_padded_samples += n
-                else:
-                    self._q.append(('data', np.array(arr, dtype=np.complex64)))
-                    self._q_samples += n
+                self._q.append(('pad', n))
+                self.queue_padded_samples += n
 
         def _enqueue_pad(self, n):
             if n > 0:
