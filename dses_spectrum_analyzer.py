@@ -207,6 +207,9 @@ DEFAULTS = {
         # Optional target recording length; blank = record until stopped. Accepts
         # minutes ("30") or H:MM / HH:MM:SS ("1:30"); auto-stops when reached.
         'rec_duration':    '',
+        # Run the canned PRESTO pipeline (readfile + rfifind + catalog fold
+        # -> self-contained PDF) automatically when a .fil recording stops.
+        'analyze_when_done': True,
         # --- Drift-scan (ezRA .txt) format geometry. Defaults mirror the
         # dish's own ezCol command line (Nov-2025 campaign): 4096-bin FFT,
         # 31e3 integrations (~12.7 s/row at 10 MS/s), central 80% of the
@@ -2787,6 +2790,18 @@ until you stop it. Locked while recording.</li>
 <li><b>Record</b>: <i>Stopped</i> / <i>Recording</i>. Recording always
 starts <i>Stopped</i> on launch. While recording, a red <b>REC</b> counter
 shows elapsed time (or the countdown when a duration is set).</li>
+<li><b>Analyze when done</b> / <b>Quick look</b> (filterbank + PRESTO): when
+a <code>.fil</code> recording stops, the canned PRESTO pipeline runs
+automatically — <code>readfile</code> sanity, an <code>rfifind</code> RFI
+mask, band-edge zapping, and (when Source is a catalog pulsar) a
+<code>prepfold</code> catalog fold — and delivers a <b>self-contained PDF</b>
+next to the recording: chart, commands, numbers, and a plain-language
+verdict. Verdicts are honest about failure modes: a periodicity that
+optimizes to DM&nbsp;≈&nbsp;0 is reported as a <i>terrestrial signal</i>, not
+a detection, and "no detection" explicitly does not mean a bad recording.
+<b>Quick look</b> does the same on a snapshot of the still-growing file
+mid-recording, without interrupting it. Requires PRESTO (Mac/Linux: native
+install; Windows: WSL via <code>presto/build_presto.sh</code>).</li>
 <li><b>Timebase integrity</b> (filterbank, USRP/UHD radios): if the host
 briefly can't drain samples (an RX overflow — the 'O' characters in the
 sidebar), the dropped stretch would silently shorten the file's sample
@@ -4326,6 +4341,35 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         _ez_grid.addWidget(self._ez_el_spin, 1, 1)
         self._record_group_layout.addWidget(self._ezra_point_widget)
 
+        # --- Automatic post-processing (canned PRESTO pipeline) ---
+        self._analysis_row_widget = QtWidgets.QWidget(self)
+        _an_row = QtWidgets.QHBoxLayout(self._analysis_row_widget)
+        _an_row.setContentsMargins(0, 0, 0, 0)
+        self._analyze_check = QtWidgets.QCheckBox("Analyze when done")
+        self._analyze_check.setChecked(
+            self._app_settings.get_bool('recording', 'analyze_when_done'))
+        self._analyze_check.setToolTip(
+            "When a filterbank (.fil) recording stops, automatically run the\n"
+            "canned PRESTO pipeline: readfile sanity, rfifind RFI mask,\n"
+            "band-edge zap, and (when the Source is a catalog pulsar) a\n"
+            "prepfold catalog fold. Results arrive as a self-contained PDF\n"
+            "next to the recording, with a plain-language verdict.\n"
+            "Needs PRESTO (Mac/Linux: native; Windows: WSL via\n"
+            "presto/build_presto.sh).")
+        self._analyze_check.toggled.connect(
+            lambda on: self._save_setting('recording', 'analyze_when_done', on))
+        _an_row.addWidget(self._analyze_check)
+        self._quicklook_btn = QtWidgets.QPushButton("Quick look")
+        self._quicklook_btn.setToolTip(
+            "While a .fil recording runs: snapshot the data captured so far\n"
+            "and run the same pipeline on it WITHOUT interrupting the\n"
+            "recording — an early answer to \"is this session working?\".\n"
+            "Needs a few minutes of data before a fold means anything.")
+        self._quicklook_btn.setEnabled(False)
+        self._quicklook_btn.clicked.connect(self._on_quicklook_clicked)
+        _an_row.addWidget(self._quicklook_btn)
+        self._record_group_layout.addWidget(self._analysis_row_widget)
+
         # --- Optional recording duration (auto-stop) ---
         self._rec_duration_widget = QtWidgets.QWidget(self)
         _dur_row = QtWidgets.QHBoxLayout(self._rec_duration_widget)
@@ -5815,6 +5859,8 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
             return
         self._fil_sink = sink
         self._fil_sink_path = path
+        self._fil_rec_source = self._source_name.strip()  # for auto-analysis
+        self._quicklook_btn.setEnabled(True)
         tsamp_ms = self._fil_nchans * self._fil_integrate / self.samp_rate * 1e3
         self._recording_status.setText(
             f"Recording → {os.path.basename(path)} "
@@ -5872,6 +5918,107 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         self._recording_status.setToolTip(f"{base}.sigmf-data")
         self._on_recording_started()
 
+    # --- Canned PRESTO analysis (quick look + analyze-when-done) ----------
+
+    class _AnalysisSignals(QObject):
+        progress = Signal(str)
+        done = Signal(dict)
+        failed = Signal(str)
+
+    def _start_analysis(self, fil_path, source_name, quick):
+        """Run fold_analysis.analyze_fil on a worker thread; results surface
+        via signals on the GUI thread. One analysis at a time."""
+        if getattr(self, '_analysis_thread', None) is not None \
+                and self._analysis_thread.is_alive():
+            QtWidgets.QMessageBox.information(
+                self, "Analysis running",
+                "An analysis is already in progress — wait for it to finish.")
+            return
+        sig = self._AnalysisSignals()
+        sig.progress.connect(self._on_analysis_progress)
+        sig.done.connect(self._on_analysis_done)
+        sig.failed.connect(self._on_analysis_failed)
+        self._analysis_signals = sig    # keep a ref while the thread runs
+        self._analysis_quick = quick
+
+        def _work():
+            try:
+                import fold_analysis
+                res = fold_analysis.analyze_fil(
+                    fil_path, source_name=source_name, quick=quick,
+                    progress=sig.progress.emit)
+                sig.done.emit(res)
+            except Exception as exc:
+                sig.failed.emit(str(exc))
+
+        self._analysis_thread = threading.Thread(
+            target=_work, name="fold-analysis", daemon=True)
+        self._analysis_thread.start()
+        self._on_analysis_progress("starting…")
+
+    def _on_analysis_progress(self, msg):
+        kind = "Quick look" if self._analysis_quick else "Analysis"
+        self._recording_status.setText(f"{kind}: {msg}")
+
+    def _on_analysis_failed(self, msg):
+        self._recording_status.setText("Analysis failed")
+        QtWidgets.QMessageBox.warning(
+            self, "Analysis failed",
+            f"The PRESTO pipeline did not complete:\n\n{msg}")
+
+    def _on_analysis_done(self, res):
+        verdict = res.get('verdict', '?')
+        self._recording_status.setText(f"Analysis: {verdict}")
+        self._recording_status.setToolTip(res.get('pdf', ''))
+        lines = [f"Verdict: {verdict}", ""]
+        if res.get('chi2_red') is not None:
+            lines.append(f"Reduced chi-squared: {res['chi2_red']:.2f}")
+        if res.get('best_dm') is not None:
+            cat = res.get('catalog_dm')
+            lines.append(f"Best DM: {res['best_dm']:.2f}"
+                         + (f"  (catalog {cat:.2f})" if cat else ""))
+        if res.get('best_p_s') is not None:
+            lines.append(f"Best period: {res['best_p_s']*1e3:.4f} ms")
+        lines += ["", res.get('verdict_text', ''), "",
+                  f"Self-contained PDF:\n{res.get('pdf', '')}"]
+        box = QtWidgets.QMessageBox(self)
+        box.setWindowTitle("Quick look" if self._analysis_quick
+                           else "Recording analysis")
+        box.setText("\n".join(lines))
+        open_btn = box.addButton("Open PDF", QtWidgets.QMessageBox.AcceptRole)
+        box.addButton(QtWidgets.QMessageBox.Close)
+        box.exec()
+        if box.clickedButton() is open_btn and res.get('pdf'):
+            QtGui.QDesktopServices.openUrl(
+                QtCore.QUrl.fromLocalFile(res['pdf']))
+
+    def _on_quicklook_clicked(self):
+        """Snapshot the growing .fil and analyze it without touching the
+        recording."""
+        if self._fil_sink is None:
+            return
+        import fold_analysis
+        path = self._fil_sink_path
+        try:
+            hdr_rows = self._fil_sink.nrows
+            tsamp = self._fil_nchans * self._fil_integrate / self.samp_rate
+            if hdr_rows * tsamp < fold_analysis.QUICKLOOK_MIN_SECONDS:
+                QtWidgets.QMessageBox.information(
+                    self, "Not enough data yet",
+                    f"Only {hdr_rows * tsamp:.0f} s recorded — the quick look "
+                    f"needs at least "
+                    f"{fold_analysis.QUICKLOOK_MIN_SECONDS:.0f} s (and a fold "
+                    f"only means much after several minutes).")
+                return
+            snap = os.path.splitext(path)[0] + "_snapshot.fil"
+            fold_analysis.snapshot_fil(path, snap)
+        except Exception as exc:
+            QtWidgets.QMessageBox.warning(
+                self, "Quick look failed",
+                f"Could not snapshot the recording:\n\n{exc}")
+            return
+        self._start_analysis(snap, self._source_name.strip(), quick=True)
+
     def _stop_recording(self):
         """Pull whichever recording sink is active out of the flowgraph and
         finalize its file."""
@@ -5923,6 +6070,13 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         else:
             self._recording_status.setText("Idle")
             self._recording_status.setToolTip("")
+        self._quicklook_btn.setEnabled(False)
+        # Automatic post-processing: the canned PRESTO pipeline on the file
+        # that just closed ("is the recording good?"), results as a
+        # self-contained PDF next to it.
+        if path and self._analyze_check.isChecked():
+            self._start_analysis(path, getattr(self, '_fil_rec_source', ''),
+                                 quick=False)
 
     def _stop_sigmf_recording(self):
         """Pull the SigMF sink out of the flowgraph and drop the Python

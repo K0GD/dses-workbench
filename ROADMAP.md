@@ -129,7 +129,34 @@ flagging for Soapy sources.
       Get the exact scenario from Ray (app, mode, signal type, hardware,
       settings) and reproduce with a calibrated weak signal first.
 
-- [ ] **Quick-look PRESTO analysis during a long recording** — while a
+- [ ] **Field-analysis cluster (quick-look + auto post-processing +
+      self-contained PDFs) — IMPLEMENTED 2026-08-02, ship in 1.1.9:**
+      one pipeline (`fold_analysis.py` + `fold_pdf.py`) serves all three:
+      readfile sanity → rfifind mask → band-edge zap → catalog prepfold
+      (or manual -p/-dm for magnetars/tests) → parse → verdict →
+      self-contained PDF next to the `.fil` (chart + commands + numbers +
+      plain-language verdict per the fold-PDF convention). PRESTO runs
+      native (Mac/Linux) or via WSL (Windows, presto_bridge) with a
+      graceful "not installed" path. App UI: "Analyze when done" checkbox
+      (default on) + "Quick look" button (snapshots the growing file
+      mid-recording, min 60 s), worker thread, results dialog with
+      Open-PDF. **Verdict RFI guards encode the review lessons:** a
+      catalog fold whose periodicity optimizes to DM≈0 reports
+      TERRESTRIAL SIGNAL (verified live: the bench carrier produced
+      χ²=17,275 and was correctly rejected); DM far from catalog →
+      SUSPECT; "no detection ≠ bad recording" wording for weak sources.
+      Tests: `test_fold_analysis.py` (synthetic 0.5-s pulsar → DETECTION
+      χ²≈293 with 2-page PDF; snapshot truncation; data-check-only path) +
+      live GUI round-trip on the B210 (record → auto-analysis → dialog →
+      PDF). Bonus live proof: the recording's 54 real overflow gaps were
+      rx_time-measured and padded (3.4 s) by the 1.1.8 timebase feature —
+      the live tag round-trip we couldn't previously induce.
+      **Follow-up found:** FilterbankSink still does inline DSP on the GR
+      thread and overflows at 16 MS/s/2044ch (padding compensates, but it
+      should get the ezRA-style worker-thread treatment — prevention over
+      cure).
+      Original item:
+      Quick-look PRESTO analysis during a long recording — while a
       multi-hour recording runs, let the user (or a timer) trigger a draft
       PRESTO fold on the data captured so far WITHOUT interrupting the
       recording. Feasible because `FilterbankWriter` appends whole spectra
