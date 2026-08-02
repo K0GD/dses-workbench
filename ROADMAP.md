@@ -416,6 +416,37 @@ flagging for Soapy sources.
         recording, elapsed counter) and the site/az-el metadata from the
         visibility-planner item (drift scans want LST + pointing recorded).
 
+## v1.2.0 — UI redesign: menus + dockable panels (Rick, 2026-08-02)
+
+- [ ] **Replace the fixed two-column sidebar with a menu bar + dockable
+      panels.** DECIDED: dockable panels (PyCharm/Chirp style), not MDI.
+      Rationale — the ~300 px sidebar is the root cause of a recurring
+      class of bugs, not a cosmetic preference: Ray's unreachable gain
+      slider (clipped), status messages truncated below the Record combo,
+      the QToolBar-overflow workaround already in the code (Integrate
+      would vanish into a "»" menu), and every new feature (Az/El,
+      analysis row) fighting for pixels. Three recording formats + sweep +
+      analysis have outgrown the space.
+      Design targets:
+      - Menu bar: File / View / Radio / Recording / Analysis / Help.
+        Rarely-touched settings (site coordinates, calibration, FFT
+        window, updater) move into roomy dialogs where they can be
+        EXPLAINED, not abbreviated.
+      - Main window keeps only what you watch while observing: spectrum,
+        waterfall, and a slim toolbar for frequency / gain / record.
+      - Qt QDockWidget panels: dock, tab, tear off, or hide; layout
+        persisted per user (`saveState`/`restoreState`), so a laptop and
+        the Haswell projector can each have a fitting layout.
+      - A real QStatusBar at the bottom: full width, no truncation,
+        details-on-click for long messages.
+      Cautions: substantial refactor of a ~6k-line single file; will
+      churn the geometry-persistence code that was hard-won on
+      Linux/Openbox (frame-vs-client coords, empty-screen guard); test on
+      Windows, macOS, and the headless site box. Estimate ~2 focused days.
+      **Sequencing: ship 1.1.8 and 1.1.9 FIRST** (that work is done and
+      the field wants it), then do this as the headline of 1.2.0 with
+      nothing else competing.
+
 ## Backlog / unscheduled
 
 - [ ] **B0950+08 re-observation plan (observing, not software):** processing
