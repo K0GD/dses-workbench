@@ -8,6 +8,18 @@ Conventions: `[ ]` planned, `[x]` shipped (note the commit), `[-]` dropped
 
 ## v1.1.8 (planned)
 
+**Release plan (Rick, 2026-08-02):** no point release for the two Ray UI
+fixes — everything below ships together as 1.1.8 when the timebase and
+ezRA work are done.
+
+**Ray's hardware (for reference):** an old **HackRF** product, not a B210.
+Implications: his "best-ever H-line" validation of 1.1.7 was on an 8-bit
+zero-IF SDR via the Soapy path; and the timebase/gap-padding design must
+NOT assume UHD — gr-uhd emits precise `rx_time` tags on overflow (exact
+gap length), while the Soapy path (HackRF/SDRplay/RTL) may only give us
+overflow 'O' counts, so precise padding for UHD + best-effort counting/
+flagging for Soapy sources.
+
 - [x] **Ray's weak-signal A/B verification — CLOSED 2026-08-01 by field
       results:** on 1.1.7, Ray's morning data was "the best Hydrogen line
       measurements he has ever made" (via Rick). No further A/B needed; the
