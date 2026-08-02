@@ -206,7 +206,8 @@ flagging for Soapy sources.
         Magnetar Catalog as a supplementary source if psrcat coverage proves
         too thin.
 
-- [ ] **One-click post-processing at end of recording ("is it good?")** —
+- [x] **One-click post-processing at end of recording — DONE, absorbed
+      into the field-analysis cluster above (2026-08-02).** Original notes:
       PRESTO v6 + tempo2 will always demand expertise for *real* analysis,
       but the app can run a canned, reasonably-good pipeline automatically
       when a recording finishes (opt-in checkbox, e.g. "Analyze when done"),
@@ -240,7 +241,8 @@ flagging for Soapy sources.
       - Magnetars / sources without catalog ephemerides: offer a manual
         P0/DM entry or par-file picker instead of `-psr`.
 
-- [ ] **Self-contained fold PDFs: interpretation text INSIDE the PDF** —
+- [x] **Self-contained fold PDFs — DONE, absorbed into the field-analysis
+      cluster above (2026-08-02, fold_pdf.py).** Original notes:
       whenever a PRESTO chart is written to PDF (the auto post-processing
       item above, the quick-look, or a manual fold), the PDF must carry the
       interpretive commentary with it, not just the raw prepfold plot, so
