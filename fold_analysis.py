@@ -165,7 +165,10 @@ def _save_log(workdir, name, cp):
 
 def _parse_prepfold_stdout(text):
     out = {}
-    m = re.search(r"Maximum reduced chi-squared found\s*=\s*([0-9.]+)", text)
+    # 'inf' happens on overwhelming signals (the lab pulsar simulator drives
+    # the off-pulse variance to ~0); float('inf') parses it fine.
+    m = re.search(r"Maximum reduced chi-squared found\s*=\s*(inf|[0-9.]+)",
+                  text)
     if m:
         out["chi2_red"] = float(m.group(1))
     m = re.search(r"Best DM\s*\(pc cm\^-3\)\s*=\s*([0-9.]+)", text)
@@ -186,6 +189,18 @@ def _verdict(results, source_name, quick, catalog_fold=False):
         return ("NO FOLD", "The fold step did not complete; see prepfold.log "
                            "in the analysis folder.")
     what = "quick-look fold" if quick else "fold"
+    import math
+    if math.isinf(chi2):
+        if catalog_fold:
+            return ("SUSPECT",
+                    "The fold significance is OFF-SCALE (infinite reduced "
+                    "chi-squared) — real sky pulsars never do this; a test "
+                    "signal or overwhelming RFI dominates the recording.")
+        return ("DETECTION",
+                f"Off-scale periodic signal (reduced chi-squared = infinity: "
+                f"the {what} of {source_name} dominates the recording so "
+                f"completely that the off-pulse variance is ~zero). For a "
+                f"test source this is a pass with flying colors.")
     # RFI guards for catalog folds (the hard-won B0950+08 / bench lessons):
     # a real pulsar detection optimizes NEAR its catalog DM; terrestrial
     # signals (carriers, spurs, test signals) rail to DM ~ 0 no matter how
