@@ -531,13 +531,26 @@ if _HAVE_GR:
                 self._q_samples = 0
             if not batch:
                 return False
+            # Coalesce runs of consecutive data chunks into ONE push: the
+            # channelizer's cost is dominated by per-call overhead and small
+            # FFT batches, so pushing 40 small chunks costs far more than one
+            # concatenated push of the same samples (the same lesson as
+            # EzraTxtSink). Pads break a run because they must stay in order.
+            run = []
             for kind, item in batch:
                 if self._writer._fh is None:
                     break
                 if kind == 'data':
-                    self._writer.push(item)
-                else:
-                    self._write_zeros(item)
+                    run.append(item)
+                    continue
+                if run:
+                    self._writer.push(np.concatenate(run) if len(run) > 1
+                                      else run[0])
+                    run = []
+                self._write_zeros(item)
+            if run and self._writer._fh is not None:
+                self._writer.push(np.concatenate(run) if len(run) > 1
+                                  else run[0])
             return True
 
         def _write_zeros(self, nsamples):
