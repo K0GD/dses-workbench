@@ -42,6 +42,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
+from scipy import fft as scipy_fft   # threaded pocketfft; see channelize_detect
 
 # MJD of the Unix epoch (1970-01-01T00:00:00 UTC).
 _UNIX_EPOCH_MJD = 40587.0
@@ -197,7 +198,16 @@ def channelize_detect(iq, nchans, window=True):
     blocks = iq[:n].reshape(-1, nchans)
     if window:
         blocks = blocks * np.hanning(nchans).astype(np.complex64)
-    spec = np.fft.fftshift(np.fft.fft(blocks, axis=1), axes=1)  # low->high freq
+    # scipy's pocketfft with workers=-1 releases the GIL and threads across
+    # cores; numpy's does neither. Measured 2026-08-02: the numpy version
+    # capped the live writer at ~17 MS/s against 16 MS/s needed, so any
+    # hiccup lost data (see the FilterbankSink queue notes). Numerically
+    # this is the same transform — outputs differ only at float32 rounding
+    # (~3e-7 relative) — and BOTH the streaming writer and the offline
+    # write_fil() call this function, so their byte-for-byte agreement (the
+    # property the validation actually pins) is unaffected.
+    spec = scipy_fft.fftshift(scipy_fft.fft(blocks, axis=1, workers=-1),
+                              axes=1)                       # low->high freq
     power = (spec.real**2 + spec.imag**2).astype(np.float32)
     return power
 
