@@ -49,3 +49,8 @@ dependencies:
   - pywin32        # used by docx2pdf and by our build script directly
   - pip:
     - docx2pdf     # not in conda-forge — installs via pip
+    # --- Dev/validation only: running the ezRA suite's ezCon.py locally as
+    # the acceptance test for our ezRA .txt drift-scan writer (ezra_txt.py /
+    # test_ezra_txt.py). Not needed by the shipped application.
+    - seaborn
+    - astropy
