@@ -110,6 +110,8 @@ from argparse import ArgumentParser
 from datetime import datetime
 from pathlib import Path
 import configparser
+import ctypes
+import gc
 import re
 import signal
 import threading
@@ -6161,11 +6163,65 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         s = max(0, int(seconds)); h, r = divmod(s, 3600); m, s = divmod(r, 60)
         return f"{h}:{m:02d}:{s:02d}"
 
+    # --- Real-time hygiene while recording --------------------------------
+    # Measured 2026-08-02 (2044 ch @ 16 MS/s, 60 s, instrumented headless):
+    #   default:            3830 GC pauses, 1039 ms total, MAX 42.5 ms
+    #   GC off + 1 ms timer:   2 GC pauses (both outside the recording),
+    #                          host stalls >5 ms: 114 ms -> 19 ms total,
+    #                          max work() interval 42.4 ms -> 13.5 ms
+    # Those multi-ms pauses are what exhausts the USB transport buffer and
+    # makes the radio declare an RX overflow, so we suppress them for the
+    # duration of a recording only.
+
+    def _begin_realtime_mode(self):
+        """Quiet the two host-side sources of multi-millisecond stalls for
+        the duration of a recording: Python's cyclic GC, and Windows' 15.6 ms
+        default scheduler/timer granularity."""
+        if getattr(self, '_rt_active', False):
+            return
+        self._rt_active = True
+        try:
+            # freeze() moves everything already allocated into a permanent
+            # generation so a later collection can't rescan it; disable()
+            # stops collections entirely. Our recording hot path is
+            # refcount-friendly numpy arrays (no cycles), so nothing
+            # accumulates; both are undone in _end_realtime_mode.
+            # Deliberately NO gc.collect() here: on the app's live heap a
+            # full collection took ~9 s in testing, which would freeze the
+            # GUI exactly as the user hits Record. freeze() alone is cheap.
+            gc.freeze()
+            gc.disable()
+        except Exception:
+            pass
+        if sys.platform == "win32":
+            try:
+                ctypes.windll.winmm.timeBeginPeriod(1)
+                self._rt_timer_period = True
+            except Exception:
+                self._rt_timer_period = False
+
+    def _end_realtime_mode(self):
+        if not getattr(self, '_rt_active', False):
+            return
+        self._rt_active = False
+        try:
+            gc.enable()
+            gc.unfreeze()
+        except Exception:
+            pass
+        if sys.platform == "win32" and getattr(self, '_rt_timer_period', False):
+            try:
+                ctypes.windll.winmm.timeEndPeriod(1)
+            except Exception:
+                pass
+            self._rt_timer_period = False
+
     def _on_recording_started(self):
         """Called once a recording sink is actually live: start the elapsed /
         countdown counter, turn the status indicator red, and arm the auto-stop."""
         self._rec_start_time = time.monotonic()
         self._rec_duration_s = self._parse_duration_s(self._rec_duration_text)
+        self._begin_realtime_mode()                 # suppress GC / timer stalls
         self._processor.set_recording_active(True)  # yield display CPU to the sink
         self._recording_status.setStyleSheet(
             "color: white; background-color: #c0392b;"
@@ -6181,6 +6237,7 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         the red indicator. Idempotent (safe if nothing was running)."""
         self._rec_timer.stop()
         self._rec_start_time = None
+        self._end_realtime_mode()                    # restore GC / timer
         self._processor.set_recording_active(False)  # full display budget again
         self._recording_status.setStyleSheet("")           # back to normal colour
         self._source_name_widget.setEnabled(True)
