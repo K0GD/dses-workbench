@@ -48,6 +48,9 @@ copy_if_present() {
 for f in \
     dses_spectrum_analyzer.py \
     sigproc_fil.py \
+    ezra_txt.py \
+    fold_analysis.py \
+    fold_pdf.py \
     iq_to_fil.py \
     updater.py \
     LICENSE \
@@ -78,6 +81,40 @@ copy_if_present DSES_RFI_Spectrum_Analyzer_Installation.pdf "$stage/"
 # SDR attached launch the program and see live spectrum from a recorded file.
 copy_if_present sample.sigmf-data "$stage/"
 copy_if_present sample.sigmf-meta "$stage/"
+
+# PRESTO bridge + build recipes (the app's Analyze/Quick-look features shell
+# out to these; Help points users at presto/build_presto.sh).
+mkdir -p "$stage/presto"
+copy_if_present presto/presto_bridge.py "$stage/presto/"
+copy_if_present presto/build_presto.sh "$stage/presto/"
+copy_if_present presto/build_presto_macos.sh "$stage/presto/"
+copy_if_present presto/extend_ut1.sh "$stage/presto/"
+copy_if_present presto/README.md "$stage/presto/"
+[ -d presto/par ] && cp -R presto/par "$stage/presto/"
+
+# Local-import completeness check (guards against the 1.1.8 incident: the
+# app grew module files that never made it into the ship list, and the
+# published zip died at startup with ModuleNotFoundError). Fail the build if
+# any staged .py does a top-level import of a repo-local module that is not
+# itself staged.
+fail=0
+repo_mods="$(ls *.py | sed 's/\.py$//')"
+staged_mods="$(find "$stage" -name '*.py' -exec basename {} .py \;)"
+for py in "$stage"/*.py; do
+    while read -r mod; do
+        [ -z "$mod" ] && continue
+        if echo "$repo_mods" | grep -qx "$mod" && ! echo "$staged_mods" | grep -qx "$mod"; then
+            echo "ERROR: $(basename "$py") imports '$mod' but $mod.py is not staged" >&2
+            fail=1
+        fi
+    done < <(grep -oE '^[[:space:]]*(import|from)[[:space:]]+[A-Za-z_][A-Za-z0-9_]*' "$py" \
+             | awk '{print $2}')
+done
+if [ "$fail" -ne 0 ]; then
+    echo "Staging tree is missing local modules - add them to the ship list." >&2
+    exit 1
+fi
+echo "Local-import completeness check passed."
 
 # Make the Unix launcher + the macOS shortcut installer executable inside the
 # bundle so a fresh install can run them (a plain unzip preserves these bits;

@@ -472,6 +472,19 @@ flagging for Soapy sources.
       the field wants it), then do this as the headline of 1.2.0 with
       nothing else competing.
 
+## v1.1.9 / next feature release
+
+- [ ] **Hot-plug receiver detection (Rick, 2026-08-03):** when the SA opens
+      with no receiver detected (today: playback mode or the exit dialog),
+      allow the receiver to be connected or powered on later and get
+      detected WITHOUT restarting the app. Design sketch: in playback/
+      no-radio mode, poll `find_all_radios()` on a slow timer (~5 s; USB
+      enumeration is cheap when empty) or offer a "Rescan for radios"
+      button on the Device row + picker dialog; on detection, offer to
+      switch (tear down the playback graph, build the live source —
+      the flowgraph rebuild machinery already exists in the device-switch
+      path). Also covers the B210 powered off at session start at Haswell.
+
 ## Validation tooling (after 1.1.8 ships, possibly after 1.2.0)
 
 - [ ] **B210-TX pulsar simulator = BUILT-IN TEST (DECIDED 2026-08-03; BIT

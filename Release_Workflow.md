@@ -271,14 +271,25 @@ Should be `HTTP/... 200`. If not, the **Open Download Page** button in the dialo
 ```text
 dses-spectrum-analyzer-<version>/
 ├── dses_spectrum_analyzer.py
+├── sigproc_fil.py               ← shared .fil core (app + iq_to_fil)
+├── ezra_txt.py                  ← ezRA drift-scan writer
+├── fold_analysis.py             ← auto post-processing pipeline
+├── fold_pdf.py                  ← self-contained fold PDFs
+├── iq_to_fil.py
+├── updater.py
 ├── LICENSE
 ├── launcher.bat
 ├── launcher.ps1
 ├── launcher.sh
 ├── install-shortcut.ps1
+├── install-shortcut.command
 ├── dses-spectrum-analyzer.desktop
 ├── icons/dses_sa.ico
 ├── icons/dses_sa.png
+├── icons/dses_sa.icns
+├── presto/presto_bridge.py      ← WSL/native PRESTO bridge (Analyze/Quick look)
+├── presto/build_presto*.sh      ← PRESTO install recipes (WSL + macOS)
+├── presto/extend_ut1.sh, README.md, par/
 ├── sdrplay/sdrPlaySupport.dll   ← pre-built SoapySDRPlay3 module (Windows)
 ├── sdrplay/README.txt           ← what it is + ABI it was built against
 ├── environment.yml
@@ -286,6 +297,15 @@ dses-spectrum-analyzer-<version>/
 ├── sample.sigmf-data
 └── sample.sigmf-meta
 ```
+
+**IMPORTANT — when the app grows a new local module** (a new top-level `import
+<module>` of a repo file), add it to BOTH `make-release.ps1` and
+`make-release.sh` ship lists. Both scripts now run a **local-import
+completeness check** at stage time and refuse to build a zip whose staged
+Python imports a repo module that isn't staged — that guard exists because the
+first published 1.1.8 zip shipped without `ezra_txt.py` and died at startup
+with `ModuleNotFoundError` on every install that took the update (caught by
+Rick's production install within the hour; zip replaced in place same day).
 
 The `sdrplay/` payload is sourced from `vendor/windows/` in the repo. SDRplay users on Windows copy the DLL into Radioconda per Installing.md §3A.2; everyone else ignores it (Linux/macOS get the module from their package manager).
 

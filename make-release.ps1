@@ -52,6 +52,9 @@ try {
     $files = @(
         'dses_spectrum_analyzer.py',
         'sigproc_fil.py',
+        'ezra_txt.py',
+        'fold_analysis.py',
+        'fold_pdf.py',
         'iq_to_fil.py',
         'updater.py',
         'LICENSE',
@@ -97,6 +100,41 @@ try {
             Write-Warning "Missing playback sample (skipped): $f"
         }
     }
+    # PRESTO bridge + build recipes (the app's Analyze/Quick-look features
+    # shell out to these; Help points users at presto/build_presto.sh).
+    New-Item -ItemType Directory -Force -Path (Join-Path $stage 'presto') | Out-Null
+    foreach ($f in @('presto\presto_bridge.py', 'presto\build_presto.sh',
+                     'presto\build_presto_macos.sh', 'presto\extend_ut1.sh',
+                     'presto\README.md')) {
+        if (Test-Path $f) { Copy-Item $f -Destination (Join-Path $stage 'presto') }
+        else { Write-Warning "Missing (skipped): $f" }
+    }
+    if (Test-Path 'presto\par') {
+        Copy-Item 'presto\par' -Destination (Join-Path $stage 'presto') -Recurse
+    }
+
+    # --- Local-import completeness check (guards against the 1.1.8 incident:
+    # the app grew module files that never made it into the ship list above,
+    # and the published zip died at startup with ModuleNotFoundError). Scan
+    # every staged .py for top-level local imports and fail the build if the
+    # imported module is a repo file that is not in the staging tree. ---
+    $repoPy = Get-ChildItem -Path $root -Filter '*.py' -File | ForEach-Object { $_.BaseName }
+    $stagedPy = Get-ChildItem -Path $stage -Filter '*.py' -File -Recurse | ForEach-Object { $_.BaseName }
+    $missing = @()
+    Get-ChildItem -Path $stage -Filter '*.py' -File | ForEach-Object {
+        Select-String -Path $_.FullName -Pattern '^\s*(?:import|from)\s+([A-Za-z_][A-Za-z0-9_]*)' |
+            ForEach-Object {
+                $mod = $_.Matches[0].Groups[1].Value
+                if (($repoPy -contains $mod) -and -not ($stagedPy -contains $mod)) {
+                    $missing += "$($_.Filename): imports '$mod' but $mod.py is not staged"
+                }
+            }
+    }
+    if ($missing.Count -gt 0) {
+        $missing | Sort-Object -Unique | ForEach-Object { Write-Error $_ -ErrorAction Continue }
+        throw "Staging tree is missing local modules - add them to the ship list above."
+    }
+    Write-Host "Local-import completeness check passed."
 
     # --- Normalize Unix-consumed text files to LF in the staging tree ---
     # Checkout line endings become SHIPPED line endings, and a Windows
