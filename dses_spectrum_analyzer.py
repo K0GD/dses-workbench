@@ -212,6 +212,12 @@ DEFAULTS = {
         # Run the canned PRESTO pipeline (readfile + rfifind + catalog fold
         # -> self-contained PDF) automatically when a .fil recording stops.
         'analyze_when_done': True,
+        # Manual fold override for a known-period source with no catalog entry
+        # (e.g. the lab pulsar simulator): period in milliseconds forces a full
+        # prepfold -topo -p; DM in pc/cm^3 (blank/0 = undispersed). Blank period
+        # = fold by catalog Source name, or data-health checks only.
+        'fold_period_ms':  '',
+        'fold_dm':         '',
         # --- Drift-scan (ezRA .txt) format geometry. Defaults mirror the
         # dish's own ezCol command line (Nov-2025 campaign): 4096-bin FFT,
         # 31e3 integrations (~12.7 s/row at 10 MS/s), central 80% of the
@@ -2845,8 +2851,10 @@ shows elapsed time (or the countdown when a duration is set).</li>
 <li><b>Analyze when done</b> / <b>Quick look</b> (filterbank + PRESTO): when
 a <code>.fil</code> recording stops, the canned PRESTO pipeline runs
 automatically — <code>readfile</code> sanity, an <code>rfifind</code> RFI
-mask, band-edge zapping, and (when Source is a catalog pulsar) a
-<code>prepfold</code> catalog fold — and delivers a <b>self-contained PDF</b>
+mask, band-edge zapping, and a <code>prepfold</code> fold — by catalog pulsar
+when Source is one, or at a manual <b>Fold&nbsp;P&nbsp;(ms)</b> when set (for a
+known-period source with no catalog entry, e.g. the lab pulsar simulator; a
+manual period overrides the Source name) — and delivers a <b>self-contained PDF</b>
 next to the recording: chart, commands, numbers, and a plain-language
 verdict. Verdicts are honest about failure modes: a periodicity that
 optimizes to DM&nbsp;≈&nbsp;0 is reported as a <i>terrestrial signal</i>, not
@@ -4234,6 +4242,10 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         # elapsed counter, red REC indicator, "record for" duration + auto-stop).
         self._source_name = self._app_settings.get_str('recording', 'source_name')
         self._rec_duration_text = self._app_settings.get_str('recording', 'rec_duration')
+        # Manual fold override (known-period source without a catalog entry,
+        # e.g. the lab pulsar simulator): forces a full prepfold -topo -p.
+        self._fold_period_ms = self._app_settings.get_str('recording', 'fold_period_ms')
+        self._fold_dm = self._app_settings.get_str('recording', 'fold_dm')
         self._rec_start_time = None   # time.monotonic() at record start, else None
         self._rec_duration_s = 0      # parsed target length in seconds (0 = none)
         self._rec_timer = QtCore.QTimer(self)
@@ -4443,6 +4455,35 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         _src_row.addWidget(self._source_name_edit, 1)
         self._record_group_layout.addWidget(self._source_name_widget)
 
+        # --- Manual fold override (known-period source with no catalog entry,
+        #     e.g. the lab pulsar simulator): a period (+ optional DM) forces a
+        #     full topocentric prepfold instead of the data-check-only path.
+        #     Same plain two-row grid as .fil geometry (sidebar-width safe). ---
+        self._fold_manual_widget = QtWidgets.QWidget(self)
+        _fold_grid = QtWidgets.QGridLayout(self._fold_manual_widget)
+        _fold_grid.setContentsMargins(0, 0, 0, 0)
+        _fold_grid.addWidget(QtWidgets.QLabel("Fold P (ms):"), 0, 0)
+        self._fold_period_edit = QtWidgets.QLineEdit(self._fold_period_ms)
+        self._fold_period_edit.setPlaceholderText("e.g. 102.4 (simulator)")
+        self._fold_period_edit.setToolTip(
+            "Manual fold period in milliseconds. Set this to force a full\n"
+            "prepfold (-topo -p) on a known-period source that has no catalog\n"
+            "entry — e.g. the lab pulsar simulator. A period here OVERRIDES the\n"
+            "catalog Source name. Leave blank to fold by a catalog Source name,\n"
+            "or (if neither is set) run the data-health checks only.")
+        self._fold_period_edit.editingFinished.connect(self._on_fold_period_changed)
+        _fold_grid.addWidget(self._fold_period_edit, 0, 1)
+        _fold_grid.addWidget(QtWidgets.QLabel("Fold DM:"), 1, 0)
+        self._fold_dm_edit = QtWidgets.QLineEdit(self._fold_dm)
+        self._fold_dm_edit.setPlaceholderText("optional, default 0")
+        self._fold_dm_edit.setToolTip(
+            "Dispersion measure (pc/cm^3) for the manual fold. The lab\n"
+            "simulator injects an undispersed signal, so 0 (blank) is right;\n"
+            "use the known DM for a genuinely dispersed source.")
+        self._fold_dm_edit.editingFinished.connect(self._on_fold_dm_changed)
+        _fold_grid.addWidget(self._fold_dm_edit, 1, 1)
+        self._record_group_layout.addWidget(self._fold_manual_widget)
+
         # --- .fil geometry (only meaningful in filterbank mode) ---
         # A plain two-row grid, NOT a QToolBar. A QToolBar collapses any widget
         # that doesn't fit the available width into an overflow ("»") menu, and
@@ -4504,10 +4545,10 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         self._analyze_check.setToolTip(
             "When a filterbank (.fil) recording stops, automatically run the\n"
             "canned PRESTO pipeline: readfile sanity, rfifind RFI mask,\n"
-            "band-edge zap, and (when the Source is a catalog pulsar) a\n"
-            "prepfold catalog fold. Results arrive as a self-contained PDF\n"
-            "next to the recording, with a plain-language verdict.\n"
-            "Needs PRESTO (Mac/Linux: native; Windows: WSL via\n"
+            "band-edge zap, and a prepfold fold — by catalog pulsar (Source)\n"
+            "or at a manual Fold P (ms) when set. Results arrive as a\n"
+            "self-contained PDF next to the recording, with a plain-language\n"
+            "verdict. Needs PRESTO (Mac/Linux: native; Windows: WSL via\n"
             "presto/build_presto.sh).")
         self._analyze_check.toggled.connect(
             lambda on: self._save_setting('recording', 'analyze_when_done', on))
@@ -5828,6 +5869,9 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         change mid-recording."""
         self._fil_geom_widget.setEnabled(
             (self._record_format == 'fil') and not self.record)
+        # The manual-fold override only feeds the .fil PRESTO pipeline.
+        self._fold_manual_widget.setEnabled(
+            (self._record_format == 'fil') and not self.record)
         self._ezra_point_widget.setEnabled(
             (self._record_format == 'ezra') and not self.record)
         # Observation presets are a bundle of the same locked settings.
@@ -6199,9 +6243,12 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         done = Signal(dict)
         failed = Signal(str)
 
-    def _start_analysis(self, fil_path, source_name, quick):
+    def _start_analysis(self, fil_path, source_name, quick,
+                        fold_p_s=None, fold_dm=None):
         """Run fold_analysis.analyze_fil on a worker thread; results surface
-        via signals on the GUI thread. One analysis at a time."""
+        via signals on the GUI thread. One analysis at a time. A manual
+        fold_p_s (seconds) forces a full -topo -p fold for a known-period
+        source that has no catalog entry (e.g. the lab pulsar simulator)."""
         if getattr(self, '_analysis_thread', None) is not None \
                 and self._analysis_thread.is_alive():
             QtWidgets.QMessageBox.information(
@@ -6220,6 +6267,7 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
                 import fold_analysis
                 res = fold_analysis.analyze_fil(
                     fil_path, source_name=source_name, quick=quick,
+                    fold_p_s=fold_p_s, fold_dm=fold_dm,
                     progress=sig.progress.emit)
                 sig.done.emit(res)
             except Exception as exc:
@@ -6291,7 +6339,9 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
                 self, "Quick look failed",
                 f"Could not snapshot the recording:\n\n{exc}")
             return
-        self._start_analysis(snap, self._source_name.strip(), quick=True)
+        _p, _dm = self._manual_fold_params()
+        self._start_analysis(snap, self._source_name.strip(), quick=True,
+                             fold_p_s=_p, fold_dm=_dm)
 
     def _stop_recording(self):
         """Pull whichever recording sink is active out of the flowgraph and
@@ -6358,8 +6408,9 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         # that just closed ("is the recording good?"), results as a
         # self-contained PDF next to it.
         if path and self._analyze_check.isChecked():
+            _p, _dm = self._manual_fold_params()
             self._start_analysis(path, getattr(self, '_fil_rec_source', ''),
-                                 quick=False)
+                                 quick=False, fold_p_s=_p, fold_dm=_dm)
 
     def _stop_sigmf_recording(self):
         """Pull the SigMF sink out of the flowgraph and drop the Python
@@ -6392,6 +6443,36 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
     def _on_source_name_changed(self):
         self._source_name = self._source_name_edit.text().strip()
         self._save_setting('recording', 'source_name', self._source_name)
+
+    def _on_fold_period_changed(self):
+        self._fold_period_ms = self._fold_period_edit.text().strip()
+        self._save_setting('recording', 'fold_period_ms', self._fold_period_ms)
+
+    def _on_fold_dm_changed(self):
+        self._fold_dm = self._fold_dm_edit.text().strip()
+        self._save_setting('recording', 'fold_dm', self._fold_dm)
+
+    def _manual_fold_params(self):
+        """Parse the manual fold fields. Returns (period_s, dm) for a full
+        prepfold -topo -p, or (None, None) when no valid period is set (then
+        the pipeline folds by catalog Source name, or runs data checks only)."""
+        txt = (self._fold_period_ms or "").strip()
+        if not txt:
+            return (None, None)
+        try:
+            p_s = float(txt) / 1000.0
+        except ValueError:
+            return (None, None)
+        if not (p_s > 0):
+            return (None, None)
+        dm = 0.0
+        dtxt = (self._fold_dm or "").strip()
+        if dtxt:
+            try:
+                dm = float(dtxt)
+            except ValueError:
+                dm = 0.0
+        return (p_s, dm)
 
     def _on_rec_duration_changed(self):
         self._rec_duration_text = self._rec_duration_edit.text().strip()
