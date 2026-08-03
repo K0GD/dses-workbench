@@ -2723,6 +2723,11 @@ work. On radios that can't reach a preset's rate, the request is clamped and
 snapped as usual and the readout shows what you actually got. Display
 settings (FFT size, window, averaging) are deliberately untouched by
 presets: they shape what you <i>see</i>, never what is recorded.</p>
+<p><b>A preset never starts a recording.</b> It only configures — review the
+settings, make any adjustments, then start the recording yourself with the
+<b>Record</b> control when you're ready. (The RFI-survey preset does begin
+sweeping the display immediately, exactly as the Sweep mode button would,
+but nothing is written to disk.)</p>
 <h4>Mode</h4>
 <ul>
 <li><b>Live</b>: real-time FFT of the radio's instantaneous bandwidth around
@@ -4152,7 +4157,9 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
             "Everything stays adjustable afterward — changing any of the\n"
             "above drops this back to 'Manual (expert)'. Display controls\n"
             "(FFT size, window, averaging) are not touched: they only\n"
-            "affect what you see, never what is recorded.")
+            "affect what you see, never what is recorded.\n"
+            "A preset NEVER starts recording: review the settings, adjust\n"
+            "as needed, then start it yourself with the Record control.")
         # activated (not currentIndexChanged): fires only on USER selection,
         # so programmatic deviation-resets below can't recurse.
         self._observation_combo.activated.connect(self._apply_observation)
