@@ -529,8 +529,12 @@ flagging for Soapy sources.
       this unit becomes a FULL independent-clock vector pulsar sim with
       calibrated level. Memory math: full B0329 period @25 MSa/s ~18
       Mpts/ch (deep-memory AWG), but a 4 MHz test bandwidth @5-10 MSa/s
-      is a few Mpts and still gives a ~12 ms DM sweep at UHF. Depends on
-      whether Rick has/gets a dual-channel AWG.
+      is a few Mpts and still gives a ~12 ms DM sweep at UHF. No AWG on
+      hand (2026-08-03); candidates researched: Siglent SDG7032A (2 ch,
+      512 Mpts, 5 GSa/s, has a vector/IQ mode made for driving external
+      I/Q modulators; street ~$4k but 2026 quotes inconsistent — verify)
+      or used Keysight 33622A + 336MEM2U (64 Mpts/ch, ~$2.5-4k; check
+      the MEM option is present, same lesson as the ESG).
 
 ## Backlog / unscheduled
 
