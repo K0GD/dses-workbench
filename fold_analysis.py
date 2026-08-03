@@ -249,6 +249,91 @@ class PrestoRunner:
         raise PrestoUnavailable(self.describe())
 
 
+_catalog_index = None   # {UPPER_NAME: (period_s, dm)} once loaded; {} if none
+
+
+def _read_catalog_text(runner):
+    """Text of PRESTO's psr_catalog.txt, or None. Native: read the file from
+    the discovered env's share/presto (or $PRESTO). WSL: cat it over the
+    bridge."""
+    cands = []
+    if getattr(runner, "_bindir", None):
+        cands.append(Path(runner._bindir).parent / "share" / "presto"
+                     / "psr_catalog.txt")
+    if os.environ.get("PRESTO"):
+        for sub in ("share/presto", "lib", "."):
+            cands.append(Path(os.environ["PRESTO"]) / sub / "psr_catalog.txt")
+    for p in cands:
+        try:
+            if p.is_file():
+                return p.read_text(errors="replace")
+        except OSError:
+            continue
+    if getattr(runner, "mode", None) == "wsl":
+        try:
+            r = runner._bridge.run(
+                "bash", "-lc",
+                'cat "$PRESTO/share/presto/psr_catalog.txt" 2>/dev/null || '
+                'cat "$(dirname "$(command -v prepfold)")/../share/presto/'
+                'psr_catalog.txt" 2>/dev/null')
+            if r.returncode == 0 and r.stdout.strip():
+                return r.stdout
+        except Exception:
+            pass
+    return None
+
+
+def _build_catalog_index(runner):
+    """Parse psr_catalog.txt into {UPPER_NAME: (period_s, dm)} keyed by both the
+    B-name and the J-name. Empty dict if the catalog can't be read."""
+    text = _read_catalog_text(runner)
+    if not text:
+        return {}
+    idx, header = {}, None
+    ni = pj = fi = di = None
+    for raw in text.splitlines():
+        if not raw.strip():
+            continue
+        fields = raw.split(";")
+        if header is None:
+            if "NAME" in fields and "F0" in fields and "DM" in fields:
+                header = fields
+                col = lambda nm: header.index(nm) if nm in header else None
+                ni, pj, fi, di = col("NAME"), col("PSRJ"), col("F0"), col("DM")
+            continue
+        try:
+            f0 = float(fields[fi]); dm = float(fields[di])
+        except (ValueError, IndexError):
+            continue  # units row, missing F0/DM ('*'), or short line
+        if f0 <= 0:
+            continue
+        p_s = 1.0 / f0
+        for i in (ni, pj):
+            if i is not None and i < len(fields):
+                key = fields[i].strip().upper()
+                if key and key != "*":
+                    idx[key] = (p_s, dm)
+    return idx
+
+
+def catalog_lookup(name, runner=None):
+    """(period_s, dm) for a pulsar NAME (B or J designation) from PRESTO's
+    psr_catalog.txt, or None if PRESTO/its catalog isn't reachable or the name
+    isn't listed. The parsed catalog is cached after the first load."""
+    global _catalog_index
+    key = (name or "").strip().upper()
+    if not key:
+        return None
+    if _catalog_index is None:
+        try:
+            runner = runner or PrestoRunner()
+            _catalog_index = (_build_catalog_index(runner)
+                              if runner.available else {})
+        except Exception:
+            _catalog_index = {}
+    return _catalog_index.get(key)
+
+
 def snapshot_fil(src, dst):
     """Copy a growing .fil to `dst`, truncated to a whole number of complete
     spectra — always a valid filterbank even while the writer appends

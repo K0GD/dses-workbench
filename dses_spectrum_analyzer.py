@@ -2895,9 +2895,11 @@ shows elapsed time (or the countdown when a duration is set).</li>
 a <code>.fil</code> recording stops, the canned PRESTO pipeline runs
 automatically — <code>readfile</code> sanity, an <code>rfifind</code> RFI
 mask, band-edge zapping, and a <code>prepfold</code> fold — by catalog pulsar
-when Source is one, or at a manual <b>Fold&nbsp;P&nbsp;(ms)</b> when set (for a
-known-period source with no catalog entry, e.g. the lab pulsar simulator; a
-manual period overrides the Source name) — and delivers a <b>self-contained PDF</b>
+when Source is a known designation (the <b>Fold&nbsp;P&nbsp;(ms)</b> /
+<b>Fold&nbsp;DM</b> boxes then preview its catalogue values and lock, and the
+fold uses the pulsar's full ephemeris), or at a manual <b>Fold&nbsp;P&nbsp;(ms)</b>
+for a source with no catalogue entry (e.g. the lab pulsar simulator) — and
+delivers a <b>self-contained PDF</b>
 next to the recording: chart, commands, numbers, and a plain-language
 verdict. Verdicts are honest about failure modes: a periodicity that
 optimizes to DM&nbsp;≈&nbsp;0 is reported as a <i>terrestrial signal</i>, not
@@ -4509,11 +4511,11 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         self._fold_period_edit = QtWidgets.QLineEdit(self._fold_period_ms)
         self._fold_period_edit.setPlaceholderText("e.g. 102.4 (simulator)")
         self._fold_period_edit.setToolTip(
-            "Manual fold period in milliseconds. Set this to force a full\n"
-            "prepfold (-topo -p) on a known-period source that has no catalog\n"
-            "entry — e.g. the lab pulsar simulator. A period here OVERRIDES the\n"
-            "catalog Source name. Leave blank to fold by a catalog Source name,\n"
-            "or (if neither is set) run the data-health checks only.")
+            "Manual fold period in milliseconds, for a known-period source with\n"
+            "no catalog entry — e.g. the lab pulsar simulator. When Source is a\n"
+            "catalog pulsar these boxes instead preview its catalogue period/DM\n"
+            "and lock (the fold then uses the full ephemeris). This tooltip is\n"
+            "updated live to match the current Source.")
         self._fold_period_edit.editingFinished.connect(self._on_fold_period_changed)
         _fold_grid.addWidget(self._fold_period_edit, 0, 1)
         _fold_grid.addWidget(QtWidgets.QLabel("Fold DM:"), 1, 0)
@@ -4655,6 +4657,8 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
 
         # Grey out the .fil geometry row unless filterbank format is selected.
         self._update_fil_geom_enabled()
+        # Lock/preview the Fold boxes to match a saved catalog Source name.
+        self._sync_fold_fields_to_source()
 
         # --- Gain slider (device-aware range) ---
         gmin, gmax, gstep = gain_range_tuple
@@ -6486,19 +6490,79 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
     def _on_source_name_changed(self):
         self._source_name = self._source_name_edit.text().strip()
         self._save_setting('recording', 'source_name', self._source_name)
+        self._sync_fold_fields_to_source()
+
+    def _source_is_catalog_pulsar(self):
+        """True if the Source name is a recognized pulsar designation (B/J), so
+        the fold goes through prepfold -psr and the Fold boxes are information-
+        only (locked)."""
+        from sigproc_fil import radec_from_name
+        name = (self._source_name or "").strip()
+        return bool(name) and radec_from_name(name) != (0.0, 0.0)
+
+    def _sync_fold_fields_to_source(self):
+        """Lock the Fold P / DM boxes for a catalog pulsar — they become an
+        information-only preview (catalog period/DM if PRESTO knows them, else
+        blank), and the fold always runs prepfold -psr. Editable only for a
+        non-catalog source (the simulator / manual). Never overwrites the saved
+        manual values (self._fold_period_ms / self._fold_dm)."""
+        if self._source_is_catalog_pulsar():
+            p_txt = dm_txt = ""
+            try:
+                import fold_analysis
+                info = fold_analysis.catalog_lookup(self._source_name)
+            except Exception:
+                info = None
+            if info:
+                p_txt, dm_txt = f"{info[0] * 1e3:.4f}", f"{info[1]:.4f}"
+            self._fold_period_edit.setText(p_txt)
+            self._fold_dm_edit.setText(dm_txt)
+            self._fold_period_edit.setPlaceholderText(
+                "" if p_txt else "catalog fold (period not in PRESTO catalog)")
+            self._fold_dm_edit.setPlaceholderText("" if dm_txt else "catalog")
+            self._set_fold_fields_readonly(True)
+        else:
+            self._fold_period_edit.setText(self._fold_period_ms)
+            self._fold_dm_edit.setText(self._fold_dm)
+            self._fold_period_edit.setPlaceholderText("e.g. 102.4 (simulator)")
+            self._fold_dm_edit.setPlaceholderText("optional, default 0")
+            self._set_fold_fields_readonly(False)
+
+    def _set_fold_fields_readonly(self, readonly):
+        """Read-only (catalog info) vs editable (manual). Read-only gets a muted
+        background so it plainly reads as 'locked, for information'."""
+        for w in (self._fold_period_edit, self._fold_dm_edit):
+            w.setReadOnly(readonly)
+            w.setStyleSheet(
+                "QLineEdit{background:palette(window);color:palette(mid);}"
+                if readonly else "")
+        self._fold_period_edit.setToolTip(
+            "Shown from PRESTO's pulsar catalog. The fold uses the pulsar's\n"
+            "full ephemeris (prepfold -psr), so these are information-only and\n"
+            "locked while the Source is a catalog pulsar."
+            if readonly else
+            "Manual fold period in milliseconds. Set this to force a full\n"
+            "prepfold (-topo -p) on a known-period source that has no catalog\n"
+            "entry — e.g. the lab pulsar simulator.")
 
     def _on_fold_period_changed(self):
+        if self._fold_period_edit.isReadOnly():
+            return  # catalog preview — don't persist as a manual value
         self._fold_period_ms = self._fold_period_edit.text().strip()
         self._save_setting('recording', 'fold_period_ms', self._fold_period_ms)
 
     def _on_fold_dm_changed(self):
+        if self._fold_dm_edit.isReadOnly():
+            return
         self._fold_dm = self._fold_dm_edit.text().strip()
         self._save_setting('recording', 'fold_dm', self._fold_dm)
 
     def _manual_fold_params(self):
-        """Parse the manual fold fields. Returns (period_s, dm) for a full
-        prepfold -topo -p, or (None, None) when no valid period is set (then
-        the pipeline folds by catalog Source name, or runs data checks only)."""
+        """(period_s, dm) for a manual prepfold -topo -p, or (None, None) to
+        fold by catalog Source name (-psr) / run data checks only. A recognized
+        catalog pulsar always folds via -psr, so the info boxes are ignored."""
+        if self._source_is_catalog_pulsar():
+            return (None, None)
         txt = (self._fold_period_ms or "").strip()
         if not txt:
             return (None, None)
