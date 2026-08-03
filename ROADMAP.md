@@ -472,6 +472,32 @@ flagging for Soapy sources.
       the field wants it), then do this as the headline of 1.2.0 with
       nothing else competing.
 
+## Validation tooling (post-1.1.8)
+
+- [ ] **E4438C ARB pulsar simulator (Rick approved 2026-08-03):** use the
+      bench E4438C vector signal generator as a software-defined pulsar
+      simulator — strictly more capable than the hardware sim box. Build
+      `tools/e4438c_pulsar.py`: (a) synthesize baseband I/Q of a dispersed,
+      profile-shaped, NOISE-carrier pulse train from parameters (P, DM,
+      duty, profile, band, level) — noise bursts fold with realistic
+      statistics, unlike the gated carrier that produced chi2=inf; (b)
+      upload + start over LAN SCPI (16-bit interleaved I/Q; no Signal
+      Studio license needed); (c) print expected fold ground truth for the
+      run. Unlocks, in value order: END-TO-END DM validation (inject DM
+      26.8, require the pipeline to recover it — L-band/16 MHz sweep
+      1.2 ms; 420 MHz/20 MHz sweep ~60 ms; the hardware sim has no
+      dispersion so the DM dimension has never been testable), exact
+      catalog periods w/ external 10 MHz GPS lock (B210 + ESG on common
+      reference → period recovery becomes a timing test), calibrated
+      sensitivity threshold sweeps (level vs recovered sigma, 0.01 dB
+      steps, replaces the fixed pad), later p-dot/orbital/RFI-injection
+      cases. Constraints: ARB memory bounds unique waveform (8 vs 64 Msa
+      option → ~0.4 vs ~3.2 s @ 20 MSa/s I/Q), loop must hold an integer
+      pulse-period count with seamless phase (choose fs so P*fs is
+      integer); 1420 MHz needs the >=2 GHz frequency option; looped pulses
+      are statistically identical (fine for pipeline validation).
+      ~1 day incl. bench verification. Do AFTER the 1.1.8 cut.
+
 ## Backlog / unscheduled
 
 - [ ] **B0950+08 re-observation plan (observing, not software):** processing
