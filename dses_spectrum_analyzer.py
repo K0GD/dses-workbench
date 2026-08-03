@@ -1124,7 +1124,11 @@ class FftPlotWidget(QtWidgets.QWidget):
         return f"{a:.3f} (≈{(2.0 - a) / a:.0f})"
 
     def _build_panel(self):
-        panel = QtWidgets.QGroupBox("Spectrum Controls")
+        panel = QtWidgets.QGroupBox("Spectrum Display")
+        panel.setToolTip(
+            "Display only: FFT size, window, averaging and holds shape what\n"
+            "you SEE, never what is recorded. Recording geometry (channels,\n"
+            "integration) lives in the Recording group.")
         # Fixed width (matched on the waterfall panel) so the spectrum and
         # waterfall plot regions stay equal-width regardless of content.
         panel.setFixedWidth(230)
@@ -1939,7 +1943,10 @@ class WaterfallPlotWidget(QtWidgets.QWidget):
         layout.addWidget(self._panel_scroll)
 
     def _build_panel(self):
-        panel = QtWidgets.QGroupBox("Waterfall Controls")
+        panel = QtWidgets.QGroupBox("Waterfall Display")
+        panel.setToolTip(
+            "Display only: intensity, colormap and rows shape what you SEE,\n"
+            "never what is recorded.")
         # Matched with the spectrum panel — see FftPlotWidget._build_panel.
         panel.setFixedWidth(230)
         v = QtWidgets.QVBoxLayout(panel)
@@ -2686,6 +2693,36 @@ and drop them next to the program. (You don't need to change any code.)</li>
 </ul>
 
 <h3>Sidebar controls (right side)</h3>
+<h4>Observation</h4>
+<p>The "what are you trying to do tonight?" selector. Pick a goal and every
+science-critical setting — band, sample rate, recording format, channels,
+integration — is set to a validated bundle in one step:</p>
+<ul>
+<li><b>Pulsar — L-band</b>: 16 MHz, filterbank, 2044 channels, Integrate 1
+(127.7 µs samples) at the 1422 MHz band — the geometry behind the 28σ
+B0329+54 detection at Haswell.</li>
+<li><b>Pulsar — UHF</b>: 20 MHz, filterbank, 256 channels, Integrate 16
+(204.8 µs) centered at 420 MHz — the proven Haswell UHF geometry.</li>
+<li><b>Magnetar / high-DM</b>: L-band with 4096 channels — narrower channels
+tolerate the larger dispersion of magnetars and distant pulsars.</li>
+<li><b>Hydrogen line — drift scan</b>: ezRA .txt format at 1420.406 MHz,
+2 MHz span. Set the dish Az/El in the Recording group.</li>
+<li><b>RFI survey — sweep</b>: switches to Sweep mode; set the range in the
+Sweep group.</li>
+<li><b>Manual (expert)</b>: touches nothing. The combo drops back here by
+itself when you change any of the settings a preset controls — the label
+never claims a bundle the settings no longer match. The app always starts
+here; your individual settings persist on their own.</li>
+</ul>
+<p>Below the selector, a live <b>consequences line</b> translates the current
+settings into what they mean for the data: time resolution, channel width,
+per-channel dispersion smearing (at a reference DM of 30), and disk usage
+per hour. It turns amber when a combination is risky — sample rate beyond
+the validated recording geometry, or time resolution too coarse for pulsar
+work. On radios that can't reach a preset's rate, the request is clamped and
+snapped as usual and the readout shows what you actually got. Display
+settings (FFT size, window, averaging) are deliberately untouched by
+presets: they shape what you <i>see</i>, never what is recorded.</p>
 <h4>Mode</h4>
 <ul>
 <li><b>Live</b>: real-time FFT of the radio's instantaneous bandwidth around
@@ -3781,6 +3818,32 @@ SOAPY_DEFAULTS = {
 }
 
 
+# --- Observation presets: validated parameter bundles keyed by observing
+# goal. Each entry is (label, settings-dict-or-None); None = Manual (touch
+# nothing). Keys: mode 'live'/'sweep'; band = Pulsar Band preset Hz (0 =
+# Manual frequency, taken from 'manual'); rate = sample rate Hz; fmt =
+# recording format; nchans/integrate = .fil geometry. Values encode
+# geometries we have actually validated end-to-end (see ROADMAP and the
+# Haswell trip report) — on radios that can't reach a preset's rate the
+# normal clamp-and-snap path adapts it and the readback shows the truth.
+OBSERVATION_PRESETS = [
+    ("Pulsar — L-band", dict(
+        mode='live', band=1422e6, rate=16e6, fmt='fil',
+        nchans=2044, integrate=1)),          # 127.7 µs; 28σ B0329+54 geometry
+    ("Pulsar — UHF", dict(
+        mode='live', band=0, manual=420e6, rate=20e6, fmt='fil',
+        nchans=256, integrate=16)),          # 204.8 µs; Haswell 410–430 MHz
+    ("Magnetar / high-DM", dict(
+        mode='live', band=1422e6, rate=16e6, fmt='fil',
+        nchans=4096, integrate=1)),          # narrow channels beat DM smear
+    ("Hydrogen line — drift scan", dict(
+        mode='live', band=0, manual=1420.406e6, rate=2e6, fmt='ezra')),
+    ("RFI survey — sweep", dict(mode='sweep')),
+    ("Manual (expert)", None),
+]
+OBS_MANUAL_IDX = len(OBSERVATION_PRESETS) - 1
+
+
 class SoapyGenericSource(RadioSource):
     """Wraps gr-soapy's source block for any SoapySDR-recognised radio.
     Sample rate options and gain range come from SOAPY_DEFAULTS when the
@@ -4058,6 +4121,52 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         self._sidebar_scroll.setMaximumWidth(380)   # ~360 content + scrollbar
         self._sidebar_scroll.setMinimumHeight(80)   # let the window shrink past it
         self.main_layout.addWidget(self._sidebar_scroll, 0)
+
+        # --- Observation presets: the "what are you trying to do tonight?"
+        # selector. Each preset applies a coherent, validated parameter
+        # bundle (mode, band, rate, format, .fil geometry) through the same
+        # setters the individual controls use; every knob stays adjustable
+        # afterward, and the combo drops back to Manual the moment any
+        # science-critical control deviates (like the sample-rate combo).
+        # Deliberately NOT persisted: the app always launches at Manual,
+        # because the underlying settings persist individually and a stale
+        # preset label would lie about tweaked values. ---
+        self._obs_group = QtWidgets.QGroupBox("Observation")
+        _obs_layout = QtWidgets.QVBoxLayout(self._obs_group)
+        self._observation_combo = QtWidgets.QComboBox()
+        for _label, _ in OBSERVATION_PRESETS:
+            self._observation_combo.addItem(_label)
+        self._observation_combo.setCurrentIndex(OBS_MANUAL_IDX)
+        self._observation_combo.setToolTip(
+            "Pick the observing goal and the science-critical settings\n"
+            "(band, sample rate, recording format, channels, integration)\n"
+            "are set to a validated bundle in one step:\n"
+            "  Pulsar — L-band: the proven Haswell geometry (16 MS/s,\n"
+            "    .fil, 2044 ch, tsamp 127.7 µs — 28σ B0329+54).\n"
+            "  Pulsar — UHF: the proven 420 MHz geometry (20 MS/s,\n"
+            "    256 ch × Integrate 16 = tsamp 204.8 µs).\n"
+            "  Magnetar / high-DM: L-band with 4096 channels for narrow-\n"
+            "    channel dispersion tolerance.\n"
+            "  Hydrogen line: ezRA drift-scan format at 1420.406 MHz.\n"
+            "  RFI survey: switches to Sweep mode.\n"
+            "Everything stays adjustable afterward — changing any of the\n"
+            "above drops this back to 'Manual (expert)'. Display controls\n"
+            "(FFT size, window, averaging) are not touched: they only\n"
+            "affect what you see, never what is recorded.")
+        # activated (not currentIndexChanged): fires only on USER selection,
+        # so programmatic deviation-resets below can't recurse.
+        self._observation_combo.activated.connect(self._apply_observation)
+        _obs_layout.addWidget(self._observation_combo)
+        self._consequences_label = QtWidgets.QLabel("")
+        self._consequences_label.setWordWrap(True)
+        self._consequences_label.setToolTip(
+            "What the current science settings mean for the data product:\n"
+            "time resolution, channel width, dispersion smearing per channel\n"
+            "at a reference DM of 30, and disk consumption. Turns amber when\n"
+            "a combination is risky (host beyond its validated recording\n"
+            "rate, or time resolution too coarse for pulsar work).")
+        _obs_layout.addWidget(self._consequences_label)
+        self.sidebar_layout.addWidget(self._obs_group)
 
         # Mode selector: Live = real-time FFT at the tuned center frequency
         # (the traditional view); Sweep = stepped scan from start to stop.
@@ -4887,6 +4996,7 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
             self._exit_sweep_mode()
         self._sweep_enabled = want_sweep
         self._save_setting('sweep', 'enabled', want_sweep)
+        self._on_science_param_changed()
 
     def _enter_sweep_mode(self):
         """Force the processor into one-shot mode (alpha=1, no per-frame
@@ -5579,6 +5689,7 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         self.set_center_freq((self.freq_manual if self.freq_preset == 0 else self.freq_preset) + self.freq_offset + self.freq_offset_0)
         self._freq_preset_callback(self.freq_preset)
         self._save_setting('tuning', 'preset_hz', float(freq_preset))
+        self._on_science_param_changed()
 
     def get_freq_offset_0(self):
         return self.freq_offset_0
@@ -5605,6 +5716,7 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         QtCore.QMetaObject.invokeMethod(self._freq_manual_line_edit, "setText",
                                         QtCore.Q_ARG("QString", eng_notation.num_to_str(self.freq_manual)))
         self._save_setting('tuning', 'manual_hz', float(freq_manual))
+        self._on_science_param_changed()
 
     def get_samp_rate(self):
         return self.samp_rate
@@ -5687,6 +5799,7 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         # Stale overflow indicators from the old rate aren't meaningful any
         # more, and there's usually a small burst during retuning.
         self._overflow_widget.clear()
+        self._on_science_param_changed()
 
     def get_record(self):
         return self.record
@@ -5710,6 +5823,10 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
             (self._record_format == 'fil') and not self.record)
         self._ezra_point_widget.setEnabled(
             (self._record_format == 'ezra') and not self.record)
+        # Observation presets are a bundle of the same locked settings.
+        combo = getattr(self, '_observation_combo', None)
+        if combo is not None:
+            combo.setEnabled(not self.record)
 
     def _on_ez_az_changed(self, v):
         self._ez_az_deg = float(v)
@@ -5746,14 +5863,117 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
                 self._record_format_options.index(fmt))
         self._save_setting('recording', 'format', fmt)
         self._update_fil_geom_enabled()
+        self._on_science_param_changed()
 
     def set_fil_nchans(self, n):
         self._fil_nchans = max(2, int(n))
         self._save_setting('recording', 'fil_nchans', self._fil_nchans)
+        self._on_science_param_changed()
 
     def set_fil_integrate(self, n):
         self._fil_integrate = max(1, int(n))
         self._save_setting('recording', 'fil_integrate', self._fil_integrate)
+        self._on_science_param_changed()
+
+    # --- Observation presets -------------------------------------------------
+
+    def _apply_observation(self, idx):
+        """Apply preset `idx` from OBSERVATION_PRESETS through the same
+        setters the individual controls use. Guarded so the setters'
+        deviation hooks don't knock the combo back to Manual mid-apply."""
+        _, cfg = OBSERVATION_PRESETS[idx]
+        if cfg is None:
+            return                      # Manual (expert): touch nothing
+        if self.record:
+            # Science settings are locked while recording (same rule as the
+            # geometry spins) — refuse and show why.
+            with _SignalBlocker(self._observation_combo):
+                self._observation_combo.setCurrentIndex(OBS_MANUAL_IDX)
+            QtWidgets.QToolTip.showText(
+                self._observation_combo.mapToGlobal(QtCore.QPoint(0, -40)),
+                "Stop the recording first — observation settings are locked "
+                "while recording.", self._observation_combo)
+            return
+        self._obs_applying = True
+        try:
+            mode = cfg.get('mode', 'live')
+            if mode == 'sweep':
+                self._mode_sweep_btn.setChecked(True)
+                return                  # sweep has its own range settings
+            self._mode_live_btn.setChecked(True)
+            if 'band' in cfg:
+                if cfg['band'] == 0:
+                    self.set_freq_manual(float(cfg['manual']))
+                    self.set_freq_preset(0)
+                else:
+                    self.set_freq_preset(float(cfg['band']))
+            if 'rate' in cfg:
+                self.set_samp_rate(float(cfg['rate']))
+            if 'fmt' in cfg:
+                self.set_record_format(cfg['fmt'])
+            # Drive the spins (not the setters) so the widgets show the new
+            # geometry; valueChanged forwards to the setters.
+            if 'nchans' in cfg:
+                self._fil_nchans_spin.setValue(int(cfg['nchans']))
+            if 'integrate' in cfg:
+                self._fil_integrate_spin.setValue(int(cfg['integrate']))
+        finally:
+            self._obs_applying = False
+        self._update_consequences()
+
+    def _on_science_param_changed(self):
+        """Called by every science-critical setter (rate, format, geometry,
+        band, mode): refresh the consequences readout, and if an observation
+        preset was active, drop the combo back to Manual — the label must
+        never claim a bundle the settings no longer match."""
+        combo = getattr(self, '_observation_combo', None)
+        if combo is None:
+            return
+        if (not getattr(self, '_obs_applying', False)
+                and combo.currentIndex() != OBS_MANUAL_IDX):
+            with _SignalBlocker(combo):
+                combo.setCurrentIndex(OBS_MANUAL_IDX)
+        self._update_consequences()
+
+    def _update_consequences(self):
+        """One live line translating the current science settings into what
+        an observer actually cares about. Amber = risky combination."""
+        lbl = getattr(self, '_consequences_label', None)
+        if lbl is None:
+            return
+        rate = float(self.samp_rate) or 1.0
+        fmt = self._record_format
+        warn = None
+        if fmt == 'fil':
+            ch, integ = self._fil_nchans, self._fil_integrate
+            tsamp = ch * integ / rate
+            dnu = rate / ch
+            f_ghz = max(0.05, abs(self.center_freq) / 1e9)
+            # Intra-channel dispersion smearing at a reference DM of 30
+            # (mid-range for bright northern pulsars): 8.3 µs × DM ×
+            # Δν_MHz / ν_GHz³.
+            smear_ms = 8.3e-3 * 30.0 * (dnu / 1e6) / f_ghz ** 3
+            gb_hr = 4.0 * rate / integ * 3600.0 / 1e9
+            ts_txt = (f"{tsamp*1e6:.1f} µs" if tsamp < 1e-3
+                      else f"{tsamp*1e3:.2f} ms")
+            lbl.setText(f"tsamp {ts_txt}  ·  chan {_pretty_rate(dnu)}  ·  "
+                        f"DM30 smear {smear_ms:.3g} ms  ·  {gb_hr:.1f} GB/hr")
+            if rate > 20e6:
+                warn = "rate beyond the validated .fil recording geometry"
+            elif tsamp > 5e-3:
+                warn = "time resolution coarse for pulsar work"
+        elif fmt == 'iq':
+            gb_hr = 8.0 * rate * 3600.0 / 1e9
+            lbl.setText(f"raw I/Q at {_pretty_rate(rate)}  ·  "
+                        f"{gb_hr:.0f} GB/hr")
+            if gb_hr > 500:
+                warn = "very high disk rate"
+        else:   # ezra drift scan
+            lbl.setText("integrated spectra, one row per ~10–15 s  ·  "
+                        "~1 MB/hr")
+        lbl.setStyleSheet("color: #b45309;" if warn else "color: gray;")
+        lbl.setToolTip(lbl.toolTip().split('\n\nWarning:')[0]
+                       + (f"\n\nWarning: {warn}." if warn else ""))
 
     def _start_recording(self):
         """Begin recording in the selected format. Filterbank (.fil) channelizes
