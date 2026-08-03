@@ -472,31 +472,40 @@ flagging for Soapy sources.
       the field wants it), then do this as the headline of 1.2.0 with
       nothing else competing.
 
-## Validation tooling (post-1.1.8)
+## Validation tooling (after 1.1.8 ships, possibly after 1.2.0)
 
-- [ ] **E4438C ARB pulsar simulator (Rick approved 2026-08-03):** use the
-      bench E4438C vector signal generator as a software-defined pulsar
-      simulator — strictly more capable than the hardware sim box. Build
-      `tools/e4438c_pulsar.py`: (a) synthesize baseband I/Q of a dispersed,
-      profile-shaped, NOISE-carrier pulse train from parameters (P, DM,
-      duty, profile, band, level) — noise bursts fold with realistic
-      statistics, unlike the gated carrier that produced chi2=inf; (b)
-      upload + start over LAN SCPI (16-bit interleaved I/Q; no Signal
-      Studio license needed); (c) print expected fold ground truth for the
-      run. Unlocks, in value order: END-TO-END DM validation (inject DM
-      26.8, require the pipeline to recover it — L-band/16 MHz sweep
-      1.2 ms; 420 MHz/20 MHz sweep ~60 ms; the hardware sim has no
-      dispersion so the DM dimension has never been testable), exact
-      catalog periods w/ external 10 MHz GPS lock (B210 + ESG on common
-      reference → period recovery becomes a timing test), calibrated
-      sensitivity threshold sweeps (level vs recovered sigma, 0.01 dB
-      steps, replaces the fixed pad), later p-dot/orbital/RFI-injection
-      cases. Constraints: ARB memory bounds unique waveform (8 vs 64 Msa
-      option → ~0.4 vs ~3.2 s @ 20 MSa/s I/Q), loop must hold an integer
-      pulse-period count with seamless phase (choose fs so P*fs is
-      integer); 1420 MHz needs the >=2 GHz frequency option; looped pulses
-      are statistically identical (fine for pipeline validation).
-      ~1 day incl. bench verification. Do AFTER the 1.1.8 cut.
+- [ ] **B210-TX pulsar simulator (DECIDED 2026-08-03):** synthesize the
+      pulsar in software and transmit it from the B210's OWN TX side
+      (full duplex: TX/RX port A → pad/attenuator chain → RX2) while the
+      app records normally. Build `tools/b210_tx_pulsar.py`: (a) generate
+      baseband I/Q of a dispersed, profile-shaped, NOISE-carrier pulse
+      train from parameters (P, DM, duty, profile, band, level) — noise
+      bursts fold with realistic statistics, unlike the gated carrier
+      that produced chi2=inf; (b) play via a small GNU Radio TX flowgraph
+      (uhd.usrp_sink; loop must hold an integer pulse-period count with
+      seamless phase — choose fs so P*fs is integer); (c) print expected
+      fold ground truth for the run. Unlocks, in value order: END-TO-END
+      DM validation (inject DM 26.8, require the pipeline to RECOVER it —
+      L-band/16 MHz sweep 1.2 ms; 420 MHz/20 MHz sweep ~60 ms; the
+      hardware sim box has no dispersion so the DM dimension has never
+      been testable), realistic chi2/sigma statistics, B0329+54's actual
+      double-peaked profile at its exact 714.5 ms period, later
+      p-dot/orbital/RFI-injection cases. TX and RX share the B210 clock —
+      good for controlled tests; use the E4438C leg below when clock
+      independence matters. ~1 day incl. bench verification.
+      HISTORY: the original plan was the E4438C's internal ARB, but
+      interrogation over SCPI (2026-08-03, s/n MY49071480, fw C.05.82)
+      showed options 506/UNB/UNJ only — NO 601/602 baseband generator,
+      and Rick's serial is in the license-key range where a bare eBay A7
+      board may not enable (E4400-60761 + entitlement needed). Rick
+      decided NOT to swap units; the B210 TX is the simulator.
+- [ ] **E4438C precision leg (kept, reduced role):** the unit's internal
+      pulse generator + UNB attenuator still contribute what the B210
+      can't: gated pulses at an EXACT catalog period with the ESG locked
+      to the GPS 10 MHz reference (period recovery becomes a timing
+      test with an independent clock), and calibrated absolute-level
+      threshold sweeps (0.01 dB steps to -136 dBm) for a proper
+      sensitivity curve. Script over LAN SCPI at 192.168.10.66:5025.
 
 ## Backlog / unscheduled
 
