@@ -2353,6 +2353,48 @@ def find_b200_uhd():
     return out
 
 
+_soapy_log_filter_installed = False
+
+
+def _install_soapy_log_filter(soapy):
+    """Register a SoapySDR log handler that drops ONE known-benign message and
+    re-emits everything else to stderr.
+
+    conda-forge's SoapySDR build returns a fixed, NUL-padded getRootPath(), so
+    its module loader also tries to dlopen the NUL-truncated install-root path
+    (a directory, not a module) and logs a harmless 'loadModule(<root>)' ERROR
+    at the first enumerate. The real modules in .../SoapySDR/modules0.8 still
+    load fine — we hide only that line. A genuine module failure names an actual
+    .so/.dll/.dylib, so it is never dropped; every other message passes through.
+    Idempotent."""
+    global _soapy_log_filter_installed
+    if _soapy_log_filter_installed:
+        return
+    lvl_name = {}
+    for nm in ("FATAL", "CRITICAL", "ERROR", "WARNING", "NOTICE",
+               "INFO", "DEBUG", "TRACE", "SSI"):
+        v = getattr(soapy, "SOAPY_SDR_" + nm, None)
+        if v is not None:
+            lvl_name[v] = nm
+
+    def _handler(level, message):
+        try:
+            msg = message or ""
+            if "loadModule(" in msg and not any(
+                    ext in msg for ext in (".so", ".dll", ".dylib")):
+                return  # the benign NUL-truncated-root load; drop it
+            print(f"[SoapySDR:{lvl_name.get(level, level)}] {msg}",
+                  file=sys.stderr)
+        except Exception:
+            pass  # a logging filter must never raise
+
+    try:
+        soapy.registerLogHandler(_handler)
+        _soapy_log_filter_installed = True
+    except Exception:
+        pass  # SoapySDR too old for a Python log handler — leave logging as-is
+
+
 def find_soapy_devices():
     """Return SoapySDR devices (RSPx, RTL-SDR, HackRF, …) as
     {driver, serial, product, label}. Skipped silently if SoapySDR isn't
@@ -2361,6 +2403,7 @@ def find_soapy_devices():
         import SoapySDR
     except Exception:
         return []
+    _install_soapy_log_filter(SoapySDR)
     # Enumerate each known driver explicitly rather than calling
     # SoapySDR.Device.enumerate() with no args. A no-arg enumerate also runs
     # the bundled "remote" module's discovery, which pings IPv6 SSDP
