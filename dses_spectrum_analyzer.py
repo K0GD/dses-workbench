@@ -6164,35 +6164,45 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         return f"{h}:{m:02d}:{s:02d}"
 
     # --- Real-time hygiene while recording --------------------------------
-    # Measured 2026-08-02 (2044 ch @ 16 MS/s, 60 s, instrumented headless):
-    #   default:            3830 GC pauses, 1039 ms total, MAX 42.5 ms
-    #   GC off + 1 ms timer:   2 GC pauses (both outside the recording),
-    #                          host stalls >5 ms: 114 ms -> 19 ms total,
-    #                          max work() interval 42.4 ms -> 13.5 ms
-    # Those multi-ms pauses are what exhausts the USB transport buffer and
-    # makes the radio declare an RX overflow, so we suppress them for the
-    # duration of a recording only.
+    # Instrumented headless probes, 2044 ch @ 16 MS/s (2026-08-02): CPython's
+    # small gen-0 GC collections are harmless (~0.27 ms each), but the
+    # occasional FULL collection scans the entire heap and stalled the GNU
+    # Radio thread up to 42.5 ms - long enough to exhaust the B210's ~65 ms
+    # USB transport cushion and cause an RX overflow. Designs that disable GC
+    # or batch it were measured and rejected: fully-disabled GC leaks cycle
+    # garbage over multi-hour sessions, and letting young objects pile up
+    # makes each deferred collection cost ~75-130 ms. The winning design
+    # keeps GC ENABLED (multi-hour safe) but freezes the existing heap and
+    # pushes full collections out of reach:
+    #   baseline:  MAX GC pause 42.5 ms, max work() interval 42.4 ms
+    #   this mode: MAX GC pause  1.0 ms, max work() interval  7.1 ms
+    #              (180 s run: 0 samples lost)
+    # All of this is plain CPython and applies identically on Windows, macOS,
+    # and Linux; the timer call below is the only platform-specific piece.
+
+    _GC_RT_THRESHOLD = (700, 50_000, 50_000)
 
     def _begin_realtime_mode(self):
-        """Quiet the two host-side sources of multi-millisecond stalls for
-        the duration of a recording: Python's cyclic GC, and Windows' 15.6 ms
-        default scheduler/timer granularity."""
+        """Cap host-side stall length for the duration of a recording:
+        confine Python's GC to cheap young-generation collections, and on
+        Windows replace the 15.6 ms scheduler quantum with 1 ms (macOS and
+        Linux already schedule at ~1 ms; no equivalent is needed there)."""
         if getattr(self, '_rt_active', False):
             return
         self._rt_active = True
         try:
-            # freeze() moves everything already allocated into a permanent
-            # generation so a later collection can't rescan it; disable()
-            # stops collections entirely. Our recording hot path is
-            # refcount-friendly numpy arrays (no cycles), so nothing
-            # accumulates; both are undone in _end_realtime_mode.
-            # Deliberately NO gc.collect() here: on the app's live heap a
-            # full collection took ~9 s in testing, which would freeze the
-            # GUI exactly as the user hits Record. freeze() alone is cheap.
+            self._rt_saved_gc_threshold = gc.get_threshold()
+            # freeze() moves every object allocated so far into a permanent
+            # generation that collections never rescan (cheap - no collect
+            # pass). Gen-0 keeps its default 700-allocation cadence, so
+            # per-collection work stays sub-millisecond; gen-1/gen-2 sweeps
+            # become vanishingly rare, which removes the full-heap stalls.
+            # GC stays ENABLED, so reference cycles are still reclaimed -
+            # memory is bounded no matter how long the recording runs.
             gc.freeze()
-            gc.disable()
+            gc.set_threshold(*self._GC_RT_THRESHOLD)
         except Exception:
-            pass
+            self._rt_saved_gc_threshold = None
         if sys.platform == "win32":
             try:
                 ctypes.windll.winmm.timeBeginPeriod(1)
@@ -6205,7 +6215,8 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
             return
         self._rt_active = False
         try:
-            gc.enable()
+            if getattr(self, '_rt_saved_gc_threshold', None):
+                gc.set_threshold(*self._rt_saved_gc_threshold)
             gc.unfreeze()
         except Exception:
             pass
