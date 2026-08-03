@@ -2725,10 +2725,18 @@ FFT. Averaging, Max/Min hold, and baseline removal are forced off while sweeping
 markers are cleared when entering or leaving Sweep.</p>
 <h4>RX</h4>
 <ul>
-<li><b>Sample Rate</b>: per-radio. The combo shows validated quick-pick rates
-for the connected radio (e.g. B210: 0.625–25 MHz; SDRPlay: 2–10 MHz; RTL-SDR:
-0.25–3.2 MHz). Higher rate = wider spectrum but more disk usage when
-recording.</li>
+<li><b>Sample Rate</b>: per-radio, up to the hardware's true maximum (e.g.
+B210: 0.625–61.44 MHz — 56 MHz analog bandwidth; SDRPlay: 2–10 MHz; RTL-SDR:
+0.25–3.2 MHz). The presets are not arbitrary: each divides the radio's
+master clock evenly, so decimation stays on the flat half-band filter chain.
+Rates that don't divide the clock cleanly can fall back to CIC filtering,
+whose passband droop shows up as a bowl-shaped gain error across the
+spectrum — poison for calibrated radio astronomy. Higher rate = wider
+spectrum but more disk and host load when recording: the radio isn't the
+only limit. USB bandwidth and host CPU set a practical ceiling — if the
+overflow panel or a recording's gap counter climbs at a high rate, the host
+can't keep up; step down. (16 MHz .fil recording is the validated DSES
+pulsar geometry.)</li>
 <li><b>Manual Rate (Hz)</b>: type any rate the SDR supports — useful for
 real-pulsar capture geometries that aren't in the preset list. The value is
 clamped to the device's reported min/max (hover for the range) and the radio
@@ -3486,9 +3494,11 @@ class RadioSource:
     block = None
 
     # Discrete sample-rate choices the sidebar combo offers. Defaults to
-    # FFT_SIZES-friendly rates that the B210 supports up to 25 MHz; Soapy
-    # sources override with the device's actually-supported set.
-    samp_rate_options = list(FFT_SIZES)  # placeholder; B210 overrides
+    # a conservative generic set almost any SDR can do; hardware subclasses
+    # override with the device's actually-supported list. (This used to be
+    # list(FFT_SIZES) — an unknown Soapy driver would offer "rates" of
+    # 1–262 kHz that were really FFT lengths.)
+    samp_rate_options = [1e6, 2e6, 2.048e6, 4e6, 5e6, 8e6, 10e6]
 
     # (min_db, max_db, step_db) for the RX-gain slider in the sidebar.
     gain_range = (0.0, 76.0, 1.0)
@@ -3553,8 +3563,17 @@ class UhdB200Source(RadioSource):
     # 0.625 and 1.25 MHz are the validated DSES lab simulator geometries
     # (UHF 625 kHz / L-band 1.25 MHz) — needed so a live .fil capture matches
     # the proven offline tsamp; the B210 supports rates well below 1 MHz.
+    # Every preset is "clean" for the AD9361 in UHD's automatic master-clock
+    # mode: MCR = rate × 2^n lands inside the 5–61.44 MHz clock range, so
+    # decimation stays on the half-band filter chain (flat passband) rather
+    # than falling back to CIC filtering (passband droop — a smeared
+    # calibration error in a radio-astronomy spectrum). 61.44 MS/s is the
+    # device's single-channel ceiling (56 MHz max analog bandwidth); rates
+    # ≥ 25 MS/s need USB 3 and a host that can drink from the hose —
+    # watch the overflow/gap indicators, especially when recording.
     samp_rate_options = [0.625e6, 1e6, 1.25e6, 2e6, 4e6, 5e6, 8e6, 10e6,
-                         16e6, 20e6, 25e6]
+                         16e6, 20e6, 25e6, 30.72e6, 40e6, 50e6, 56e6,
+                         61.44e6]
     gain_range = (0.0, 76.0, 1.0)
 
     def __init__(self, serial: str, samp_rate: float, center_freq: float,
@@ -3669,15 +3688,18 @@ class UhdB200Source(RadioSource):
         self._apply(name)
 
     def samp_rate_range(self):
-        """B210's real, master-clock-derived rate limits, from UHD."""
-        try:
-            r = self.block.get_samp_rates()      # uhd.meta_range_t
-            lo, hi = float(r.start()), float(r.stop())
-            if hi > lo > 0:
-                return (lo, hi)
-        except Exception:
-            pass
-        return RadioSource.samp_rate_range(self)
+        """The B200-family's true rate envelope.
+
+        Deliberately NOT from get_samp_rates(): UHD answers that query
+        relative to the CURRENT master clock (e.g. "0.031–16 MHz" while
+        clocked for 16 MS/s), but in automatic master-clock mode a new rate
+        request re-clocks the AD9361 — verified on hardware 2026-08-02:
+        every preset up to 61.44 MS/s lands EXACT starting from a 16 MS/s
+        clock. Clamping against the momentary query capped every rate
+        change at the boot rate's ceiling (even the old 25 MHz preset
+        silently became 16), so report the chip's real envelope and let
+        the driver snap + actual-rate readback handle the rest."""
+        return (62.5e3, 61.44e6)
 
     def freq_range(self):
         """The B210's RF tuning range, from UHD."""
@@ -3736,13 +3758,18 @@ SOAPY_DEFAULTS = {
         'gain':      (0.0, 48.0, 1.0),
         'product':   "Airspy HF+",
     },
+    # bladeRF/Lime lists run to the 2.0-micro / LimeSDR-USB single-channel
+    # ceiling (61.44 MS/s); on older hardware (bladeRF x40/x115: 40 MS/s max)
+    # the use-time clamp against the device's reported range catches it.
     'bladerf':  {
-        'samp_rates': [1e6, 2e6, 4e6, 8e6, 10e6, 16e6, 20e6, 25e6, 30e6, 40e6],
+        'samp_rates': [1e6, 2e6, 4e6, 8e6, 10e6, 16e6, 20e6, 25e6, 30e6,
+                       40e6, 61.44e6],
         'gain':      (0.0, 60.0, 1.0),
         'product':   "BladeRF",
     },
     'lime':     {
-        'samp_rates': [2e6, 4e6, 5e6, 10e6, 15e6, 20e6, 30e6, 40e6],
+        'samp_rates': [2e6, 4e6, 5e6, 10e6, 15e6, 20e6, 30e6, 30.72e6, 40e6,
+                       61.44e6],
         'gain':      (0.0, 70.0, 1.0),
         'product':   "LimeSDR",
     },
@@ -4234,6 +4261,14 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         self._samp_rate_tool_bar.addWidget(self._samp_rate_combo_box)
         for _label in self._samp_rate_labels:
             self._samp_rate_combo_box.addItem(_label)
+        self._samp_rate_combo_box.setToolTip(
+            "Quick-pick rates for this radio, up to its hardware maximum.\n"
+            "All presets divide the device's master clock evenly (flat\n"
+            "half-band filtering, no CIC passband droop). Any other rate\n"
+            "can be typed into Manual Rate below.\n"
+            "High rates are limited by USB and host CPU, not just the\n"
+            "radio — if the overflow panel or a recording's gap counter\n"
+            "starts climbing, the host can't sustain the rate; step down.")
         self._samp_rate_combo_box.currentIndexChanged.connect(
             self._on_samp_rate_combo)
         self._rx_group_layout.addWidget(self._samp_rate_tool_bar)
@@ -5633,6 +5668,16 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         # display, decimation, and .fil tsamp all reflect reality.
         actual = self._source.get_actual_samp_rate()
         self.samp_rate = float(actual) if actual and actual > 0 else req
+        # If the driver snapped to a different rate than asked for, say so
+        # right at the entry box — otherwise the quiet substitution reads as
+        # "it took my value" and the recorded tsamp surprises the user later.
+        if actual and abs(actual - float(samp_rate)) > 1.0:
+            QtWidgets.QToolTip.showText(
+                self._samp_rate_manual_line_edit.mapToGlobal(
+                    QtCore.QPoint(0, -40)),
+                f"Radio can't do {_pretty_rate(float(samp_rate))} exactly — "
+                f"running at {_pretty_rate(actual)} instead.",
+                self._samp_rate_manual_line_edit)
         self._sync_samp_rate_widgets()
         self._fft_plot.set_frequency_range(self.center_freq, self.samp_rate)
         self._waterfall_plot.set_frequency_range(self.center_freq, self.samp_rate)
