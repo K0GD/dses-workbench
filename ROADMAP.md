@@ -538,11 +538,20 @@ flagging for Soapy sources.
       (memory = P*fs, and we control both): B0950+08 (253 ms, a real
       DSES target) fits a FULL period at 31 MSa/s = full 16-20 MHz RF
       BW; B0329 fits at 11 MSa/s (~9 MHz); UHF DM tests fit multiple
-      periods. Premium alternatives if the memory wall is ever hit:
-      SDG7032A (512 Mpts, vector/IQ mode, ~$4k street but 2026 quotes
-      inconsistent) or used Keysight 33622A + 336MEM2U (64 Mpts/ch,
-      ~$2.5-4k; verify the MEM option is installed — same lesson as
-      the ESG).
+      periods. NOTE 18 Mpts is NOT the ceiling: magnetar-period sims
+      (P=2-12 s) need 30-60 Mpts even at reduced BW, multi-period
+      trains N*18, p-dot drift records more still.
+      RECOMMENDED (2026-08-03, datasheet-verified): **SDG3082X +
+      SDG-3000X-40MPTS memory option** (~$1-1.3k, get quote) — 2 ch,
+      16-bit, 1.2 GSa/s, TrueArb 10 mSa/s-600 MSa/s, rear 10 MHz ref
+      IN/OUT, 20 Mpts std -> 40 Mpts WITH THE OPTION (order it
+      installed — ESG lesson), plus Sequence playback (chain segments:
+      multi-period trains without linear memory cost). 40 Mpts = 2.2x
+      the B0329 full-BW case, fits a 6 s magnetar at 4 MHz BW, 6 unique
+      B0950 periods at full BW. SKIP the SDG6000X (costs more than
+      3000X, only 20 Mpts — sells analog BW we don't need). Premium
+      fallback if the wall is ever hit: SDG7032A (512 Mpts, vector/IQ
+      mode, ~$4k) or used Keysight 33622A + 336MEM2U (64 Mpts/ch).
 
 ## Backlog / unscheduled
 
