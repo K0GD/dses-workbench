@@ -120,7 +120,7 @@ import time
 
 # === App metadata ===
 APP_NAME        = "DSES Spectrum Analyzer"
-APP_VERSION     = "1.1.7"
+APP_VERSION     = "1.1.8"
 APP_AUTHOR      = "Richard M Hambly (K0GD)"
 APP_AUTHOR_EMAIL = "rick@cnssys.com"
 APP_COPYRIGHT   = "Copyright © 2026 Richard M Hambly (K0GD)"

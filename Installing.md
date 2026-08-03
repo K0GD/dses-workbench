@@ -67,27 +67,27 @@ Updates to the app afterwards are a small zip replace — Radioconda does not ne
    (ARM and POWER builds — `…-Linux-aarch64.sh`, `…-Linux-ppc64le.sh` — are published too if you're on one of those.)
 2. From a terminal, run the file you downloaded (substitute the real version):
 
-   ```bash
+   ``bash
    bash radioconda-<version>-Linux-x86_64.sh
-   ```
+   ``
 
    Accept the license and let it install to `~/radioconda` (the launcher checks this path automatically).
 3. **USB permissions (B210 / USRP only).** If you have a B210, activate the Ettus udev rules so the device is reachable without root:
 
-   ```bash
+   ``bash
    sudo cp ~/radioconda/lib/uhd/utils/uhd-usrp.rules /etc/udev/rules.d/
    sudo udevadm control --reload-rules && sudo udevadm trigger
-   ```
+   ``
 
    Without this you'll get permission errors when the B210 is plugged in. Then add yourself to the `usrp` (or `plugdev`) group if your distro uses one, and log out/in.
 
    Other USB SDRs (RTL-SDR, HackRF, Airspy, etc.) have their own udev rules, usually installed with the device's own package. SDRPlay uses its API service (see §3A) and needs no udev rules.
 4. (Optional) Confirm your radio is detected, using the command for your device:
 
-   ```bash
+   ``bash
    ~/radioconda/bin/uhd_find_devices      # B210 / USRP
    ~/radioconda/bin/SoapySDRUtil --find   # RTL-SDR, HackRF, Airspy, SDRPlay (after §3A), …
-   ```
+   ``
 
    No radio yet? Skip this — the app starts in playback mode from the bundled sample (see §8).
 
@@ -106,26 +106,26 @@ Radioconda publishes builds for both Mac architectures — pick the one matching
 
 1. From a terminal, run the file you downloaded (substitute the real version + arch):
 
-   ```bash
+   ``bash
    bash radioconda-<version>-MacOSX-<arch>.sh
-   ```
+   ``
 
 2. Accept the default install location (`~/radioconda`).
 3. If you have a radio, plug it in. macOS needs no driver install for the B210.
 4. (Optional) Confirm your radio is detected, using the command for your device:
 
-   ```bash
+   ``bash
    ~/radioconda/bin/uhd_find_devices      # B210 / USRP
    ~/radioconda/bin/SoapySDRUtil --find   # RTL-SDR, HackRF, Airspy, SDRPlay (after §3A), …
-   ```
+   ``
 
    No radio yet? Skip this — the app starts in playback mode from the bundled sample (see §8).
 
 5. **Quarantine note.** If you ever see a Gatekeeper "cannot verify developer" dialog on a Radioconda binary, run:
 
-   ```bash
+   ``bash
    xattr -dr com.apple.quarantine ~/radioconda
-   ```
+   ``
 
 ### 2.4 Add the packages the analyzer needs (all platforms)
 
@@ -137,9 +137,9 @@ Open an **activated Radioconda shell**:
 
 Then run:
 
-```text
+``text
 conda install -c conda-forge pyside6 pyqtgraph scipy
-```
+``
 
 Accept the prompt; conda downloads and installs the three packages. If the launcher later reports "Missing required packages," this is the step that was skipped.
 
@@ -148,21 +148,21 @@ Accept the prompt; conda downloads and installs the three packages. If the launc
 
 Download the application from the distribution site. You can either use the direct links below, or browse the folder <https://gpstime.com/sw_distribution/b210_sa/> and pick the newest `dses-spectrum-analyzer-*.zip`:
 
-- **Application (zip):** <https://gpstime.com/sw_distribution/b210_sa/dses-spectrum-analyzer-1.1.6.zip>
+- **Application (zip):** <https://gpstime.com/sw_distribution/b210_sa/dses-spectrum-analyzer-1.1.8.zip>
 - **This guide (PDF):** <https://gpstime.com/sw_distribution/b210_sa/DSES_RFI_Spectrum_Analyzer_Installation.pdf>
 
 The zip is roughly 60 MB — it includes a short sample recording so the program can run in playback mode when no radio is attached. (Replace `1.1.6` in the link with a newer version number if a later release has been published.)
 
 ### 3.1 Windows 11
 
-1. Extract the zip anywhere you have write permission. A common choice is `Documents\DSES-Spectrum-Analyzer`. The extracted folder will be `dses-spectrum-analyzer-1.1.6\` and will contain `dses_spectrum_analyzer.py`, `launcher.bat`, `launcher.ps1`, `install-shortcut.ps1`, `LICENSE`, the `icons\` folder, and this guide.
+1. Extract the zip anywhere you have write permission. A common choice is `Documents\DSES-Spectrum-Analyzer`. The extracted folder will be `dses-spectrum-analyzer-1.1.8\` and will contain `dses_spectrum_analyzer.py`, `launcher.bat`, `launcher.ps1`, `install-shortcut.ps1`, `LICENSE`, the `icons\` folder, and this guide.
 2. Double-click **`launcher.bat`** to start the application.
 3. The first time you run it, the launcher searches for Radioconda in this order: the `RADIOCONDA_ROOT` environment variable, any currently-activated conda env, `%LOCALAPPDATA%\radioconda`, `C:\ProgramData\radioconda`, `%USERPROFILE%\radioconda`, a cached config file, then `conda info --base` if `conda` is on PATH. If none of these find a working install, you'll get a prompt asking for the path; type it in and the launcher remembers it for next time.
 4. (Optional) Create a desktop shortcut (with the app's pulsar icon) by running **`install-shortcut.ps1`**. The reliable way — which works regardless of your PowerShell execution policy — is to open PowerShell in the extracted folder and run:
 
-   ```powershell
+   ``powershell
    powershell -NoProfile -ExecutionPolicy Bypass -File .\install-shortcut.ps1
-   ```
+   ``
 
    It prints `Created: …\DSES Spectrum Analyzer.lnk`. (Right-clicking the script → "Run with PowerShell" also works *if* your machine's execution policy allows local scripts; if nothing appears, the policy blocked it — use the command above instead.) The shortcut is named **DSES Spectrum Analyzer** and launches the app via `launcher.ps1`.
 
@@ -172,29 +172,29 @@ After the first run, the app's window opens with the spectrum and waterfall plot
 
 1. Extract the zip somewhere under your home directory where you have write permission — a conventional spot for a per-user app is `~/Applications`. For example:
 
-   ```bash
+   ``bash
    mkdir -p ~/Applications && cd ~/Applications
-   unzip ~/Downloads/dses-spectrum-analyzer-1.1.6.zip
-   cd dses-spectrum-analyzer-1.1.6
+   unzip ~/Downloads/dses-spectrum-analyzer-1.1.8.zip
+   cd dses-spectrum-analyzer-1.1.8
    chmod +x launcher.sh
-   ```
+   ``
 
-   The extracted `dses-spectrum-analyzer-1.1.6/` folder contains `dses_spectrum_analyzer.py`, `launcher.sh`, `dses-spectrum-analyzer.desktop`, `LICENSE`, the `icons/` folder, and this guide. (Avoid system locations like `/opt` unless you extract with `sudo` — keeping it in your home directory avoids permission issues.)
+   The extracted `dses-spectrum-analyzer-1.1.8/` folder contains `dses_spectrum_analyzer.py`, `launcher.sh`, `dses-spectrum-analyzer.desktop`, `LICENSE`, the `icons/` folder, and this guide. (Avoid system locations like `/opt` unless you extract with `sudo` — keeping it in your home directory avoids permission issues.)
 
 2. Launch:
 
-   ```bash
+   ``bash
    ./launcher.sh
-   ```
+   ``
 
 3. (Optional) Install a desktop entry so the app appears in your application menu:
 
-   ```bash
+   ``bash
    INSTALL_DIR="$(pwd)"
    sed "s|__INSTALL_DIR__|$INSTALL_DIR|g" dses-spectrum-analyzer.desktop \
        > ~/.local/share/applications/dses-spectrum-analyzer.desktop
    update-desktop-database ~/.local/share/applications/ 2>/dev/null || true
-   ```
+   ``
 
    (The `.desktop` file uses `__INSTALL_DIR__` as a placeholder so the launch path is correct on whichever machine installs it. The `sed` line substitutes the current directory into the placeholder.)
 
@@ -202,21 +202,21 @@ After the first run, the app's window opens with the spectrum and waterfall plot
 
 The steps are the same as Linux. Extract it into your personal **`~/Applications`** folder (Finder shows it as your own Applications folder, separate from the system `/Applications`):
 
-```bash
+``bash
 mkdir -p ~/Applications && cd ~/Applications
-unzip ~/Downloads/dses-spectrum-analyzer-1.1.6.zip
-cd dses-spectrum-analyzer-1.1.6
+unzip ~/Downloads/dses-spectrum-analyzer-1.1.8.zip
+cd dses-spectrum-analyzer-1.1.8
 chmod +x launcher.sh
 ./launcher.sh
-```
+``
 
 Keeping it under your home directory (rather than the system `/Applications`) avoids permission prompts and Gatekeeper friction.
 
 **(Optional) Create a Desktop icon.** Run **`install-shortcut.command`** to build a double-clickable **DSES Spectrum Analyzer.app** on your Desktop, using the app's pulsar icon. Launching it starts the analyzer with no Terminal window. In Finder, right-click `install-shortcut.command` → **Open** (the first run may need Gatekeeper approval — see below), or from a terminal:
 
-```bash
+``bash
 bash install-shortcut.command
-```
+``
 
 It prints `Created: …/Desktop/DSES Spectrum Analyzer.app`. Re-run it any time you move the extracted folder (the app remembers the location it was built from). The first time you double-click the new `.app`, macOS may warn about an app from an unidentified developer — right-click it → **Open** once, or approve it under **System Settings → Privacy & Security → Open Anyway**. Startup logs go to `~/Library/Logs/DSES_Spectrum_Analyzer.log` if you ever need to troubleshoot a launch.
 
@@ -224,9 +224,9 @@ On Apple Silicon, **make sure** you installed the `arm64` build of Radioconda. M
 
 If the Finder warns about an unidentified developer when running `launcher.sh`, clear the quarantine attribute on the unzipped folder:
 
-```bash
-xattr -dr com.apple.quarantine dses-spectrum-analyzer-1.1.6
-```
+``bash
+xattr -dr com.apple.quarantine dses-spectrum-analyzer-1.1.8
+``
 
 
 ## 3A. Extra setup for SDRPlay receivers (RSP1A / RSP1B / RSPduo / RSPdx)
@@ -253,39 +253,39 @@ This module is **not** available through `conda install` on any platform, so the
 
 The extracted release folder (from §3) contains `sdrplay\sdrPlaySupport.dll`. Copy it into Radioconda's SoapySDR module directory. That directory is under `C:\ProgramData`, so you need an **Administrator** PowerShell (right-click Windows PowerShell → "Run as administrator"):
 
-```powershell
+``powershell
 Copy-Item ".\sdrplay\sdrPlaySupport.dll" `
   "C:\ProgramData\radioconda\Library\lib\SoapySDR\modules0.8\" -Force
-```
+``
 
 (Run it from the extracted release folder, or give the full path to the DLL.) If your Radioconda is installed somewhere else, adjust the path — the target is always `…\Library\lib\SoapySDR\modules0.8\`.
 
 Then start the SDRplay API service (also from the Administrator PowerShell — the installer leaves it stopped):
 
-```powershell
+``powershell
 Set-Service SDRplayAPIService -StartupType Automatic
 Start-Service SDRplayAPIService
-```
+``
 
 **Linux** — install from your package manager:
 
-```text
+``text
 Debian / Ubuntu:   sudo apt install soapysdr-module-sdrplay
 Fedora:            sudo dnf install SoapySDRPlay
-```
+``
 
 **macOS** — install from the Pothosware Homebrew tap:
 
-```text
+``text
 brew tap pothosware/homebrew-pothos
 brew install soapysdrplay3
-```
+``
 
 Verify it loaded (any OS, from a Radioconda prompt):
 
-```text
+``text
 SoapySDRUtil --info
-```
+``
 
 …should list `sdrplay` in the "Available factories" line. If it doesn't:
 - Re-check that the SDRplay API from §3A.1 installed correctly.
@@ -308,20 +308,20 @@ Regardless of OS, before declaring the install good:
 
 GNU Radio's number-crunching uses **VOLK**, which can profile your CPU once and pick the fastest SIMD kernels (AVX2, NEON, etc.) for the rest of your machine's life. Without the profile, you'll see this warning every time you launch the app:
 
-```text
+``text
 [WARNING] SoapyVOLKConverters: no VOLK config file found.
           Run volk_profile for best performance.
-```
+``
 
 To run it once and silence the warning:
 
-```text
+``text
 Windows: open the "Anaconda Prompt (Radioconda)" shortcut, then:
   volk_profile
 
 Linux / macOS: open a terminal with Radioconda on PATH, then:
   volk_profile
-```
+``
 
 Takes about 30 seconds. Writes the chosen kernels to `%APPDATA%\.volk\volk_config` on Windows or `~/.volk/volk_config` on Linux/macOS. The warning disappears next time you launch the analyzer, and FFT throughput improves on machines with newer SIMD instruction sets.
 
@@ -353,7 +353,7 @@ Radioconda does **not** need reinstalling for an app update.
 If you'd rather apply it yourself, each release is a self-contained zip:
 
 1. **Close** the running app.
-2. **Extract** the new zip alongside the old one — a new folder named with the version (e.g. `dses-spectrum-analyzer-1.1.6`) — or overwrite the old folder's files.
+2. **Extract** the new zip alongside the old one — a new folder named with the version (e.g. `dses-spectrum-analyzer-1.1.8`) — or overwrite the old folder's files.
 3. **Run** `launcher.bat` (Windows) or `launcher.sh` (macOS/Linux) from the **new** folder.
 
 ### What is preserved across versions
@@ -374,11 +374,11 @@ Window size and position are saved in the same `settings.ini`, in the `[window]`
 
 The settings file is small (~1 KB). Copy it somewhere before a major upgrade if you want a quick rollback path:
 
-```text
+``text
 Windows:  copy "%APPDATA%\DSES_Analyzer\settings.ini" "%USERPROFILE%\Desktop\settings.ini.bak"
 macOS:    cp "~/Library/Application Support/DSES_Analyzer/settings.ini" ~/Desktop/settings.ini.bak
 Linux:    cp ~/.local/share/DSES_Analyzer/settings.ini ~/Desktop/settings.ini.bak
-```
+``
 
 
 ## 6. Troubleshooting
@@ -397,9 +397,9 @@ When you type the path, give the **install root** — the folder that contains `
 
 Radioconda was found, but the app's GUI/plotting packages aren't installed in it. Do the one-time install from §2.4 — open an activated Radioconda shell and run:
 
-```text
+``text
 conda install -c conda-forge pyside6 pyqtgraph scipy
-```
+``
 
 Then launch again.
 
@@ -411,20 +411,20 @@ The OS doesn't see the B210. In order:
 2. Make sure you're using a USB 3 port (not USB 2 — the B210 will be flaky at high sample rates).
 3. From a terminal:
 
-   ```text
+   ``text
    Windows:  C:\ProgramData\radioconda\Library\bin\uhd_find_devices.exe
    Linux:    ~/radioconda/bin/uhd_find_devices
    macOS:    ~/radioconda/bin/uhd_find_devices
-   ```
+   ``
 
    If `uhd_find_devices` doesn't see it either, the problem is below our software — check the B210's LEDs and try a different USB cable.
 4. If `uhd_find_devices` reports a **firmware/image error** rather than "no devices" — e.g. `Could not load firmware`, `ihex_reader::read(): No EOF record found`, or a missing FPGA image — your Radioconda's UHD images are incomplete or corrupt (seen on some macOS installs). Download them once with UHD's own tool, then re-check:
 
-   ```text
+   ``text
    Windows:  C:\ProgramData\radioconda\Library\bin\uhd_images_downloader.exe
    Linux:    ~/radioconda/bin/uhd_images_downloader
    macOS:    ~/radioconda/bin/uhd_images_downloader
-   ```
+   ``
 
    It fetches ~100 MB of firmware/FPGA images into Radioconda (needs internet). After it finishes, `uhd_find_devices` should detect the B210.
 
@@ -448,9 +448,9 @@ The GR flow graph is running but no samples are arriving. Usual causes:
 
 ### macOS: "developer cannot be verified"
 
-```bash
-xattr -dr com.apple.quarantine /path/to/dses-spectrum-analyzer-1.1.6
-```
+``bash
+xattr -dr com.apple.quarantine /path/to/dses-spectrum-analyzer-1.1.8
+``
 
 For the optional Desktop **`.app`** icon (built by `install-shortcut.command`), the same warning can appear the first time you double-click it — right-click the app → **Open** once, or approve it in **System Settings → Privacy & Security → Open Anyway**. You only need to do this once per machine.
 
@@ -531,8 +531,11 @@ This is a live spectrum analyzer and waterfall display for the Ettus USRP B210 a
 At launch the program enumerates attached SDRs (UHD + SoapySDR) and decides what to use:
 
 - **One supported SDR attached**: opens it silently and remembers the driver and serial in the settings file.
+
 - **Two or more radios attached**: a picker dialog always appears so you can choose which one to use. Your previous choice is pre-selected, so you can just press Enter to use the same radio as last time. Your selection is remembered for next launch.
+
 - **No SDR attached, but a bundled SigMF sample is present**: the program falls back to **playback mode** — see below.
+
 - **No SDR and no sample**: an error dialog explains how to fix it and the program exits.
 
 The window title always shows which radio is feeding the display, and the **RX** group has a `Device:` button you can click to re-open the picker. The new choice takes effect on the next launch.
@@ -542,22 +545,49 @@ The window title always shows which radio is feeding the display, and the **RX**
 If no SDR is attached, the program looks next to the application file for `sample.sigmf-data` + `sample.sigmf-meta` and, if both are found, plays the file back in a continuous loop. The window title shows **[Playback]**. The data source is the file, paced to the original capture's sample rate.
 
 - **Sample Rate**, **RX Gain**, and **Recording** controls are disabled — they have no meaning for a recorded file. Sample rate comes from the file's metadata.
-- **Tuning is enabled** and works as a digital frequency shift on the file's baseband. Tuning to the file's actual center frequency (read from the .sigmf-meta) shows the recording's true content; tuning to other frequencies within ±(sample_rate/2) of the file's center lets you "look around" inside the recorded bandwidth. Tune well outside that window and you'll just see noise / wrap-around — exactly what you'd expect, since the recording doesn't contain data at those frequencies.
+
+- **Tuning is enabled** and works as a digital frequency shift (`blocks.rotator_cc`) on the file's baseband. Tuning to the file's actual center frequency (read from the .sigmf-meta) shows the recording's true content; tuning to other frequencies within ±(sample_rate/2) of the file's center lets you "look around" inside the recorded bandwidth. Tune well outside that window and you'll just see noise / wrap-around — exactly what you'd expect, since the recording doesn't contain data at those frequencies.
+
 - All visualization controls (Spectrum panel, Waterfall panel) work normally.
+
 - To replace the sample with your own, save a SigMF recording, rename the two files to `sample.sigmf-data` and `sample.sigmf-meta`, and drop them next to the program. (You don't need to change any code.)
 
 ### Sidebar controls (right side)
 
+#### Observation
+
+The "what are you trying to do tonight?" selector. Pick a goal and every science-critical setting — band, sample rate, recording format, channels, integration — is set to a validated bundle in one step:
+
+- **Pulsar — L-band**: 16 MHz, filterbank, 2044 channels, Integrate 1 (127.7 µs samples) at the 1422 MHz band — the geometry behind the 28σ B0329+54 detection at Haswell.
+
+- **Pulsar — UHF**: 20 MHz, filterbank, 256 channels, Integrate 16 (204.8 µs) centered at 420 MHz — the proven Haswell UHF geometry.
+
+- **Magnetar / high-DM**: L-band with 4096 channels — narrower channels tolerate the larger dispersion of magnetars and distant pulsars.
+
+- **Hydrogen line — drift scan**: ezRA .txt format at 1420.406 MHz, 2 MHz span. Set the dish Az/El in the Recording group.
+
+- **RFI survey — sweep**: switches to Sweep mode; set the range in the Sweep group.
+
+- **Manual (expert)**: touches nothing. The combo drops back here by itself when you change any of the settings a preset controls — the label never claims a bundle the settings no longer match. The app always starts here; your individual settings persist on their own.
+
+Below the selector, a live **consequences line** translates the current settings into what they mean for the data: time resolution, channel width, per-channel dispersion smearing (at a reference DM of 30), and disk usage per hour. It turns amber when a combination is risky — sample rate beyond the validated recording geometry, or time resolution too coarse for pulsar work. On radios that can't reach a preset's rate, the request is clamped and snapped as usual and the readout shows what you actually got. Display settings (FFT size, window, averaging) are deliberately untouched by presets: they shape what you *see*, never what is recorded.
+
+**A preset never starts a recording.** It only configures — review the settings, make any adjustments, then start the recording yourself with the **Record** control when you're ready. (The RFI-survey preset does begin sweeping the display immediately, exactly as the Sweep mode button would, but nothing is written to disk.)
+
 #### Mode
 
 - **Live**: real-time FFT of the radio's instantaneous bandwidth around one tuned center frequency (the traditional view).
+
 - **Sweep**: stepped scan across a wide range — for RFI surveys that span more than the radio's instantaneous bandwidth. The radio is retuned across the range and each step's FFT is stitched into one wide trace. See the **Sweep** group below. Unavailable in Playback.
 
 #### Tuning
 
 - **Pulsar Band**: preset frequencies for common pulsar observation bands. Choose *Manual* to use the Manual Frequency field instead.
+
 - **Coarse Tune**: ±100 MHz offset from the selected preset (or from the manual frequency).
+
 - **Fine Tune**: ±10 MHz offset, layered on top of Coarse Tune.
+
 - **Manual Frequency**: used when the *Manual* preset is selected. Accepts engineering notation, e.g. `1.42G` or `408M`.
 
 The Tuning group is disabled in Sweep mode (the center frequency is chosen automatically per step).
@@ -565,38 +595,61 @@ The Tuning group is disabled in Sweep mode (the center frequency is chosen autom
 #### Sweep (visible in Sweep mode)
 
 - **Start / Stop**: bottom and top of the swept range. Keep them within the connected radio's tuning range.
+
 - **Step**: Hz per tuning step. Type `auto` for ~80% of the current sample rate (recommended — keeps the clean middle of each FFT and avoids the DC spike plus band-edge rolloff). For tighter spacing enter a value, e.g. `2M`.
+
 - **Status**: current step number and tune frequency, or *Idle* in Live.
 
 Sweep runs continuously, redrawing the wide trace after each pass; the waterfall adds one row per pass. Sample rate and gain still apply to each step's FFT. Averaging, Max/Min hold, and baseline removal are forced off while sweeping (they would smear across retunes) and restored on return to Live; frozen cursor markers are cleared when entering or leaving Sweep.
 
 #### RX
 
-- **Sample Rate**: per-radio. The combo shows validated quick-pick rates for the connected radio (e.g. B210: 0.625–25 MHz; SDRPlay: 2–10 MHz; RTL-SDR: 0.25–3.2 MHz). Higher rate = wider spectrum but more disk usage when recording.
-- **Manual Rate (Hz)**: type any rate the SDR supports — useful for real-pulsar capture geometries that aren't in the preset list (e.g. the 24 MHz Haswell geometry, or the 625 kHz / 1.25 MHz lab-simulator rates). The value is clamped to the device's reported min/max (hover for the range) and the radio snaps to the nearest rate it can actually deliver, which is then shown back. Accepts engineering notation, e.g. `24M` or `625k`. The combo clears when the active rate isn't one of the presets.
+- **Sample Rate**: per-radio, up to the hardware's true maximum (e.g. B210: 0.625–61.44 MHz — 56 MHz analog bandwidth; SDRPlay: 2–10 MHz; RTL-SDR: 0.25–3.2 MHz). The presets are not arbitrary: each divides the radio's master clock evenly, so decimation stays on the flat half-band filter chain. Rates that don't divide the clock cleanly can fall back to CIC filtering, whose passband droop shows up as a bowl-shaped gain error across the spectrum — poison for calibrated radio astronomy. Higher rate = wider spectrum but more disk and host load when recording: the radio isn't the only limit. USB bandwidth and host CPU set a practical ceiling — if the overflow panel or a recording's gap counter climbs at a high rate, the host can't keep up; step down. (16 MHz .fil recording is the validated DSES pulsar geometry.)
+
+- **Manual Rate (Hz)**: type any rate the SDR supports — useful for real-pulsar capture geometries that aren't in the preset list. The value is clamped to the device's reported min/max (hover for the range) and the radio snaps to the nearest rate it can actually deliver, which is then shown back. Accepts engineering notation (e.g. `24M`, `625k`). The combo clears when the active rate isn't one of the presets.
+
 - **RX Gain**: per-radio range and meaning. The slider's min/max matches what the driver reports (e.g. B210: 0–76 dB on the AD9361 gain table; SDRPlay: 0–48 dB, internally inverted so higher = stronger signal; RTL-SDR: 0–49.6 dB). AGC, if the driver defaults it on, is disabled at startup so the slider always takes effect.
+
 - **Antenna**: appears only when the open radio has more than one RF input. For a B210 this lists all four physical connectors as `A : RX2`, `A : TX/RX`, `B : RX2`, `B : TX/RX` — receiver A and receiver B, each with its two SMA ports — and switching includes hopping between the two receivers. An RSPduo lists its two tuners. Pick the connector your cable is actually plugged into; the choice is remembered per radio. Single-port radios (most RTL dongles, the RSP1B) don't show this control.
+
 - **Device**: shows the currently-open radio and re-opens the picker on click.
 
 #### Recording
 
 - **Folder**: where recordings land. Defaults to `~/Documents/DSES_SA_Recordings`.
+
 - **Source**: optional source / pulsar name (e.g. `B0329+54`). When set it is folded into the recording filename and written into the SIGPROC `.fil` header (`source_name`, plus RA/Dec derived from the name) and the SigMF description, so PRESTO/prepfold pick it up. Blank gives a timestamp-only filename. Locked while recording.
-- **Format**: *Raw I/Q (SigMF)* writes full-rate complex samples to a SigMF `.sigmf-meta`/`.sigmf-data` pair — exact, but large (e.g. ~192 MB/s at 24 Msps). *Filterbank (.fil)* channelizes the stream live and writes a SIGPROC filterbank (`telescope_id 12`) straight to disk, so the giant raw I/Q is never stored. The `.fil` is what PRESTO folds, and it is produced by the same validated code as the offline `iq_to_fil.py` converter.
-- **Channels** / **Integrate** (filterbank only): the FFT channel count and how many power frames are summed per output sample, so `tsamp = channels × integrate / sample rate`. Locked while recording. (Lab simulator: 1024 ch at 625 kHz → 1.6384 ms; Haswell geometry: 256 ch at 24 MHz with Integrate ≈ 16 → ~171 µs.)
+
+- **Format**: *Raw I/Q (SigMF)* writes full-rate complex samples to a SigMF `.sigmf-meta`/`.sigmf-data` pair — exact, but large (e.g. ~192 MB/s at 24 Msps). *Filterbank (.fil)* channelizes the stream live and writes a SIGPROC filterbank (`telescope_id 12`) straight to disk, so the giant raw I/Q is never stored. The `.fil` is what PRESTO folds; it is produced by the same validated code as the offline `iq_to_fil.py` converter. *Drift scan (ezRA .txt)* writes integrated spectra (one row every ~10–15 s with the default geometry) in the ezRA data format, so the file feeds Ted Cline's free ezRA suite (ezCon → ezPlot/ezSky/ezGal) directly — hydrogen-line drift scans with the same radio that records pulsars. The filename follows the ezCol convention (`<prefix>YYMMDD_HH.txt`).
+
+- **Channels** / **Integrate** (filterbank only): the FFT channel count and how many power frames are summed per output sample, so `tsamp = channels × integrate / sample rate`. Locked while recording.
+
+- **Az / El** (drift scan only): the dish pointing written into the ezRA file header (`azDeg`/`elDeg`). The observing-site identity (latitude, longitude, altitude, name) comes from the `[site]` section of the settings file — defaults are the DSES Haswell 60-ft dish. FFT bins, integration count, and the band-edge trim follow the dish's proven ezCol geometry and are adjustable via `[recording]` `ez_*` settings.
+
 - **Record for**: optional fixed length — minutes (e.g. `30`) or `H:MM` / `HH:MM:SS` (e.g. `1:30`). The recording auto-stops when it is reached and the counter shows a countdown; blank records until you stop it. Locked while recording.
+
 - **Record**: *Stopped* / *Recording*. Recording always starts *Stopped* on launch. While recording, a red **REC** counter shows elapsed time (or the countdown when a duration is set).
+
+- **Analyze when done** / **Quick look** (filterbank + PRESTO): when a `.fil` recording stops, the canned PRESTO pipeline runs automatically — `readfile` sanity, an `rfifind` RFI mask, band-edge zapping, and a `prepfold` fold — by catalog pulsar when Source is a known designation (the **Fold P (ms)** / **Fold DM** boxes then preview its catalogue values and lock, and the fold uses the pulsar's full ephemeris), or at a manual **Fold P (ms)** for a source with no catalogue entry (e.g. the lab pulsar simulator) — and delivers a **self-contained PDF** next to the recording: chart, commands, numbers, and a plain-language verdict. Verdicts are honest about failure modes: a periodicity that optimizes to DM ≈ 0 is reported as a *terrestrial signal*, not a detection, and "no detection" explicitly does not mean a bad recording. **Quick look** does the same on a snapshot of the still-growing file mid-recording, without interrupting it. Requires PRESTO (Mac/Linux: native install; Windows: WSL via `presto/build_presto.sh`).
+
+- **Timebase integrity** (filterbank, USRP/UHD radios): if the host briefly can't drain samples (an RX overflow — the 'O' characters in the sidebar), the dropped stretch would silently shorten the file's sample clock and smear a later pulsar fold. The recorder measures each gap from the radio's own timestamps and inserts the exact number of zero samples, so the `.fil` timebase keeps tracking real time. The REC counter shows any gaps live (e.g. *2 gaps, 45 ms padded*) and a `.gaps.json` file with the details is written next to the recording. Non-UHD radios (HackRF, RTL-SDR, SDRplay) don't provide per-gap timestamps; for them, watch the Overflow panel — a clean panel means a clean timebase.
 
 ### Spectrum (top plot)
 
 Live FFT magnitude in dB. Use the control panel on the right side to adjust:
 
 - **FFT Size**: 256–8192. Larger = finer frequency resolution but slower response and more averaging-window flicker.
+
 - **Window**: Blackman-Harris is the default — low sidelobes, good for RFI hunting. Hann/Hamming have narrower main lobes; Rectangular has the sharpest peak but the worst sidelobes.
+
 - **Avg α**: exponential averaging. 1.0 = no smoothing (every frame is a fresh measurement). Smaller = more smoothing.
-- **Max / Min hold**: overlay traces showing the highest/lowest value ever seen at each bin. Use **Reset** to clear.
+
+- **Max / Min hold**: overlay traces showing the highest/lowest value ever seen at each bin. Use **Reset** to clear. The **Detector** combo picks what they accumulate. *Peak (per FFT)*: the extreme of every FFT block — even a sub-millisecond burst registers at full amplitude, making Max hold a true transient-RFI catcher; on pure noise the Max trace settles ~10 dB above the average and the Min trace keeps sinking (the statistics of extremes over many samples — not a malfunction), so Min hold reveals what is *always* present: steady carriers stand up out of the collapsing noise floor. *Average (per frame)*: extremes of each display update's deep average — both holds stay within a few dB of the baseline, useful for tracking slow drifts.
+
 - **Y-Axis**: dB min/max, or click **Autoscale** to fit the current data. **Reset Axes** snaps the plot back to the default dB range and full-span frequency view — handy after you've zoomed/panned with the mouse or nudged the min/max and want to get un-lost. It leaves FFT size, window, traces, and colors untouched.
+
 - **Linear scale**: plots linear magnitude instead of dB (the default log scale). In linear mode the Y axis auto-fits and the dB Min/Max boxes are disabled. Affects the spectrum plot only — the waterfall stays in dB.
+
 - **Trace**: color, line width, alpha, label.
 
 ### Waterfall (bottom plot)
@@ -604,7 +657,9 @@ Live FFT magnitude in dB. Use the control panel on the right side to adjust:
 Scrolling 2-D image of FFT vs. time. Newest row at the bottom.
 
 - **Intensity Min/Max**: dB range that maps to the colormap. **Autoscale intensity** picks the 5%–99% percentile of the current data.
+
 - **Colormap**: viridis (default), plasma, inferno, magma, turbo, cividis, gray.
+
 - **Rows**: how many history rows to display (default 256).
 
 ### Persistence
@@ -622,6 +677,9 @@ The check is read-only and never auto-downloads or auto-installs. To trigger a c
 ### Tips for pulsar work
 
 - 1422 MHz preset is centered on the neutral-hydrogen line (HI).
+
 - 1666 MHz preset covers the OH maser band.
+
 - Use **Avg α** ≈ 0.05 and **Max hold** to find intermittent RFI sources.
+
 - The waterfall reveals time-structured interference (e.g. radar sweeps, ADS-B bursts) that the live spectrum smears out.
