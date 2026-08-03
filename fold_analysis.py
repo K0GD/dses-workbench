@@ -41,13 +41,141 @@ class PrestoUnavailable(RuntimeError):
     pass
 
 
+def _conda_roots():
+    """Best guesses at conda/mamba install roots on this machine (dirs that
+    usually contain `bin/` and `envs/`). Most-specific first; deduped; only
+    existing dirs returned."""
+    roots, seen = [], set()
+
+    def add(p):
+        if not p:
+            return
+        p = Path(p)
+        if str(p) not in seen:
+            seen.add(str(p))
+            roots.append(p)
+
+    # The interpreter / activated env we run under. base == the env itself;
+    # an activated env sits at <root>/envs/<name>, so climb two to the root.
+    cp = os.environ.get("CONDA_PREFIX")
+    if cp:
+        cp = Path(cp)
+        add(cp.parent.parent if cp.parent.name == "envs" else cp)
+    if os.environ.get("CONDA_EXE"):
+        add(Path(os.environ["CONDA_EXE"]).parent.parent)
+    sp = Path(sys.prefix)
+    add(sp.parent.parent if sp.parent.name == "envs" else sp)
+
+    # Common install roots by name, under $HOME and a few system prefixes
+    # (radioconda first — that is the DSES SDR/pulsar stack; /home/dses is the
+    # Linux drift-scan box).
+    for base in (Path.home(), Path("/opt"), Path("/usr/local"),
+                 Path("/home/dses")):
+        for name in ("radioconda", "miniforge3", "mambaforge", "miniconda3",
+                     "anaconda3", "miniconda", "anaconda"):
+            add(base / name)
+    return [r for r in roots if r.is_dir()]
+
+
+def _candidate_bin_dirs():
+    """Directories that might hold PRESTO / TEMPO2 binaries, best-first:
+    $PRESTO/bin, every conda env's bin (envs named '*presto*' preferred, so a
+    real PRESTO wins over a stray same-named script), then the usual native
+    locations (Homebrew, MacPorts, /usr/local, a source build in $HOME)."""
+    dirs, seen = [], set()
+
+    def add(d):
+        if not d:
+            return
+        d = Path(d)
+        if str(d) not in seen:
+            seen.add(str(d))
+            dirs.append(d)
+
+    if os.environ.get("PRESTO"):
+        add(Path(os.environ["PRESTO"]) / "bin")
+    for root in _conda_roots():
+        envs = root / "envs"
+        if envs.is_dir():
+            env_dirs = [e for e in envs.iterdir() if e.is_dir()]
+            # PRESTO-named envs first, newest-looking name first within that
+            # group (so 'presto6' beats 'presto' — v6's tempo2 polyco path is
+            # the one we wire up); everything else after, in name order.
+            presto = sorted((e for e in env_dirs
+                             if "presto" in e.name.lower()),
+                            key=lambda e: e.name, reverse=True)
+            other = sorted((e for e in env_dirs
+                            if "presto" not in e.name.lower()),
+                           key=lambda e: e.name)
+            for e in presto + other:
+                add(e / "bin")
+        add(root / "bin")
+    home = Path.home()
+    for d in ("/opt/homebrew/bin", "/opt/local/bin", "/usr/local/bin",
+              "/usr/bin", home / "presto" / "bin", home / "presto-v6" / "bin"):
+        add(d)
+    return dirs
+
+
+def _which_aggressive(exe):
+    """shutil.which, then a sweep of _candidate_bin_dirs — so a tool installed
+    in a conda env we are NOT running from is still found. Full path or None."""
+    p = shutil.which(exe)
+    if p:
+        return p
+    name = (exe + ".exe") if os.name == "nt" else exe
+    for d in _candidate_bin_dirs():
+        cand = d / name
+        try:
+            if cand.is_file() and os.access(cand, os.X_OK):
+                return str(cand)
+        except OSError:
+            continue
+    return None
+
+
+def _native_env(bindir):
+    """Env for running discovered PRESTO tools from `bindir` WITHOUT activating
+    its conda env: put `bindir` first on PATH (so readfile/rfifind/gs siblings
+    resolve), set PGPLOT_DIR to the env's pgplot data (prepfold's plotting),
+    and — for PRESTO v6, whose -par/-psr polycos come from tempo2 — add a
+    discovered tempo2 to PATH and set TEMPO2 to its data dir."""
+    env = os.environ.copy()
+    bindir = str(bindir)
+    prefix = os.path.dirname(bindir)
+    env["PATH"] = bindir + os.pathsep + env.get("PATH", "")
+    pg = os.path.join(prefix, "share", "pgplot")
+    if os.path.isdir(pg) and not env.get("PGPLOT_DIR"):
+        env["PGPLOT_DIR"] = pg
+    t2 = _which_aggressive("tempo2")
+    if t2:
+        t2bin = os.path.dirname(t2)
+        env["PATH"] = t2bin + os.pathsep + env["PATH"]
+        if not env.get("TEMPO2"):
+            data = os.path.join(os.path.dirname(t2bin), "share", "tempo2")
+            if os.path.isdir(data):
+                env["TEMPO2"] = data
+    return env
+
+
 class PrestoRunner:
-    """Run PRESTO tools natively (Mac/Linux) or via WSL (Windows)."""
+    """Run PRESTO tools natively (Mac/Linux, or Windows if on PATH) or via WSL.
+
+    Discovery is deliberately aggressive: PRESTO usually lives in a dedicated
+    conda env (e.g. radioconda's `presto`/`presto6`) whose bin dir is NOT on
+    PATH when the app runs from the base env, so a plain
+    `shutil.which('prepfold')` misses it. We also probe $PRESTO and every conda
+    env before giving up (and, on Windows, fall back to WSL)."""
 
     def __init__(self):
         self.mode = None
-        if shutil.which("prepfold"):
+        self._bindir = None
+        self._env = None
+        prepfold = _which_aggressive("prepfold")
+        if prepfold:
             self.mode = "native"
+            self._bindir = os.path.dirname(prepfold)
+            self._env = _native_env(self._bindir)
         elif sys.platform == "win32":
             try:
                 from presto import presto_bridge
@@ -70,21 +198,30 @@ class PrestoRunner:
         return self.mode is not None
 
     def describe(self):
-        return {"native": "native PRESTO on PATH",
-                "wsl": "PRESTO in WSL via presto_bridge",
-                None: "PRESTO not found (install it, or on Windows run "
-                      "presto/build_presto.sh inside WSL)"}[self.mode]
+        if self.mode == "native":
+            return f"native PRESTO ({self._bindir})"
+        if self.mode == "wsl":
+            return "PRESTO in WSL via presto_bridge"
+        return ("PRESTO not found — looked on PATH, $PRESTO, and every conda "
+                "env. Install it (Mac/Linux) or run presto/build_presto.sh "
+                "inside WSL (Windows).")
 
     def run(self, tool, *args, cwd=None, timeout=3600, nice=True):
         """Run a tool low-priority (protects a live recording) with cwd set
         so PRESTO products land in the analysis directory."""
         if self.mode == "native":
             import subprocess
-            cmd = ([tool] + [str(a) for a in args])
+            exe = tool
+            if self._bindir:                      # prefer the discovered env's
+                name = (tool + ".exe") if os.name == "nt" else tool
+                cand = os.path.join(self._bindir, name)
+                if os.path.exists(cand):
+                    exe = cand
+            cmd = [exe] + [str(a) for a in args]
             if nice and sys.platform != "win32":
                 cmd = ["nice", "-n", "10"] + cmd
             return subprocess.run(cmd, cwd=cwd, capture_output=True,
-                                  text=True, timeout=timeout)
+                                  text=True, timeout=timeout, env=self._env)
         if self.mode == "wsl":
             parts = (("nice", "-n", "10", tool) if nice else (tool,))
             return self._bridge.run(*parts, *args, cwd_win=cwd,
