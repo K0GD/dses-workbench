@@ -6,7 +6,7 @@ cross-machine record (Mac + Windows) — keep it committed and pushed.
 Conventions: `[ ]` planned, `[x]` shipped (note the commit), `[-]` dropped
 (note why). Move items between versions freely until they ship.
 
-## v1.1.8 (planned)
+## v1.1.8 — SHIPPED 2026-08-03 (cut + published from Windows)
 
 **Release plan (Rick, 2026-08-02):** no point release for the two Ray UI
 fixes — everything below ships together as 1.1.8 when the timebase and
