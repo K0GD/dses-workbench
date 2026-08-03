@@ -521,6 +521,16 @@ flagging for Soapy sources.
       test with an independent clock), and calibrated absolute-level
       threshold sweeps (0.01 dB steps to -136 dBm) for a proper
       sensitivity curve. Script over LAN SCPI at 192.168.10.66:5025.
+      UPGRADE PATH (2026-08-03): the front-panel I/Q inputs are the
+      STANDARD analog vector modulator (601/602 only adds the internal
+      digital source) — drive them from a dual-channel phase-synchronous
+      AWG playing precomputed I/Q (DC-coupled, ~0.5 Vrms/50 ohm, null
+      I/Q offsets from the front panel; P*fs integer for the loop) and
+      this unit becomes a FULL independent-clock vector pulsar sim with
+      calibrated level. Memory math: full B0329 period @25 MSa/s ~18
+      Mpts/ch (deep-memory AWG), but a 4 MHz test bandwidth @5-10 MSa/s
+      is a few Mpts and still gives a ~12 ms DM sweep at UHF. Depends on
+      whether Rick has/gets a dual-channel AWG.
 
 ## Backlog / unscheduled
 
