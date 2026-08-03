@@ -265,6 +265,10 @@ DEFAULTS = {
                                     # means (holds stay near the baseline)
         'y_min':           -140.0,
         'y_max':           10.0,
+        # Spectrum X (frequency) view, remembered across runs. 0/0 = unset ->
+        # use the full span for the current tuning.
+        'x_min':           0.0,
+        'x_max':           0.0,
         'linear_scale':    False,
         'grid':            True,
         'axis_labels':     True,
@@ -1013,6 +1017,18 @@ class FftPlotWidget(QtWidgets.QWidget):
         self._samp_rate = float(samp_rate)
         self._y_min = -140.0
         self._y_max = 10.0
+        # Remember/restore the plot view (X freq zoom + Y range), whether it is
+        # changed via the Min/Max boxes, a mouse zoom/pan, or Autoscale.
+        # Persistence stays off until the startup restore finishes, and is
+        # debounced so a mouse drag doesn't spam the INI.
+        self._persist_ranges_enabled = False
+        self._range_restore_done = False
+        self._saved_x = None            # (x0, x1) from settings, applied last
+        self._x_view = None             # current X view captured from the viewbox
+        self._range_save_timer = QtCore.QTimer(self)
+        self._range_save_timer.setSingleShot(True)
+        self._range_save_timer.setInterval(400)
+        self._range_save_timer.timeout.connect(self._persist_ranges)
         self._linear = False      # False = dB (log) scale, True = linear amplitude
         self._y_unit = 'relative' # 'relative' | 'dbfs' | 'dbm' (dB-scale unit)
         self._labels_on = True    # axis-label visibility (mirrors the checkbox)
@@ -1040,6 +1056,11 @@ class FftPlotWidget(QtWidgets.QWidget):
         layout.setSpacing(2)
 
         self._plot = pg.PlotWidget()
+        # Capture every X/Y view change (boxes, mouse zoom/pan, Autoscale) so it
+        # can be remembered across runs. Handler is guarded until the panel's
+        # spin boxes exist.
+        self._plot.getPlotItem().getViewBox().sigRangeChanged.connect(
+            self._on_view_range_changed)
         self._plot.setLabel('left', 'Relative Gain', units='dB')
         self._plot.setLabel('bottom', 'Frequency', units='Hz')
         self._plot.showGrid(x=True, y=True, alpha=0.3)
@@ -1358,17 +1379,13 @@ class FftPlotWidget(QtWidgets.QWidget):
         self._ymin_spin = QtWidgets.QDoubleSpinBox()
         self._ymin_spin.setRange(-300, 100); self._ymin_spin.setValue(self._y_min)
         self._ymin_spin.valueChanged.connect(self._on_yrange_changed)
-        self._ymin_spin.valueChanged.connect(
-            lambda v: self.control_changed.emit('y_min', v))
         yf.addRow("Min:", self._ymin_spin)
         self._ymax_spin = QtWidgets.QDoubleSpinBox()
         self._ymax_spin.setRange(-200, 200); self._ymax_spin.setValue(self._y_max)
         self._ymax_spin.valueChanged.connect(self._on_yrange_changed)
-        self._ymax_spin.valueChanged.connect(
-            lambda v: self.control_changed.emit('y_max', v))
         yf.addRow("Max:", self._ymax_spin)
         autoscale_btn = QtWidgets.QPushButton("Autoscale")
-        autoscale_btn.clicked.connect(lambda: self._plot.enableAutoRange(axis='y'))
+        autoscale_btn.clicked.connect(self._on_autoscale_y)
         yf.addRow(autoscale_btn)
         reset_axes_btn = QtWidgets.QPushButton("Reset Axes")
         reset_axes_btn.setToolTip(
@@ -1503,6 +1520,78 @@ class FftPlotWidget(QtWidgets.QWidget):
 
     def _on_yrange_changed(self, _v):
         self._plot.setYRange(self._ymin_spin.value(), self._ymax_spin.value())
+
+    def _on_view_range_changed(self, _vb, ranges, *_a):
+        """Capture the X (freq) + Y view whenever it changes — Min/Max boxes, a
+        mouse zoom/pan, and Autoscale all funnel through the viewbox. Mirror Y
+        into the spin boxes and (debounced) persist both axes."""
+        if not hasattr(self, '_ymin_spin'):
+            return  # too early — panel not built yet
+        try:
+            (x0, x1), (y0, y1) = ranges
+        except (TypeError, ValueError):
+            return
+        self._x_view = (float(x0), float(x1))
+        self._y_min, self._y_max = float(y0), float(y1)
+        for spin, val in ((self._ymin_spin, self._y_min),
+                          (self._ymax_spin, self._y_max)):
+            spin.blockSignals(True); spin.setValue(val); spin.blockSignals(False)
+        if self._persist_ranges_enabled:
+            self._range_save_timer.start()
+
+    def _persist_ranges(self):
+        """Write the current view to [spectrum] (via control_changed)."""
+        self.control_changed.emit('y_min', self._y_min)
+        self.control_changed.emit('y_max', self._y_max)
+        if self._x_view is not None:
+            self.control_changed.emit('x_min', self._x_view[0])
+            self.control_changed.emit('x_max', self._x_view[1])
+
+    def _on_autoscale_y(self):
+        """One-shot: fit Y to the visible trace(s) and lock it in, so the result
+        is a concrete, remembered range (plain enableAutoRange floats and is
+        never captured). Falls back to auto-range if there is no data yet."""
+        ys = []
+        for c in (self._curve, getattr(self, '_max_curve', None),
+                  getattr(self, '_min_curve', None)):
+            if c is None or not c.isVisible():
+                continue
+            d = c.getData()[1]
+            if d is not None and len(d):
+                ys.append(np.asarray(d, dtype=float))
+        if ys:
+            ally = np.concatenate(ys)
+            ally = ally[np.isfinite(ally)]
+            if len(ally):
+                lo, hi = float(ally.min()), float(ally.max())
+                pad = max(1.0, 0.05 * (hi - lo))
+                self._plot.setYRange(lo - pad, hi + pad)  # -> sigRangeChanged
+                return
+        self._plot.enableAutoRange(axis='y')
+
+    def restore_x_view(self):
+        """Re-apply a saved X (freq) zoom on top of the full span, but only if it
+        sits within the current tuning's span (a changed center/bandwidth falls
+        back to the full view)."""
+        if not self._saved_x:
+            return
+        x0, x1 = self._saved_x
+        if not (np.isfinite(x0) and np.isfinite(x1) and x1 > x0):
+            return
+        lo = self._center_freq - self._samp_rate / 2.0
+        hi = self._center_freq + self._samp_rate / 2.0
+        tol = 0.01 * self._samp_rate
+        if x0 >= lo - tol and x1 <= hi + tol:
+            self._plot.setXRange(x0, x1, padding=0)
+
+    def finish_range_restore(self):
+        """Run once after startup: apply the saved X zoom (Y is already restored
+        by apply_settings), then start remembering live view changes."""
+        if self._range_restore_done:
+            return
+        self._range_restore_done = True
+        self.restore_x_view()
+        self._persist_ranges_enabled = True
 
     def _on_labels_toggled(self, on):
         self._labels_on = bool(on)
@@ -1852,6 +1941,13 @@ class FftPlotWidget(QtWidgets.QWidget):
         _apply_plot_theme(self._plot, self._plot_title(), self._dark_bg)
         # Populate the Trace controls + pen from whichever slot is active.
         self._restore_trace_from_slot(self._dark_bg)
+        # Remembered X (freq) zoom: stash it and re-apply after tuning is set
+        # (set_frequency_range would otherwise reset X to the full span). Runs
+        # once, deferred so all startup tuning calls have settled.
+        xr = (settings.get_float(section, 'x_min'),
+              settings.get_float(section, 'x_max'))
+        self._saved_x = xr if xr[1] > xr[0] else None
+        QtCore.QTimer.singleShot(0, self.finish_range_restore)
 
     def emit_settings_to_processor(self):
         """Re-emit request_* signals from current UI state. Used after
@@ -2096,6 +2192,9 @@ class WaterfallPlotWidget(QtWidgets.QWidget):
             lo = float(np.percentile(self._data, 5))
             hi = float(np.percentile(self._data, 99))
             self.set_intensity_range(lo, hi)
+            # set_intensity_range blocks the spin signals, so persist explicitly.
+            self.control_changed.emit('intensity_min', lo)
+            self.control_changed.emit('intensity_max', hi)
 
     def _on_cmap_changed(self, name):
         self._colormap_name = name
