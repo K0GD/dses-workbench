@@ -474,17 +474,32 @@ flagging for Soapy sources.
 
 ## Validation tooling (after 1.1.8 ships, possibly after 1.2.0)
 
-- [ ] **B210-TX pulsar simulator (DECIDED 2026-08-03):** synthesize the
-      pulsar in software and transmit it from the B210's OWN TX side
-      (full duplex: TX/RX port A → pad/attenuator chain → RX2) while the
-      app records normally. Build `tools/b210_tx_pulsar.py`: (a) generate
+- [ ] **B210-TX pulsar simulator = BUILT-IN TEST (DECIDED 2026-08-03; BIT
+      framing Rick 2026-08-03):** synthesize the pulsar in software and
+      transmit it from the SAME B210's TX side (full duplex; no second
+      unit needed) while the app records — but as an APP FEATURE, not a
+      standalone tool: a B210 is single-process, so the app must host the
+      TX chain, which is what a self-test wants anyway. UI: a "Self test"
+      action (candidate: 7th Observation entry or button) → TX/RX port A
+      plays the dispersed pulsar → pad/cable → RX2 (site: cable into the
+      B-side RX while the feed stays on A; characterize internal TX→RX
+      leakage as a possible no-cable mode on the bench first; ALWAYS
+      minimum TX gain — 1420 MHz is a protected band, no radiating next
+      to the dish) → record a few min .fil → existing analysis pipeline →
+      compare recovered (P, DM, sigma) to injected ground truth → plain
+      PASS/FAIL with numbers. Run it before each Haswell session: proves
+      SDR→channelizer→writer→timebase→PRESTO→verdict healthy before
+      spending telescope time. LIMIT: TX/RX share the B210 clock, so
+      clock faults cancel — the E4438C leg below is the independent-clock
+      test. Implementation core: (a) generate
       baseband I/Q of a dispersed, profile-shaped, NOISE-carrier pulse
       train from parameters (P, DM, duty, profile, band, level) — noise
       bursts fold with realistic statistics, unlike the gated carrier
-      that produced chi2=inf; (b) play via a small GNU Radio TX flowgraph
-      (uhd.usrp_sink; loop must hold an integer pulse-period count with
-      seamless phase — choose fs so P*fs is integer); (c) print expected
-      fold ground truth for the run. Unlocks, in value order: END-TO-END
+      that produced chi2=inf; (b) add a uhd.usrp_sink TX branch to the
+      app's flowgraph while testing (loop must hold an integer
+      pulse-period count with seamless phase — choose fs so P*fs is
+      integer); (c) auto-compare fold results to the injected ground
+      truth for the PASS/FAIL. Unlocks, in value order: END-TO-END
       DM validation (inject DM 26.8, require the pipeline to RECOVER it —
       L-band/16 MHz sweep 1.2 ms; 420 MHz/20 MHz sweep ~60 ms; the
       hardware sim box has no dispersion so the DM dimension has never
