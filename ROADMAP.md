@@ -530,11 +530,19 @@ flagging for Soapy sources.
       calibrated level. Memory math: full B0329 period @25 MSa/s ~18
       Mpts/ch (deep-memory AWG), but a 4 MHz test bandwidth @5-10 MSa/s
       is a few Mpts and still gives a ~12 ms DM sweep at UHF. No AWG on
-      hand (2026-08-03); candidates researched: Siglent SDG7032A (2 ch,
-      512 Mpts, 5 GSa/s, has a vector/IQ mode made for driving external
-      I/Q modulators; street ~$4k but 2026 quotes inconsistent — verify)
-      or used Keysight 33622A + 336MEM2U (64 Mpts/ch, ~$2.5-4k; check
-      the MEM option is present, same lesson as the ESG).
+      hand (2026-08-03). AFFORDABLE PICK (verified specs): Siglent
+      SDG2042X ~$400 — 2 ch, 16-bit, 8 Mpts/ch, TrueArb point-by-point
+      1 uSa/s-75 MSa/s (exact fs control for the P*fs-integer loop
+      seam), rear-panel 10 MHz In/Out with external clock select (GPS
+      lock), LAN SCPI. 8 Mpts is adequate via the PULSAR-CHOICE TRICK
+      (memory = P*fs, and we control both): B0950+08 (253 ms, a real
+      DSES target) fits a FULL period at 31 MSa/s = full 16-20 MHz RF
+      BW; B0329 fits at 11 MSa/s (~9 MHz); UHF DM tests fit multiple
+      periods. Premium alternatives if the memory wall is ever hit:
+      SDG7032A (512 Mpts, vector/IQ mode, ~$4k street but 2026 quotes
+      inconsistent) or used Keysight 33622A + 336MEM2U (64 Mpts/ch,
+      ~$2.5-4k; verify the MEM option is installed — same lesson as
+      the ESG).
 
 ## Backlog / unscheduled
 
