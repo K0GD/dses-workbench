@@ -416,10 +416,9 @@ flagging for Soapy sources.
         recording, elapsed counter) and the site/az-el metadata from the
         visibility-planner item (drift scans want LST + pointing recorded).
 
-## Observation presets + consequences readout — DECISION PENDING (Rick, 2026-08-02)
+## Observation presets + consequences readout — IN 1.1.8, DONE 2026-08-03
 
-- [ ] **"Observation" preset selector** — Rick may want this IN 1.1.8 (deciding
-      overnight 2026-08-02→03); otherwise 1.1.9. Answers "what are you trying
+- [x] **"Observation" preset selector** — Rick chose 1.1.8; shipped 2026-08-03. Answers "what are you trying
       to do tonight?" with a coherent, validated parameter bundle; every knob
       stays adjustable after (combo drops to Manual on deviation, like the
       sample-rate combo):
@@ -433,11 +432,11 @@ flagging for Soapy sources.
       | Manual (expert) | touches nothing | today's behavior |
       Non-B210 radios: preset adapts (clamp rate, keep ratios) instead of
       making it the user's problem.
-- [ ] **Live "consequences" line** under the recording controls: time
+- [x] **Live "consequences" line** under the recording controls: time
       resolution, channel width, DM smearing @ example DM, GB/hr, host
       headroom; turns red on self-defeating combos (formulas:
       tsamp = ch×int/rate; Δν = rate/ch; disk B/s = 4×rate/int).
-- [ ] **Label the display group as display-only** (FFT size/window/avg do NOT
+- [x] **Label the display group as display-only** (FFT size/window/avg do NOT
       affect recordings — rename "Spectrum Controls" to say so).
 - Full expression (Observation menu, first-run wizard, visibility-planner
   tie-in "B0329+54 rises 21:40 → Observe") belongs to the 1.2.0 redesign.
