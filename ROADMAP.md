@@ -485,6 +485,19 @@ flagging for Soapy sources.
       the flowgraph rebuild machinery already exists in the device-switch
       path). Also covers the B210 powered off at session start at Haswell.
 
+- [ ] **Waterfall scroll direction (Rick, 2026-08-03):** new rows currently
+      appear at the BOTTOM and history scrolls up; the convention Rick is
+      used to (SDR#/GQRX/SDRangel) is new-at-top, history flowing down.
+      WHY it is this way: `WaterfallPlotWidget.on_frame` does
+      `np.roll(self._data, -1, axis=0)` + writes the new row at
+      `self._data[-1, :]`, and the ImageItem rect maps row order directly —
+      an implementation accident, not a choice. Fix: roll +1 and write row
+      0 (or flip the rect/y-axis), and make the Time axis read as age
+      (newest at top). Check both: normal frames AND the first_frame
+      reset path, plus Sweep mode's waterfall behavior. Consider a
+      settings toggle only if anyone defends the current direction;
+      otherwise just adopt the convention.
+
 ## Validation tooling (after 1.1.8 ships, possibly after 1.2.0)
 
 - [ ] **B210-TX pulsar simulator = BUILT-IN TEST (DECIDED 2026-08-03; BIT
