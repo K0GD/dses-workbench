@@ -176,7 +176,11 @@ flagging for Soapy sources.
       Pi 5, nice/ionice the PRESTO job to avoid UHD overflows; Windows
       requires the WSL PRESTO stack from `presto/build_presto.sh`.
 
-- [ ] **Pulsar visibility planner ("what's up now?")** — a built-in subset of
+- [x] **Pulsar visibility planner ("what's up now?") — BUILT 2026-08-04 for
+      1.2.0** (`pulsar_planner.py`, Observe menu / Ctrl+P; ATNF psrcat
+      cached locally, flux follows the tuned band, magnetars marked and
+      never flux-filtered, exact catalog RA/Dec into the .fil header,
+      set-before-finish warning). Original notes: a built-in subset of
       the Murmur/ATNF planning step from
       `DSES_PulsarGuide_Planning_2026.pdf` (Training Part 1):
       1. *In-view list on request:* a "Pulsars in view" button/dialog showing
