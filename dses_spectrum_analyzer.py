@@ -2010,7 +2010,9 @@ class WaterfallPlotWidget(QtWidgets.QWidget):
         layout.setSpacing(2)
 
         self._plot = pg.PlotWidget()
-        self._plot.setLabel('left', 'Time', units='rows')
+        # y reads as AGE: 0 at the top is "now", larger = older (newest rows
+        # enter at the top; see on_frame).
+        self._plot.setLabel('left', 'Age', units='rows')
         self._plot.setLabel('bottom', 'Frequency', units='Hz')
         self._plot.setMouseEnabled(x=False, y=False)
         self._plot.invertY(True)
@@ -2143,8 +2145,13 @@ class WaterfallPlotWidget(QtWidgets.QWidget):
                        or self._data.shape[0] != self._rows)
         if first_frame:
             self._data = np.full((self._rows, n), self._intensity_min, dtype=np.float32)
-        self._data = np.roll(self._data, -1, axis=0)
-        self._data[-1, :] = avg_db
+        # New row at index 0 = the TOP of the display (the plot has
+        # invertY(True), so image row 0 maps to y=0 at the top): newest data
+        # enters at the top and history flows downward, matching the
+        # SDR#/GQRX/SDRangel convention (Rick, 2026-08-03 — the old
+        # roll(-1)/write-last direction was an implementation accident).
+        self._data = np.roll(self._data, 1, axis=0)
+        self._data[0, :] = avg_db
         self._img.setImage(self._data, autoLevels=False,
                            levels=(self._intensity_min, self._intensity_max))
         # setRect must run AFTER setImage — pyqtgraph divides by the current
@@ -5569,6 +5576,62 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         else:
             QtWidgets.QMessageBox.information(self, "Update installed", msg)
 
+    # --- Hot-plug radio detection (playback / no-radio mode) ---------------
+    # The app opened without a receiver; poll for one being connected or
+    # powered on and offer to switch — no manual restart dance. Enumeration
+    # (UHD + Soapy) can block for a second or more, so it runs on a worker
+    # thread; only the result crosses back to the GUI thread via a signal.
+
+    class _HotplugSignals(QObject):
+        found = Signal(list)
+
+    _HOTPLUG_POLL_MS = 5000
+
+    def _start_hotplug_watch(self):
+        self._hotplug_sig = self._HotplugSignals()
+        self._hotplug_sig.found.connect(self._on_hotplug_found)
+        self._hotplug_busy = False
+        self._hotplug_timer = QtCore.QTimer(self)
+        self._hotplug_timer.setInterval(self._HOTPLUG_POLL_MS)
+        self._hotplug_timer.timeout.connect(self._hotplug_poll)
+        self._hotplug_timer.start()
+
+    def _hotplug_poll(self):
+        if self._hotplug_busy:
+            return                      # previous enumeration still running
+        self._hotplug_busy = True
+
+        def _scan():
+            try:
+                devices = find_all_radios()
+            except Exception:
+                devices = []
+            self._hotplug_busy = False
+            if devices:
+                self._hotplug_sig.found.emit(devices)
+
+        threading.Thread(target=_scan, name="hotplug-scan",
+                         daemon=True).start()
+
+    def _on_hotplug_found(self, devices):
+        timer = getattr(self, '_hotplug_timer', None)
+        if timer is None:
+            return                      # already handled
+        timer.stop()
+        self._hotplug_timer = None
+        labels = "\n".join(f"  •  {d['label']}" for d in devices)
+        r = QtWidgets.QMessageBox.question(
+            self, "Radio detected",
+            f"A receiver is now available:\n\n{labels}\n\n"
+            "Restart the program to use it? (Playback stops; your settings "
+            "are kept.)",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.Yes)
+        if r == QtWidgets.QMessageBox.Yes:
+            _relaunch(Path(__file__).resolve().parent)
+            self.close()   # closeEvent saves settings + stops the flowgraph
+        # Declined: stay in playback and don't nag again this session.
+
     def _check_for_updates_manual(self):
         """Help → Check for Updates… handler. Wires the no_update /
         check_failed signals to a one-shot dialog for this invocation."""
@@ -5709,6 +5772,11 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
             # Re-apply once the event loop has let the WM decorate the window.
             if sys.platform.startswith('linux'):
                 QtCore.QTimer.singleShot(0, self._reapply_geometry)
+            # Launched with no radio (playback mode): watch for one being
+            # connected / powered on so the user doesn't have to know to
+            # restart the app (Rick, 2026-08-03).
+            if self._playback_mode:
+                self._start_hotplug_watch()
 
     def _reapply_geometry(self):
         self._restore_geometry()
