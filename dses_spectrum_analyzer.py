@@ -2814,7 +2814,10 @@ you can choose which one to use. Your previous choice is pre-selected, so
 you can just press Enter to use the same radio as last time. Your selection
 is remembered for next launch.</li>
 <li><b>No SDR attached, but a bundled SigMF sample is present</b>: the
-program falls back to <b>playback mode</b> — see below.</li>
+program falls back to <b>playback mode</b> — see below. It keeps watching
+for a receiver in the background: connect or power one on and, within a few
+seconds, a dialog offers a one-click restart to use it — no manual
+shut-down-and-relaunch dance.</li>
 <li><b>No SDR and no sample</b>: an error dialog explains how to fix it
 and the program exits.</li>
 </ul>
@@ -2847,7 +2850,16 @@ two files to <code>sample.sigmf-data</code> and <code>sample.sigmf-meta</code>,
 and drop them next to the program. (You don't need to change any code.)</li>
 </ul>
 
-<h3>Sidebar controls (right side)</h3>
+<h3>Control panels (dockable)</h3>
+<p>The controls live in four dockable panels — <b>Observation</b>,
+<b>Tuning</b>, <b>Radio</b>, and <b>Recording</b>. Drag a panel by its title
+bar to rearrange, stack panels as tabs, tear one off into its own floating
+window (handy on a second monitor), or close it; the <b>View</b> menu shows
+and hides each panel, and your arrangement is remembered across runs. The
+menu bar (File / View / Radio / Recording / Help) duplicates the important
+actions, and long status messages — recording filenames, analysis progress —
+appear in the full-width <b>status bar</b> at the bottom of the window where
+they are never truncated.</p>
 <h4>Observation</h4>
 <p>The "what are you trying to do tonight?" selector. Pick a goal and every
 science-critical setting — band, sample rate, recording format, channels,
@@ -3060,7 +3072,9 @@ disabled. Affects the spectrum plot only — the waterfall stays in dB.</li>
 </ul>
 
 <h3>Waterfall (bottom plot)</h3>
-<p>Scrolling 2-D image of FFT vs. time. Newest row at the bottom.</p>
+<p>Scrolling 2-D image of FFT vs. time. Newest row at the <b>top</b>,
+history flowing down (the SDR#/GQRX convention); the left axis reads as age
+in rows.</p>
 <ul>
 <li><b>Intensity Min/Max</b>: dB range that maps to the colormap.
 <b>Autoscale intensity</b> picks the 5%–99% percentile of the current
@@ -4192,7 +4206,7 @@ class SoapyGenericSource(RadioSource):
                   file=sys.stderr)
 
 
-class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
+class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
 
     # Both bases define `connect` and `disconnect`. PySide6's QObject.connect/
     # disconnect win MRO, so `self.(dis)connect((blk, 0), (blk2, 0))` ends up
@@ -4208,7 +4222,12 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
 
     def __init__(self):
         gr.top_block.__init__(self, f"{APP_NAME} v{APP_VERSION}", catch_exceptions=True)
-        QtWidgets.QWidget.__init__(self)
+        # QMainWindow (1.2.0 redesign): gives us the real menu bar (native on
+        # macOS), dockable control panels, and a full-width status bar that
+        # ends the truncated-message problem of the old fixed sidebar.
+        QtWidgets.QMainWindow.__init__(self)
+        self.setObjectName("dses_main")          # required for saveState()
+        self.setDockNestingEnabled(True)
         self.setWindowTitle(f"{APP_NAME}  —  v{APP_VERSION}")
         # Set the window/Dock icon to the bundled DSES pulsar on Windows/Linux.
         #
@@ -4244,47 +4263,68 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         # programmatically applying saved values back into the UI.
         self._applying_settings = False
 
-        # Top-level vertical layout: menu bar above, plot+sidebar content below.
-        top = QtWidgets.QVBoxLayout(self)
-        top.setContentsMargins(0, 0, 0, 0)
-        top.setSpacing(0)
-        top.setMenuBar(self._build_menu_bar())
+        # QMainWindow shell: plots are the central widget (the thing you
+        # watch while observing); every control group lives in a dockable
+        # panel on the right. Menu + status bar are the real QMainWindow
+        # ones — the status bar is full-width, so long recording/analysis
+        # messages are no longer squeezed into a 300 px column.
+        self.setMenuBar(self._build_menu_bar())
+        self._status_bar = QtWidgets.QStatusBar(self)
+        self.setStatusBar(self._status_bar)
 
         content = QtWidgets.QWidget()
+        content.setObjectName("dses_central")
         self.main_layout = QtWidgets.QHBoxLayout(content)
         self.main_layout.setContentsMargins(4, 4, 4, 4)
         self.main_layout.setSpacing(4)
-        top.addWidget(content, 1)
+        self.setCentralWidget(content)
 
         self.plots_splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
         self.plots_splitter.setChildrenCollapsible(False)
         self.main_layout.addWidget(self.plots_splitter, 1)
 
-        self.sidebar = QtWidgets.QWidget()
-        self.sidebar_layout = QtWidgets.QVBoxLayout(self.sidebar)
-        self.sidebar_layout.setContentsMargins(0, 0, 0, 0)
-        # Put the controls column inside a scroll area so a tall stack of
-        # controls never forces the whole window taller than the display — it
-        # scrolls instead. Without this, on a 14" MacBook Pro the sidebar's
-        # natural height set a window minimum height larger than the screen,
-        # so the window couldn't be dragged shorter.
-        self._sidebar_scroll = QtWidgets.QScrollArea()
-        self._sidebar_scroll.setWidget(self.sidebar)
-        self._sidebar_scroll.setWidgetResizable(True)
-        self._sidebar_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
-        # AsNeeded, not AlwaysOff: if the sidebar content's minimum width
-        # exceeds the viewport (bigger system fonts / narrow windows), an
-        # AlwaysOff policy silently CLIPS the right edge — Ray hit this as
-        # an unreachable right end of the RX-gain slider (2026-08-01). A
-        # scrollbar that appears only in that situation keeps every control
-        # reachable on any screen.
-        self._sidebar_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self._sidebar_scroll.setVerticalScrollBarPolicy(_VBAR_POLICY)
-        self._sidebar_scroll.verticalScrollBar().setStyleSheet(_SCROLLBAR_QSS)
-        self._sidebar_scroll.setMinimumWidth(290)
-        self._sidebar_scroll.setMaximumWidth(380)   # ~360 content + scrollbar
-        self._sidebar_scroll.setMinimumHeight(80)   # let the window shrink past it
-        self.main_layout.addWidget(self._sidebar_scroll, 0)
+        # --- Dockable control panels (1.2.0). Each panel is a QDockWidget
+        # the user can rearrange, tab, tear off, or hide (View menu);
+        # QMainWindow.saveState persists the arrangement per machine. Every
+        # dock's content sits in its own scroll area with the same scrollbar
+        # policy as the old sidebar (AsNeeded, never AlwaysOff — Ray's
+        # clipped-gain-slider lesson, 2026-08-01: clipping must never be
+        # silent), so tall panels scroll instead of forcing window height
+        # and narrow panels scroll instead of clipping controls. ---
+        self._docks = []
+
+        def _make_dock(title, objname):
+            dock = QtWidgets.QDockWidget(title, self)
+            dock.setObjectName(objname)          # required for saveState()
+            box = QtWidgets.QWidget()
+            lay = QtWidgets.QVBoxLayout(box)
+            lay.setContentsMargins(2, 2, 2, 2)
+            lay.addStretch(1)                    # groups insert above this
+            scroll = QtWidgets.QScrollArea()
+            scroll.setWidget(box)
+            scroll.setWidgetResizable(True)
+            scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+            scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+            scroll.setVerticalScrollBarPolicy(_VBAR_POLICY)
+            scroll.verticalScrollBar().setStyleSheet(_SCROLLBAR_QSS)
+            scroll.setMinimumWidth(290)
+            scroll.setMinimumHeight(60)
+            dock.setWidget(scroll)
+            self.addDockWidget(Qt.RightDockWidgetArea, dock)
+            self._docks.append(dock)
+            # View menu toggle, inserted above the Full Screen separator (in
+            # creation order — inserting before the separator each time).
+            self._view_menu.insertAction(self._view_menu_sep,
+                                         dock.toggleViewAction())
+            # Insert groups above the trailing stretch.
+            def _add(w, _lay=lay):
+                _lay.insertWidget(_lay.count() - 1, w)
+            return _add
+
+        self._dock_add_observation = _make_dock("Observation", "dock_observation")
+        self._dock_add_tuning = _make_dock("Tuning", "dock_tuning")
+        self._dock_add_rx = _make_dock("Radio", "dock_rx")
+        self._dock_add_recording = _make_dock("Recording", "dock_recording")
 
         # --- Observation presets: the "what are you trying to do tonight?"
         # selector. Each preset applies a coherent, validated parameter
@@ -4332,7 +4372,7 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
             "a combination is risky (host beyond its validated recording\n"
             "rate, or time resolution too coarse for pulsar work).")
         _obs_layout.addWidget(self._consequences_label)
-        self.sidebar_layout.addWidget(self._obs_group)
+        self._dock_add_observation(self._obs_group)
 
         # Mode selector: Live = real-time FFT at the tuned center frequency
         # (the traditional view); Sweep = stepped scan from start to stop.
@@ -4343,31 +4383,29 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         _mode_layout.addWidget(self._mode_live_btn)
         _mode_layout.addWidget(self._mode_sweep_btn)
         _mode_layout.addStretch(1)
-        self.sidebar_layout.addWidget(self._mode_group)
+        self._dock_add_observation(self._mode_group)
 
         self._tuning_group = QtWidgets.QGroupBox("Tuning")
         self._tuning_group_layout = QtWidgets.QVBoxLayout(self._tuning_group)
-        self.sidebar_layout.addWidget(self._tuning_group)
+        self._dock_add_tuning(self._tuning_group)
 
         # Sweep controls — built here, populated after the source is known;
         # hidden in Live mode (shown/hidden by _on_mode_changed).
         self._sweep_group = QtWidgets.QGroupBox("Sweep")
         self._sweep_group_layout = QtWidgets.QFormLayout(self._sweep_group)
-        self.sidebar_layout.addWidget(self._sweep_group)
+        self._dock_add_tuning(self._sweep_group)
 
         self._rx_group = QtWidgets.QGroupBox("RX")
         self._rx_group_layout = QtWidgets.QVBoxLayout(self._rx_group)
-        self.sidebar_layout.addWidget(self._rx_group)
+        self._dock_add_rx(self._rx_group)
 
         self._record_group = QtWidgets.QGroupBox("Recording")
         self._record_group_layout = QtWidgets.QVBoxLayout(self._record_group)
-        self.sidebar_layout.addWidget(self._record_group)
+        self._dock_add_recording(self._record_group)
 
         self._overflow_widget = OverflowDisplayWidget()
-        self.sidebar_layout.addWidget(self._overflow_widget)
+        self._dock_add_recording(self._overflow_widget)
         self._overflow_monitor.chars_received.connect(self._overflow_widget.append_chars)
-
-        self.sidebar_layout.addStretch(1)
 
         self.recording_dir = self._app_settings.get_str('recording', 'directory')
         if not self.recording_dir:
@@ -4748,7 +4786,21 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
         self._record_group_layout.addWidget(self._record_tool_bar)
 
         # Status label below the Record combo, updated by _start/_stop_recording.
-        self._recording_status = QtWidgets.QLabel("Idle")
+        # Recording status lives in the panel AND mirrors to the full-width
+        # status bar, where long filenames are never truncated (the old
+        # 300 px sidebar squeezed these messages — Rick, 2026-08-02).
+        class _MirroredLabel(QtWidgets.QLabel):
+            def __init__(lbl, mirror, *a):
+                super().__init__(*a)
+                lbl._mirror = mirror
+            def setText(lbl, text):
+                super().setText(text)
+                try:
+                    lbl._mirror(text)
+                except Exception:
+                    pass
+        self._recording_status = _MirroredLabel(
+            lambda t: self._status_bar.showMessage(t), "Idle")
         self._recording_status.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self._recording_status.setWordWrap(True)
         self._record_group_layout.addWidget(self._recording_status)
@@ -5442,6 +5494,42 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
 
     def _build_menu_bar(self):
         bar = QtWidgets.QMenuBar(self)
+
+        file_menu = bar.addMenu("&File")
+        open_dir_act = QtGui.QAction("Open &Recordings Folder", self)
+        open_dir_act.triggered.connect(lambda: QtGui.QDesktopServices.openUrl(
+            QtCore.QUrl.fromLocalFile(self.recording_dir)))
+        file_menu.addAction(open_dir_act)
+        file_menu.addSeparator()
+        exit_act = QtGui.QAction("E&xit", self)
+        exit_act.setShortcut(QtGui.QKeySequence.Quit)
+        exit_act.triggered.connect(self.close)
+        file_menu.addAction(exit_act)
+
+        # Dock show/hide toggles are appended here by _make_dock as each
+        # panel is created (the menu bar is built first in __init__).
+        self._view_menu = bar.addMenu("&View")
+        self._view_menu_sep = self._view_menu.addSeparator()
+        fs_act = QtGui.QAction("&Full Screen", self)
+        fs_act.setCheckable(True)
+        fs_act.setShortcut(QtGui.QKeySequence.FullScreen)
+        fs_act.toggled.connect(
+            lambda on: self.showFullScreen() if on else self.showNormal())
+        self._view_menu.addAction(fs_act)
+
+        radio_menu = bar.addMenu("&Radio")
+        dev_act = QtGui.QAction("Change &Device…", self)
+        dev_act.triggered.connect(self._on_change_device_clicked)
+        radio_menu.addAction(dev_act)
+
+        rec_menu = bar.addMenu("Recor&ding")
+        rec_start_act = QtGui.QAction("&Start Recording", self)
+        rec_start_act.triggered.connect(lambda: self.set_record(1))
+        rec_menu.addAction(rec_start_act)
+        rec_stop_act = QtGui.QAction("S&top Recording", self)
+        rec_stop_act.triggered.connect(lambda: self.set_record(0))
+        rec_menu.addAction(rec_stop_act)
+
         help_menu = bar.addMenu("&Help")
         guide_act = QtGui.QAction("&User Guide", self)
         guide_act.setShortcut(QtGui.QKeySequence.HelpContents)
@@ -5766,6 +5854,16 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
             self._geometry_applied = True
             self._restore_geometry()
             self._clamp_window_to_screen()
+            # Restore the saved dock arrangement (positions, tabbing,
+            # floating, visibility). Skipped silently on first run or if
+            # the saved state predates a dock-name change.
+            try:
+                cp = self._app_settings._cp
+                if cp.has_option('window', 'dock_state'):
+                    self.restoreState(QtCore.QByteArray.fromBase64(
+                        cp.get('window', 'dock_state').encode('ascii')))
+            except Exception:
+                pass
             # X11 reparenting WMs (LXDE/Openbox) may not have drawn the title-bar
             # frame yet when showEvent fires, so the move() above can land the
             # client at the requested y and push the title bar off the top edge.
@@ -5866,8 +5964,13 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QWidget):
             print(f"Geometry save failed: {exc}", file=sys.stderr)
 
     def closeEvent(self, event):
-        # Save window geometry + flush any tail-end setting edits to the INI.
+        # Save window geometry + dock arrangement + flush setting edits.
         self._save_geometry()
+        try:
+            state = bytes(self.saveState().toBase64()).decode('ascii')
+            self._app_settings.set('window', 'dock_state', state)
+        except Exception:
+            pass
         try:
             self._app_settings.save()
         except OSError as exc:
