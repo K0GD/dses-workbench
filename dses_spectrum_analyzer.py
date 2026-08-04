@@ -4251,33 +4251,73 @@ class _DockTitleBar(QtWidgets.QWidget):
         super().__init__(parent)
         self._dock = dock
         self._default_area = default_area
+        # Tinted header so each panel's title reads as a header rather than
+        # blending into its contents (Rick, 2026-08-04). Scoped by objectName
+        # so the fill lands on the bar only — the child buttons keep their
+        # flat auto-raise look — and the tint matches the dock tab palette.
+        self.setObjectName("dockTitleBar")
+        self.setStyleSheet("""
+            QWidget#dockTitleBar {
+                background: #dbeafe;            /* pastel blue  */
+                border: 1px solid #93b4d4;
+                border-bottom: 2px solid #156082;   /* DSES teal underline */
+                border-top-left-radius: 4px;
+                border-top-right-radius: 4px;
+            }
+        """)
         lay = QtWidgets.QHBoxLayout(self)
-        lay.setContentsMargins(6, 2, 2, 2)
+        lay.setContentsMargins(6, 3, 3, 3)
         lay.setSpacing(2)
         self._label = QtWidgets.QLabel(dock.windowTitle())
-        self._label.setStyleSheet("font-weight: 600;")
+        self._label.setStyleSheet("font-weight: 600; color: #1e3a5f;"
+                                  " background: transparent; border: none;")
         lay.addWidget(self._label)
         lay.addStretch(1)
 
-        def _btn(text, tip, slot):
+        def _btn(std_pixmap, tip, slot):
             b = QtWidgets.QToolButton(self)
-            b.setText(text)
+            # Qt standard icons, not unicode glyphs: a glyph like U+21E4
+            # renders as an ambiguous dash at 18 px (and may be missing
+            # entirely in the default font on macOS/Linux), which made the
+            # home button unrecognizable and hard to hit.
+            b.setIcon(self.style().standardIcon(std_pixmap))
+            b.setIconSize(QtCore.QSize(12, 12))
             b.setToolTip(tip)
             b.setAutoRaise(True)
             b.setFixedSize(18, 18)
+            # Transparent over the tint until hovered, so the header reads as
+            # one band rather than a row of boxes.
+            b.setStyleSheet("QToolButton { background: transparent;"
+                            " border: none; color: #1e3a5f; }"
+                            "QToolButton:hover { background: #bfdcf5;"
+                            " border-radius: 3px; }"
+                            "QToolButton:disabled { color: #9bb0c4; }")
             b.clicked.connect(slot)
             lay.addWidget(b)
             return b
 
-        self._home_btn = _btn("⇤", "Return this panel to its default position",
+        _S = QtWidgets.QStyle
+        self._home_btn = _btn(_S.SP_DialogResetButton,
+                              "Return this panel to its default position",
                               lambda: home_cb(dock, default_area))
-        self._float_btn = _btn("❐", "Float / dock this panel",
+        self._float_btn = _btn(_S.SP_TitleBarNormalButton,
+                               "Float / dock this panel",
                                lambda: dock.setFloating(not dock.isFloating()))
-        _btn("✕", "Hide this panel (View menu brings it back)", dock.close)
+        _btn(_S.SP_TitleBarCloseButton,
+             "Hide this panel (View menu brings it back)", dock.close)
 
         dock.topLevelChanged.connect(self._sync)
         dock.dockLocationChanged.connect(lambda _a: self._sync())
         self._sync()
+
+    def paintEvent(self, event):
+        # A plain QWidget subclass does NOT honor a stylesheet background on
+        # its own — Qt only paints it if the widget draws PE_Widget through
+        # the style. Without this the header tint silently does nothing.
+        opt = QtWidgets.QStyleOption()
+        opt.initFrom(self)
+        p = QtGui.QPainter(self)
+        self.style().drawPrimitive(QtWidgets.QStyle.PE_Widget, opt, p, self)
 
     def _sync(self, *_):
         """Home is only meaningful when the dock isn't already home."""
@@ -5673,17 +5713,18 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
         return bar
 
     def _dock_go_home(self, dock, area):
-        """Put a floating/moved panel back where it started: re-dock into its
-        default area, tabbed behind whatever is already there so it can't
-        shove the other panels around."""
+        """Put a floating/moved panel back where it started: re-dock it into
+        the area it was created in.
+
+        Deliberately a plain addDockWidget and nothing more. An earlier
+        version also tabified the dock behind its neighbours to preserve
+        stacking; with two or more neighbours that left the re-docked panel
+        AND one neighbour rendering nowhere while both still reported
+        visible — Qt lost them inside a zero-height tab group. Letting Qt
+        place the dock itself is predictable and always shows the panel.
+        """
         dock.setFloating(False)
-        neighbours = [d for d in self._docks
-                      if d is not dock and d.isVisible() and not d.isFloating()
-                      and self.dockWidgetArea(d) == area]
         self.addDockWidget(area, dock)
-        if neighbours:
-            # Restore stacking order rather than appending a new column.
-            self.tabifyDockWidget(neighbours[-1], dock)
         dock.show()
         dock.raise_()
 
