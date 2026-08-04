@@ -3016,7 +3016,12 @@ on click.</li>
 <h4>Recording</h4>
 <ul>
 <li><b>Folder</b>: where recordings land. Defaults to
-<code>~/Documents/DSES_SA_Recordings</code>.</li>
+<code>~/Documents/DSES_SA_Recordings</code>. Change it with this button or
+from <b>File → Set Recording Folder…</b>; the folder is checked for
+writability and the next recording uses it immediately (it cannot be changed
+while a recording is running, so a run is never split across two folders).
+<b>File → Open Recordings Folder</b> opens the current one in your file
+manager.</li>
 <li><b>Source</b>: optional source / pulsar name (e.g. <code>B0329+54</code>).
 When set it is folded into the recording filename and written into the SIGPROC
 <code>.fil</code> header (<code>source_name</code>, plus RA/Dec derived from the
@@ -5907,7 +5912,13 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
         bar = QtWidgets.QMenuBar(self)
 
         file_menu = bar.addMenu("&File")
-        open_dir_act = QtGui.QAction("Open &Recordings Folder", self)
+        choose_dir_act = QtGui.QAction("&Set Recording Folder…", self)
+        choose_dir_act.setToolTip(
+            "Choose where recordings are written (same as the Folder button "
+            "in the Recording panel)")
+        choose_dir_act.triggered.connect(self._on_change_recording_dir)
+        file_menu.addAction(choose_dir_act)
+        open_dir_act = QtGui.QAction("&Open Recordings Folder", self)
         open_dir_act.triggered.connect(lambda: QtGui.QDesktopServices.openUrl(
             QtCore.QUrl.fromLocalFile(self.recording_dir)))
         file_menu.addAction(open_dir_act)
@@ -6476,6 +6487,16 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
         return d
 
     def _on_change_recording_dir(self):
+        """Choose where recordings are written (File menu + the Recording
+        panel's Folder button). Takes effect immediately: all three
+        recorders build their path from self.recording_dir at the moment
+        recording starts. Refused mid-recording so a run can't be split
+        across two folders."""
+        if self.record:
+            QtWidgets.QMessageBox.information(
+                self, "Recording in progress",
+                "Stop the recording before changing the folder.")
+            return
         new_dir = QtWidgets.QFileDialog.getExistingDirectory(
             self,
             "Choose recording folder",
@@ -6483,15 +6504,23 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
         )
         if not new_dir:
             return
+        try:
+            os.makedirs(new_dir, exist_ok=True)
+            probe = os.path.join(new_dir, ".dses_write_test")
+            with open(probe, "w") as f:
+                f.write("")
+            os.remove(probe)
+        except OSError as exc:
+            QtWidgets.QMessageBox.warning(
+                self, "Folder not usable",
+                f"Recordings could not be written to:\n{new_dir}\n\n{exc}\n\n"
+                f"Keeping the previous folder:\n{self.recording_dir}")
+            return
         self.recording_dir = new_dir
         self._save_setting('recording', 'directory', new_dir)
         self._recording_dir_button.setText("Folder: " + self._elided_dir())
         self._recording_dir_button.setToolTip(new_dir)
-        QtWidgets.QMessageBox.information(
-            self,
-            "Recording folder changed",
-            "New folder will be used the next time the program is launched."
-        )
+        self._status_bar.showMessage(f"Recording folder: {new_dir}", 8000)
 
     def _on_change_device_clicked(self):
         """Re-open the device picker. Switching to a different radio needs
