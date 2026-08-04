@@ -2879,7 +2879,12 @@ science settings. On the <b>left</b>, beside the plots they belong to:
 <b>Spectrum Display</b> and <b>Waterfall Display</b>. Drag a panel by its
 title bar to rearrange, stack panels as tabs, tear one off into its own
 floating window (handy on a second monitor), or close it; the <b>View</b>
-menu shows and hides every panel, and your arrangement is remembered across
+menu is organised by column — <b>Display Panels (left)</b> and <b>Control
+Panels (right)</b> — and each of those opens onto a <i>Show this column</i>
+switch that hides or restores the whole column in one click, followed by
+that column's individual panels. Hiding a column remembers which of its
+panels were open, so showing it again brings back exactly those (a panel you
+had closed on purpose stays closed). Your arrangement is remembered across
 runs. To float a panel, <b>drag it out by its title bar</b>. The title
 bar's three buttons act on it afterwards: the first <b>docks a floating
 panel back</b> into the window — which restores the default panel layout,
@@ -4692,12 +4697,20 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
             dock.setWidget(scroll)
             dock.setTitleBarWidget(
                 _DockTitleBar(dock, area, dock))
+            dock._dses_home_area = area          # column membership, fixed
             self.addDockWidget(area, dock)
             self._docks.append(dock)
-            # View menu toggle, inserted above the Full Screen separator (in
-            # creation order — inserting before the separator each time).
-            self._view_menu.insertAction(self._view_menu_sep,
-                                         dock.toggleViewAction())
+            # File the panel's show/hide toggle under its column's submenu.
+            entry = self._col_menus.get(area)
+            if entry is not None:
+                entry[1].addAction(dock.toggleViewAction())
+            else:                                  # unknown area: top level
+                self._view_menu.insertAction(self._view_menu_sep,
+                                             dock.toggleViewAction())
+            # Keep the column check mark honest when panels are toggled
+            # individually: a column with nothing visible is unchecked.
+            dock.visibilityChanged.connect(
+                lambda _v, a=area: self._refresh_dock_column_checks(a))
             # Insert groups above the trailing stretch.
             def _add(w, _lay=lay):
                 _lay.insertWidget(_lay.count() - 1, w)
@@ -5907,6 +5920,26 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
         # Dock show/hide toggles are appended here by _make_dock as each
         # panel is created (the menu bar is built first in __init__).
         self._view_menu = bar.addMenu("&View")
+        # Two column entries, each a checkable action that shows/hides the
+        # WHOLE column, with that column's panels as a submenu underneath
+        # (Rick, 2026-08-04). _make_dock files each panel into the submenu
+        # matching the area it was created in.
+        # Each column is a SUBMENU whose first item toggles the whole column,
+        # with that column's panels listed below it. (A checkable action that
+        # owns a submenu is not clickable in Qt — clicking only opens the
+        # submenu — so the column toggle has to live inside.)
+        self._col_menus = {}
+        for area, label in ((Qt.LeftDockWidgetArea, "&Display Panels (left)"),
+                            (Qt.RightDockWidgetArea, "&Control Panels (right)")):
+            sub = self._view_menu.addMenu(label)
+            act = QtGui.QAction("Show this column", self)
+            act.setCheckable(True)
+            act.setChecked(True)
+            act.triggered.connect(
+                lambda on, a=area: self._set_dock_column_visible(a, on))
+            sub.addAction(act)
+            sub.addSeparator()
+            self._col_menus[area] = (act, sub)
         self._view_menu_sep = self._view_menu.addSeparator()
         fs_act = QtGui.QAction("&Full Screen", self)
         fs_act.setCheckable(True)
@@ -5940,6 +5973,45 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
         about_act.triggered.connect(self._show_about_dialog)
         help_menu.addAction(about_act)
         return bar
+
+    def _docks_in_area(self, area):
+        """Panels belonging to `area` — by creation area, not current
+        position, so a floated panel still counts as part of its column."""
+        return [d for d in getattr(self, '_docks', [])
+                if getattr(d, '_dses_home_area', None) == area]
+
+    def _set_dock_column_visible(self, area, on):
+        """Show/hide a whole column of panels at once (View menu).
+
+        Hiding remembers which panels were visible so showing the column
+        again restores exactly that set rather than blindly showing all —
+        a panel the user had closed individually stays closed.
+        """
+        docks = self._docks_in_area(area)
+        if not docks:
+            return
+        if not hasattr(self, '_col_hidden_state'):
+            self._col_hidden_state = {}
+        if on:
+            remembered = self._col_hidden_state.get(area)
+            for d in docks:
+                d.setVisible(remembered is None or d.objectName() in remembered)
+        else:
+            self._col_hidden_state[area] = {
+                d.objectName() for d in docks if d.isVisible()}
+            for d in docks:
+                d.setVisible(False)
+        self._refresh_dock_column_checks(area)
+
+    def _refresh_dock_column_checks(self, area):
+        entry = getattr(self, '_col_menus', {}).get(area)
+        if entry is None:
+            return
+        act, _sub = entry
+        any_visible = any(d.isVisible() for d in self._docks_in_area(area))
+        if act.isChecked() != any_visible:
+            with _SignalBlocker(act):
+                act.setChecked(any_visible)
 
     def _show_help_dialog(self):
         HelpDialog(self).exec()
