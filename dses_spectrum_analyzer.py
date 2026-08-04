@@ -2880,12 +2880,13 @@ science settings. On the <b>left</b>, beside the plots they belong to:
 title bar to rearrange, stack panels as tabs, tear one off into its own
 floating window (handy on a second monitor), or close it; the <b>View</b>
 menu shows and hides every panel, and your arrangement is remembered across
-runs. Each panel has a tinted title bar carrying three buttons: the first
-<b>floats</b> the panel as a separate window (and docks it back — the icon
-shows an arrow leaving or entering a panel), the second <b>enlarges</b> a
-floating panel just enough that all of its controls are visible, clicking
-again to restore the previous size (it is greyed out while the panel is
-docked, where the layout sets the size), and <b>✕</b> hides the panel. When
+runs. To float a panel, <b>drag it out by its title bar</b>. The title
+bar's three buttons act on it afterwards: the first <b>docks a floating
+panel back</b> into the window (the icon shows an arrow entering a panel;
+greyed out while already docked), the second <b>enlarges</b> a floating
+panel just enough that all of its controls are visible, clicking again to
+restore the previous size (also greyed while docked, where the layout sets
+the size), and <b>✕</b> hides the panel. When
 a column runs out of room Qt stacks panels as tabs along its edge — those
 tabs are colored (pastel blue, DSES teal when selected) so the stack is easy
 to spot. The two display panels are deliberately restricted to the left column
@@ -4328,9 +4329,8 @@ class _DockTitleBar(QtWidgets.QWidget):
             return b
 
         _S = QtWidgets.QStyle
-        self._icon_float = _detach_icon(False)
         self._icon_dock = _detach_icon(True)
-        self._float_btn = _btn(self._icon_float, "", self._toggle_float)
+        self._float_btn = _btn(self._icon_dock, "", self._dock_back)
         self._max_btn = _btn(self.style().standardIcon(_S.SP_TitleBarMaxButton),
                              "Enlarge this floating panel so all its controls "
                              "fit (click again to restore)",
@@ -4342,24 +4342,20 @@ class _DockTitleBar(QtWidgets.QWidget):
         dock.dockLocationChanged.connect(lambda _a: self._sync())
         self._sync()
 
-    def _toggle_float(self):
-        """Float the panel, or dock it back — with a rescue.
+    def _dock_back(self):
+        """Dock a floating panel back into the window — one-way by design.
 
-        setFloating(False) re-docks into the panel's REMEMBERED slot, and
-        when that column has no free space Qt squeezes the panel to nothing
-        instead of creating a tab group (tabs only appear on manual drops).
-        The panel then 'disappears' while still reporting visible — Rick hit
-        exactly this (2026-08-04). After docking we let the layout settle
-        one event-loop turn, then check the result and, if the panel came
-        back squeezed, tabify it onto the tallest dock in its default area —
-        the tab group it should have gotten in the first place.
+        The button's old 'undock' direction just left the panel floating on
+        top of where it already was, which was useless next to dragging the
+        title bar (Rick, 2026-08-04) — and button-floated panels then
+        confused the re-dock placement. Undocking is a drag; this button
+        only brings a panel home, and it is greyed out while docked.
         """
         dock = self._dock
-        if dock.isFloating():
-            dock.setFloating(False)
-            QtCore.QTimer.singleShot(0, self._rescue_if_squeezed)
-        else:
-            dock.setFloating(True)
+        if not dock.isFloating():
+            return
+        dock.setFloating(False)
+        QtCore.QTimer.singleShot(0, self._rescue_if_squeezed)
 
     def _rescue_if_squeezed(self):
         dock = self._dock
@@ -4423,13 +4419,14 @@ class _DockTitleBar(QtWidgets.QWidget):
         self.style().drawPrimitive(QtWidgets.QStyle.PE_Widget, opt, p, self)
 
     def _sync(self, *_):
-        """Icon + tooltip follow the dock's state; maximize only applies to a
-        floating panel (a docked one is sized by the layout)."""
+        """Buttons follow the dock's state: dock-back and maximize apply
+        only to a floating panel (a docked one is sized by the layout and
+        is undocked by dragging its title bar)."""
         floating = self._dock.isFloating()
-        self._float_btn.setIcon(self._icon_dock if floating else self._icon_float)
+        self._float_btn.setEnabled(floating)
         self._float_btn.setToolTip(
             "Dock this panel back into the window" if floating
-            else "Float this panel as a separate window")
+            else "Drag the title bar to float this panel")
         self._max_btn.setEnabled(floating)
         if not floating:
             self._pre_max_geom = None
