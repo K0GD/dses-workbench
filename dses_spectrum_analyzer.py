@@ -4343,38 +4343,33 @@ class _DockTitleBar(QtWidgets.QWidget):
         self._sync()
 
     def _dock_back(self):
-        """Dock a floating panel back into the window — one-way by design.
+        """Put the panel back at the end of its home column — deterministic.
 
-        The button's old 'undock' direction just left the panel floating on
-        top of where it already was, which was useless next to dragging the
-        title bar (Rick, 2026-08-04) — and button-floated panels then
-        confused the re-dock placement. Undocking is a drag; this button
-        only brings a panel home, and it is greyed out while docked.
+        History (2026-08-04): setFloating(False) re-docks into Qt's
+        REMEMBERED slot, which squeezed panels to nothing in a full column;
+        a timer-based tabify rescue then produced states where Qt thought
+        the panel was docked while it rendered floating, leaving the
+        buttons greyed and unresponsive. addDockWidget is the one primitive
+        that always lands visibly: it splits the home column and respects
+        minimum sizes, floating or not. No remembered slot, no timer, no
+        tabify. Clicking while already docked simply moves the panel to the
+        end of its home column — a benign 'reset position'.
         """
         dock = self._dock
-        if not dock.isFloating():
-            return
-        dock.setFloating(False)
-        QtCore.QTimer.singleShot(0, self._rescue_if_squeezed)
-
-    def _rescue_if_squeezed(self):
-        dock = self._dock
-        if dock.isFloating():
-            return
         mw = dock.parentWidget()
-        if not isinstance(mw, QtWidgets.QMainWindow):
+        while mw is not None and not isinstance(mw, QtWidgets.QMainWindow):
+            mw = mw.parentWidget()
+        if mw is None:
+            dock.setFloating(False)
             return
-        sz = dock.size()
-        if dock.isVisible() and sz.width() >= 60 and sz.height() >= 60:
-            return                          # landed with real space — done
-        hosts = [d for d in mw.findChildren(QtWidgets.QDockWidget)
-                 if d is not dock and not d.isFloating() and d.isVisible()
-                 and mw.dockWidgetArea(d) == self._default_area
-                 and d.height() >= 60]
-        if hosts:
-            mw.tabifyDockWidget(max(hosts, key=lambda d: d.height()), dock)
-        else:
-            mw.addDockWidget(self._default_area, dock)
+        # BOTH calls are required, in this order. addDockWidget registers
+        # the target area but does NOT clear the floating state (verified:
+        # the dock keeps rendering floating while dockWidgetArea() already
+        # reports the new area — Rick's 'clicked dock, nothing happened');
+        # setFloating(False) alone re-docks into the unreliable remembered
+        # slot. Register the area first, then drop the float flag.
+        mw.addDockWidget(self._default_area, dock)
+        dock.setFloating(False)
         dock.show()
         dock.raise_()
 
@@ -4419,14 +4414,15 @@ class _DockTitleBar(QtWidgets.QWidget):
         self.style().drawPrimitive(QtWidgets.QStyle.PE_Widget, opt, p, self)
 
     def _sync(self, *_):
-        """Buttons follow the dock's state: dock-back and maximize apply
-        only to a floating panel (a docked one is sized by the layout and
-        is undocked by dragging its title bar)."""
+        """Maximize applies only to a floating panel (a docked one is sized
+        by the layout). The home button stays enabled in every state — its
+        action is safe and useful both floating (dock it) and docked (reset
+        position), and never being greyed means a state desync can't strand
+        the user with a dead button again."""
         floating = self._dock.isFloating()
-        self._float_btn.setEnabled(floating)
         self._float_btn.setToolTip(
-            "Dock this panel back into the window" if floating
-            else "Drag the title bar to float this panel")
+            "Dock this panel into its home column" if floating
+            else "Reset this panel to the end of its home column")
         self._max_btn.setEnabled(floating)
         if not floating:
             self._pre_max_geom = None
