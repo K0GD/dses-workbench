@@ -2880,12 +2880,15 @@ science settings. On the <b>left</b>, beside the plots they belong to:
 title bar to rearrange, stack panels as tabs, tear one off into its own
 floating window (handy on a second monitor), or close it; the <b>View</b>
 menu shows and hides every panel, and your arrangement is remembered across
-runs. Each panel's title bar carries three buttons: <b>⇤</b> returns a
-panel that has been floated or moved to its default position (greyed out
-when it is already there), <b>❐</b> floats or re-docks it, and <b>✕</b>
-hides it. When a column runs out of room Qt stacks panels as tabs along its
-edge — those tabs are colored (pastel blue, DSES teal when selected) so the
-stack is easy to spot. The two display panels are deliberately restricted to the left column
+runs. Each panel has a tinted title bar carrying three buttons: the first
+<b>floats</b> the panel as a separate window (and docks it back — the icon
+shows an arrow leaving or entering a panel), the second <b>enlarges</b> a
+floating panel just enough that all of its controls are visible, clicking
+again to restore the previous size (it is greyed out while the panel is
+docked, where the layout sets the size), and <b>✕</b> hides the panel. When
+a column runs out of room Qt stacks panels as tabs along its edge — those
+tabs are colored (pastel blue, DSES teal when selected) so the stack is easy
+to spot. The two display panels are deliberately restricted to the left column
 (they describe the plots, so they stay next to them) — they can still be
 reordered there, tabbed together, or floated freely. The
 menu bar (File / View / Radio / Recording / Help) duplicates the important
@@ -4238,19 +4241,52 @@ class SoapyGenericSource(RadioSource):
                   file=sys.stderr)
 
 
-class _DockTitleBar(QtWidgets.QWidget):
-    """Dock title bar with a third button: 'return to default position'.
+def _detach_icon(dock_it):
+    """Small pop-out / dock-in icon, drawn rather than taken from a font.
 
-    Qt's stock title bar offers only float and close, so a panel dragged out
-    to a second monitor has no one-click way home (Rick, 2026-08-04). The
-    home button re-docks the panel into the area it was created in and is
-    enabled only while the dock is floating or has wandered to another area.
+    Qt's standard set has no clear float/dock glyph, and unicode arrows
+    render as an ambiguous dash at this size (and may be missing outright in
+    the default font on macOS/Linux). Drawing it guarantees the same
+    unmistakable mark on every platform: a panel outline with an arrow
+    leaving it (float) or entering it (dock).
+    """
+    pm = QtGui.QPixmap(12, 12)
+    pm.fill(Qt.transparent)
+    p = QtGui.QPainter(pm)
+    p.setRenderHint(QtGui.QPainter.Antialiasing, True)
+    pen = QtGui.QPen(QtGui.QColor("#1e3a5f"))
+    pen.setWidthF(1.3)
+    p.setPen(pen)
+    p.drawRect(1, 4, 6, 6)                       # the panel
+    if dock_it:                                  # arrow INTO the panel
+        p.drawLine(10, 1, 5, 6)
+        p.drawLine(5, 6, 8, 6)
+        p.drawLine(5, 6, 5, 3)
+    else:                                        # arrow OUT of the panel
+        p.drawLine(6, 5, 10, 1)
+        p.drawLine(7, 1, 10, 1)
+        p.drawLine(10, 1, 10, 4)
+    p.end()
+    return QtGui.QIcon(pm)
+
+
+class _DockTitleBar(QtWidgets.QWidget):
+    """Tinted dock title bar with float/dock, maximize, and hide buttons.
+
+    Button order and meaning follow Rick's 2026-08-04 spec: float/dock
+    first (drawn pop-out icon), then maximize — the box icon everyone reads
+    as 'make this bigger', which here enlarges a FLOATING panel just enough
+    to show all its controls (not full screen) and toggles back — then the
+    close X. An earlier 'return to default position' button was removed: in
+    the floating case it left the panel floating, resized it, and wedged the
+    dock button, and it earned its keep less than a working maximize.
     """
 
-    def __init__(self, dock, default_area, home_cb, parent=None):
+    def __init__(self, dock, default_area, parent=None):
         super().__init__(parent)
         self._dock = dock
         self._default_area = default_area
+        self._pre_max_geom = None
         # Tinted header so each panel's title reads as a header rather than
         # blending into its contents (Rick, 2026-08-04). Scoped by objectName
         # so the fill lands on the bar only — the child buttons keep their
@@ -4274,13 +4310,9 @@ class _DockTitleBar(QtWidgets.QWidget):
         lay.addWidget(self._label)
         lay.addStretch(1)
 
-        def _btn(std_pixmap, tip, slot):
+        def _btn(icon, tip, slot):
             b = QtWidgets.QToolButton(self)
-            # Qt standard icons, not unicode glyphs: a glyph like U+21E4
-            # renders as an ambiguous dash at 18 px (and may be missing
-            # entirely in the default font on macOS/Linux), which made the
-            # home button unrecognizable and hard to hit.
-            b.setIcon(self.style().standardIcon(std_pixmap))
+            b.setIcon(icon)
             b.setIconSize(QtCore.QSize(12, 12))
             b.setToolTip(tip)
             b.setAutoRaise(True)
@@ -4288,27 +4320,59 @@ class _DockTitleBar(QtWidgets.QWidget):
             # Transparent over the tint until hovered, so the header reads as
             # one band rather than a row of boxes.
             b.setStyleSheet("QToolButton { background: transparent;"
-                            " border: none; color: #1e3a5f; }"
+                            " border: none; }"
                             "QToolButton:hover { background: #bfdcf5;"
-                            " border-radius: 3px; }"
-                            "QToolButton:disabled { color: #9bb0c4; }")
+                            " border-radius: 3px; }")
             b.clicked.connect(slot)
             lay.addWidget(b)
             return b
 
         _S = QtWidgets.QStyle
-        self._home_btn = _btn(_S.SP_DialogResetButton,
-                              "Return this panel to its default position",
-                              lambda: home_cb(dock, default_area))
-        self._float_btn = _btn(_S.SP_TitleBarNormalButton,
-                               "Float / dock this panel",
+        self._icon_float = _detach_icon(False)
+        self._icon_dock = _detach_icon(True)
+        self._float_btn = _btn(self._icon_float, "",
                                lambda: dock.setFloating(not dock.isFloating()))
-        _btn(_S.SP_TitleBarCloseButton,
+        self._max_btn = _btn(self.style().standardIcon(_S.SP_TitleBarMaxButton),
+                             "Enlarge this floating panel so all its controls "
+                             "fit (click again to restore)",
+                             self._toggle_maximize)
+        _btn(self.style().standardIcon(_S.SP_TitleBarCloseButton),
              "Hide this panel (View menu brings it back)", dock.close)
 
         dock.topLevelChanged.connect(self._sync)
         dock.dockLocationChanged.connect(lambda _a: self._sync())
         self._sync()
+
+    def _toggle_maximize(self):
+        """Grow a floating panel to fit its contents, or restore it.
+
+        Deliberately NOT full screen (Rick): the useful size is 'big enough
+        that nothing is cut off', clamped to the screen so the title bar
+        stays reachable.
+        """
+        dock = self._dock
+        if not dock.isFloating():
+            return
+        if self._pre_max_geom is not None:
+            dock.setGeometry(self._pre_max_geom)
+            self._pre_max_geom = None
+            return
+        self._pre_max_geom = dock.geometry()
+        outer = dock.widget()
+        inner = outer.widget() if isinstance(outer, QtWidgets.QScrollArea) else outer
+        hint = (inner.sizeHint() if inner is not None else outer.sizeHint())
+        try:
+            avail = dock.screen().availableGeometry()
+        except Exception:
+            avail = QtWidgets.QApplication.primaryScreen().availableGeometry()
+        w = max(320, min(hint.width() + 40, int(avail.width() * 0.9)))
+        h = max(240, min(hint.height() + 60, int(avail.height() * 0.9)))
+        dock.resize(w, h)
+        # Nudge back on-screen if the new size pushed it past an edge.
+        g = dock.frameGeometry()
+        x = min(max(g.x(), avail.x()), avail.right() - g.width())
+        y = min(max(g.y(), avail.y()), avail.bottom() - g.height())
+        dock.move(x, y)
 
     def paintEvent(self, event):
         # A plain QWidget subclass does NOT honor a stylesheet background on
@@ -4320,15 +4384,16 @@ class _DockTitleBar(QtWidgets.QWidget):
         self.style().drawPrimitive(QtWidgets.QStyle.PE_Widget, opt, p, self)
 
     def _sync(self, *_):
-        """Home is only meaningful when the dock isn't already home."""
-        try:
-            at_home = (not self._dock.isFloating()
-                       and self._dock.parent() is not None
-                       and self._dock.parentWidget().dockWidgetArea(self._dock)
-                       == self._default_area)
-        except Exception:
-            at_home = False
-        self._home_btn.setEnabled(not at_home)
+        """Icon + tooltip follow the dock's state; maximize only applies to a
+        floating panel (a docked one is sized by the layout)."""
+        floating = self._dock.isFloating()
+        self._float_btn.setIcon(self._icon_dock if floating else self._icon_float)
+        self._float_btn.setToolTip(
+            "Dock this panel back into the window" if floating
+            else "Float this panel as a separate window")
+        self._max_btn.setEnabled(floating)
+        if not floating:
+            self._pre_max_geom = None
 
 
 class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
@@ -4462,7 +4527,7 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
             scroll.setMinimumHeight(60)
             dock.setWidget(scroll)
             dock.setTitleBarWidget(
-                _DockTitleBar(dock, area, self._dock_go_home, dock))
+                _DockTitleBar(dock, area, dock))
             self.addDockWidget(area, dock)
             self._docks.append(dock)
             # View menu toggle, inserted above the Full Screen separator (in
@@ -5711,22 +5776,6 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
         about_act.triggered.connect(self._show_about_dialog)
         help_menu.addAction(about_act)
         return bar
-
-    def _dock_go_home(self, dock, area):
-        """Put a floating/moved panel back where it started: re-dock it into
-        the area it was created in.
-
-        Deliberately a plain addDockWidget and nothing more. An earlier
-        version also tabified the dock behind its neighbours to preserve
-        stacking; with two or more neighbours that left the re-docked panel
-        AND one neighbour rendering nowhere while both still reported
-        visible — Qt lost them inside a zero-height tab group. Letting Qt
-        place the dock itself is predictable and always shows the panel.
-        """
-        dock.setFloating(False)
-        self.addDockWidget(area, dock)
-        dock.show()
-        dock.raise_()
 
     def _show_help_dialog(self):
         HelpDialog(self).exec()
