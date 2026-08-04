@@ -129,8 +129,8 @@ flagging for Soapy sources.
       Get the exact scenario from Ray (app, mode, signal type, hardware,
       settings) and reproduce with a calibrated weak signal first.
 
-- [ ] **Field-analysis cluster (quick-look + auto post-processing +
-      self-contained PDFs) — IMPLEMENTED 2026-08-02, ship in 1.1.9:**
+- [x] **Field-analysis cluster (quick-look + auto post-processing +
+      self-contained PDFs) — SHIPPED in 1.1.8 (2026-08-03):**
       one pipeline (`fold_analysis.py` + `fold_pdf.py`) serves all three:
       readfile sanity → rfifind mask → band-edge zap → catalog prepfold
       (or manual -p/-dm for magnetars/tests) → parse → verdict →
@@ -303,8 +303,7 @@ flagging for Soapy sources.
       panel (mode, squelch, volume, audio-record), tuned marker shown on
       the spectrum. Settings persist in a new `[audio]`/`[demod]` group.
 
-- [ ] **Recording timebase integrity — IMPLEMENTED 2026-08-02, ship in
-      1.1.8:** `FilterbankSink` now reads gr-uhd `rx_time` overflow tags,
+- [x] **Recording timebase integrity — SHIPPED in 1.1.8 (2026-08-03):** `FilterbankSink` now reads gr-uhd `rx_time` overflow tags,
       measures each gap exactly, and zero-pads it live (100 µs threshold;
       10 s/event and 60 s/recording caps → beyond that the file keeps
       recording but is flagged TIMEBASE BROKEN); live gap readout in the
@@ -349,8 +348,8 @@ flagging for Soapy sources.
         no astropy dependency): cos(HA_set) = (sin el_min − sin lat · sin dec)
         / (cos lat · cos dec); circumpolar → "always up".
 
-- [ ] **Drift-scan recording support (ezRA `.txt` format) — IMPLEMENTED +
-      FIELD-VERIFIED 2026-08-02, ship in 1.1.8:** third recording format
+- [x] **Drift-scan recording support (ezRA `.txt` format) — SHIPPED in
+      1.1.8 (2026-08-03), field-verified 2026-08-02:** third recording format
       "Drift scan (ezRA .txt)" with Az/El fields in the recording panel,
       `[site]` settings (Haswell defaults), ezCol filename convention with
       same-hour letter suffixes, dish-proven geometry defaults (4096 bins,
@@ -452,8 +451,8 @@ menu bar!) + drift-scan box test (dock behavior on headless Openbox/xrdp
 — re-check the 0x0-screen guards); docs sync + PDF; version bump; cut.
 
 
-- [ ] **Replace the fixed two-column sidebar with a menu bar + dockable
-      panels.** DECIDED: dockable panels (PyCharm/Chirp style), not MDI.
+- [x] **Replace the fixed two-column sidebar with a menu bar + dockable
+      panels — CORE LANDED on main 2026-08-04 (not yet cut).** DECIDED: dockable panels (PyCharm/Chirp style), not MDI.
       Rationale — the ~300 px sidebar is the root cause of a recurring
       class of bugs, not a cosmetic preference: Ray's unreachable gain
       slider (clipped), status messages truncated below the Record combo,
