@@ -4342,10 +4342,13 @@ class _DockTitleBar(QtWidgets.QWidget):
             b.setFixedSize(18, 18)
             # Transparent over the tint until hovered, so the header reads as
             # one band rather than a row of boxes.
+            # Transparent until hovered; a disabled button must NOT light up
+            # on hover, or a greyed control still reads as clickable.
             b.setStyleSheet("QToolButton { background: transparent;"
                             " border: none; }"
-                            "QToolButton:hover { background: #bfdcf5;"
-                            " border-radius: 3px; }")
+                            "QToolButton:hover:enabled { background: #bfdcf5;"
+                            " border-radius: 3px; }"
+                            "QToolButton:disabled { background: transparent; }")
             b.clicked.connect(slot)
             lay.addWidget(b)
             return b
@@ -4500,9 +4503,14 @@ class _DockTitleBar(QtWidgets.QWidget):
         dropped so the icon goes back to 'enlarge' and no stale rectangle is
         restored later."""
         floating = self._visually_floating()
+        # Both buttons apply only to a FLOATING panel: nothing to dock back
+        # and nothing to enlarge when the layout already owns the panel
+        # (Rick, 2026-08-04 — an active-looking dock button on a docked
+        # panel invites a click that can only be a no-op or a surprise).
+        self._float_btn.setEnabled(floating)
         self._float_btn.setToolTip(
             "Dock this panel back — restores the default panel layout"
-            if floating else "Restore the default panel layout")
+            if floating else "Already docked — drag the title bar to float it")
         self._max_btn.setEnabled(floating)
         if not floating:
             self._pre_max_geom = None
