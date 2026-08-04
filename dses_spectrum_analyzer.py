@@ -2880,7 +2880,12 @@ science settings. On the <b>left</b>, beside the plots they belong to:
 title bar to rearrange, stack panels as tabs, tear one off into its own
 floating window (handy on a second monitor), or close it; the <b>View</b>
 menu shows and hides every panel, and your arrangement is remembered across
-runs. The two display panels are deliberately restricted to the left column
+runs. Each panel's title bar carries three buttons: <b>⇤</b> returns a
+panel that has been floated or moved to its default position (greyed out
+when it is already there), <b>❐</b> floats or re-docks it, and <b>✕</b>
+hides it. When a column runs out of room Qt stacks panels as tabs along its
+edge — those tabs are colored (pastel blue, DSES teal when selected) so the
+stack is easy to spot. The two display panels are deliberately restricted to the left column
 (they describe the plots, so they stay next to them) — they can still be
 reordered there, tabbed together, or floated freely. The
 menu bar (File / View / Radio / Recording / Help) duplicates the important
@@ -4233,6 +4238,59 @@ class SoapyGenericSource(RadioSource):
                   file=sys.stderr)
 
 
+class _DockTitleBar(QtWidgets.QWidget):
+    """Dock title bar with a third button: 'return to default position'.
+
+    Qt's stock title bar offers only float and close, so a panel dragged out
+    to a second monitor has no one-click way home (Rick, 2026-08-04). The
+    home button re-docks the panel into the area it was created in and is
+    enabled only while the dock is floating or has wandered to another area.
+    """
+
+    def __init__(self, dock, default_area, home_cb, parent=None):
+        super().__init__(parent)
+        self._dock = dock
+        self._default_area = default_area
+        lay = QtWidgets.QHBoxLayout(self)
+        lay.setContentsMargins(6, 2, 2, 2)
+        lay.setSpacing(2)
+        self._label = QtWidgets.QLabel(dock.windowTitle())
+        self._label.setStyleSheet("font-weight: 600;")
+        lay.addWidget(self._label)
+        lay.addStretch(1)
+
+        def _btn(text, tip, slot):
+            b = QtWidgets.QToolButton(self)
+            b.setText(text)
+            b.setToolTip(tip)
+            b.setAutoRaise(True)
+            b.setFixedSize(18, 18)
+            b.clicked.connect(slot)
+            lay.addWidget(b)
+            return b
+
+        self._home_btn = _btn("⇤", "Return this panel to its default position",
+                              lambda: home_cb(dock, default_area))
+        self._float_btn = _btn("❐", "Float / dock this panel",
+                               lambda: dock.setFloating(not dock.isFloating()))
+        _btn("✕", "Hide this panel (View menu brings it back)", dock.close)
+
+        dock.topLevelChanged.connect(self._sync)
+        dock.dockLocationChanged.connect(lambda _a: self._sync())
+        self._sync()
+
+    def _sync(self, *_):
+        """Home is only meaningful when the dock isn't already home."""
+        try:
+            at_home = (not self._dock.isFloating()
+                       and self._dock.parent() is not None
+                       and self._dock.parentWidget().dockWidgetArea(self._dock)
+                       == self._default_area)
+        except Exception:
+            at_home = False
+        self._home_btn.setEnabled(not at_home)
+
+
 class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
 
     # Both bases define `connect` and `disconnect`. PySide6's QObject.connect/
@@ -4255,6 +4313,27 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
         QtWidgets.QMainWindow.__init__(self)
         self.setObjectName("dses_main")          # required for saveState()
         self.setDockNestingEnabled(True)
+        # When a dock column runs out of room Qt stacks panels as tabs along
+        # its edge — with the default styling those tabs are easy to miss
+        # entirely (Rick, 2026-08-04). Pastel fills + a teal selected tab
+        # (DSES house color) make the stack obvious at a glance.
+        self.setStyleSheet("""
+            QTabBar::tab {
+                background: #dbeafe;            /* pastel blue  */
+                color: #1e3a5f;
+                border: 1px solid #93b4d4;
+                border-radius: 4px;
+                padding: 4px 10px;
+                margin: 2px;
+                font-weight: 600;
+            }
+            QTabBar::tab:selected {
+                background: #156082;            /* DSES teal    */
+                color: #ffffff;
+                border-color: #0d4258;
+            }
+            QTabBar::tab:hover:!selected { background: #bfdcf5; }
+        """)
         self.setWindowTitle(f"{APP_NAME}  —  v{APP_VERSION}")
         # Set the window/Dock icon to the bundled DSES pulsar on Windows/Linux.
         #
@@ -4342,6 +4421,8 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
             scroll.setMinimumWidth(min_width)
             scroll.setMinimumHeight(60)
             dock.setWidget(scroll)
+            dock.setTitleBarWidget(
+                _DockTitleBar(dock, area, self._dock_go_home, dock))
             self.addDockWidget(area, dock)
             self._docks.append(dock)
             # View menu toggle, inserted above the Full Screen separator (in
@@ -5590,6 +5671,21 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
         about_act.triggered.connect(self._show_about_dialog)
         help_menu.addAction(about_act)
         return bar
+
+    def _dock_go_home(self, dock, area):
+        """Put a floating/moved panel back where it started: re-dock into its
+        default area, tabbed behind whatever is already there so it can't
+        shove the other panels around."""
+        dock.setFloating(False)
+        neighbours = [d for d in self._docks
+                      if d is not dock and d.isVisible() and not d.isFloating()
+                      and self.dockWidgetArea(d) == area]
+        self.addDockWidget(area, dock)
+        if neighbours:
+            # Restore stacking order rather than appending a new column.
+            self.tabifyDockWidget(neighbours[-1], dock)
+        dock.show()
+        dock.raise_()
 
     def _show_help_dialog(self):
         HelpDialog(self).exec()
