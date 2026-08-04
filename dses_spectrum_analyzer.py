@@ -4330,8 +4330,7 @@ class _DockTitleBar(QtWidgets.QWidget):
         _S = QtWidgets.QStyle
         self._icon_float = _detach_icon(False)
         self._icon_dock = _detach_icon(True)
-        self._float_btn = _btn(self._icon_float, "",
-                               lambda: dock.setFloating(not dock.isFloating()))
+        self._float_btn = _btn(self._icon_float, "", self._toggle_float)
         self._max_btn = _btn(self.style().standardIcon(_S.SP_TitleBarMaxButton),
                              "Enlarge this floating panel so all its controls "
                              "fit (click again to restore)",
@@ -4342,6 +4341,46 @@ class _DockTitleBar(QtWidgets.QWidget):
         dock.topLevelChanged.connect(self._sync)
         dock.dockLocationChanged.connect(lambda _a: self._sync())
         self._sync()
+
+    def _toggle_float(self):
+        """Float the panel, or dock it back — with a rescue.
+
+        setFloating(False) re-docks into the panel's REMEMBERED slot, and
+        when that column has no free space Qt squeezes the panel to nothing
+        instead of creating a tab group (tabs only appear on manual drops).
+        The panel then 'disappears' while still reporting visible — Rick hit
+        exactly this (2026-08-04). After docking we let the layout settle
+        one event-loop turn, then check the result and, if the panel came
+        back squeezed, tabify it onto the tallest dock in its default area —
+        the tab group it should have gotten in the first place.
+        """
+        dock = self._dock
+        if dock.isFloating():
+            dock.setFloating(False)
+            QtCore.QTimer.singleShot(0, self._rescue_if_squeezed)
+        else:
+            dock.setFloating(True)
+
+    def _rescue_if_squeezed(self):
+        dock = self._dock
+        if dock.isFloating():
+            return
+        mw = dock.parentWidget()
+        if not isinstance(mw, QtWidgets.QMainWindow):
+            return
+        sz = dock.size()
+        if dock.isVisible() and sz.width() >= 60 and sz.height() >= 60:
+            return                          # landed with real space — done
+        hosts = [d for d in mw.findChildren(QtWidgets.QDockWidget)
+                 if d is not dock and not d.isFloating() and d.isVisible()
+                 and mw.dockWidgetArea(d) == self._default_area
+                 and d.height() >= 60]
+        if hosts:
+            mw.tabifyDockWidget(max(hosts, key=lambda d: d.height()), dock)
+        else:
+            mw.addDockWidget(self._default_area, dock)
+        dock.show()
+        dock.raise_()
 
     def _toggle_maximize(self):
         """Grow a floating panel to fit its contents, or restore it.
