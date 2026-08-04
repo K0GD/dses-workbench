@@ -2882,11 +2882,14 @@ floating window (handy on a second monitor), or close it; the <b>View</b>
 menu shows and hides every panel, and your arrangement is remembered across
 runs. To float a panel, <b>drag it out by its title bar</b>. The title
 bar's three buttons act on it afterwards: the first <b>docks a floating
-panel back</b> into the window (the icon shows an arrow entering a panel;
-greyed out while already docked), the second <b>enlarges</b> a floating
-panel just enough that all of its controls are visible, clicking again to
-restore the previous size (also greyed while docked, where the layout sets
-the size), and <b>✕</b> hides the panel. When
+panel back</b> into the window — which restores the default panel layout,
+the one arrangement Qt reliably rebuilds, so a panel can always be
+recovered. The second <b>enlarges</b> a floating panel just enough that all
+of its controls are visible; while enlarged the button shows a double-box
+<i>restore</i> icon and a click returns the panel to its previous size
+(resizing the panel by hand clears that state, so the next click enlarges
+afresh). It is greyed out while the panel is docked, where the layout sets
+the size. <b>✕</b> hides the panel. When
 a column runs out of room Qt stacks panels as tabs along its edge — those
 tabs are colored (pastel blue, DSES teal when selected) so the stack is easy
 to spot. The two display panels are deliberately restricted to the left column
