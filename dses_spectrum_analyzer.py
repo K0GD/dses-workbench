@@ -4313,6 +4313,30 @@ class _DockTitleBar(QtWidgets.QWidget):
 
         def _btn(icon, tip, slot):
             b = QtWidgets.QToolButton(self)
+
+            def _logged_slot(*_a, _slot=slot, _tip=tip):
+                try:
+                    import tempfile, time as _t, os as _os
+                    with open(_os.path.join(tempfile.gettempdir(),
+                                            "dses_dock_debug.log"), "a") as f:
+                        f.write(f"{_t.strftime('%H:%M:%S')} BTN "
+                                f"{dock.windowTitle()!r} {_tip[:28]!r} fired"
+                                + chr(10))
+                except Exception:
+                    pass
+                try:
+                    _slot()
+                except Exception:
+                    try:
+                        import tempfile, traceback, os as _os
+                        with open(_os.path.join(tempfile.gettempdir(),
+                                                "dses_dock_debug.log"), "a") as f:
+                            f.write("SLOT RAISED:" + chr(10)
+                                    + traceback.format_exc() + chr(10))
+                    except Exception:
+                        pass
+
+            slot = _logged_slot
             b.setIcon(icon)
             b.setIconSize(QtCore.QSize(12, 12))
             b.setToolTip(tip)
@@ -4382,15 +4406,70 @@ class _DockTitleBar(QtWidgets.QWidget):
         """
         dock = self._dock
         mw = self._main_window()
+
+        def _dbg(tag):
+            # Temporary diagnostics for the 2026-08-04 dock-button hunt:
+            # appends one line per step to the user temp dir on every home
+            # click. Harmless if left in; remove once the button is proven.
+            import tempfile, time as _t, traceback
+            path = os.path.join(tempfile.gettempdir(), "dses_dock_debug.log")
+            try:
+                g = dock.geometry()
+                area = mw.dockWidgetArea(dock) if mw else "?"
+                line = (f"{_t.strftime('%H:%M:%S')} {dock.windowTitle()!r} "
+                        f"{tag}: floating={dock.isFloating()} "
+                        f"win={type(dock.window()).__name__} "
+                        f"area={area!r} vis={dock.isVisible()} "
+                        f"geom={g.x()},{g.y()} {g.width()}x{g.height()}")
+            except Exception:
+                line = f"{tag}: DBG-FAILED " + traceback.format_exc(limit=2)
+            try:
+                with open(path, "a") as f:
+                    f.write(line + chr(10))
+            except Exception:
+                pass
+
         if mw is None:
+            _dbg("click but mw is None!")
             dock.setFloating(False)
             return
-        mw.removeDockWidget(dock)
-        mw.addDockWidget(self._default_area, dock)
-        dock.setFloating(False)
+        _dbg("click")
+        # restoreState is the ONLY reliable way back. Direct re-dock calls
+        # (setFloating(False) / addDockWidget / removeDockWidget, in every
+        # order) all end with Qt reporting floating=False, parent=main
+        # window, area=correct — while the panel still renders as a window
+        # over the plots, because the layout never places it (instrumented
+        # 2026-08-04, five sequences). Replaying the pristine layout snapshot
+        # rebuilds the whole arrangement through the same code path that lays
+        # the window out correctly at startup, which always works.
+        state = getattr(mw, "_default_dock_state", None)
+        if state is not None:
+            mw.restoreState(state)
+            _dbg("after restoreState(default)")
+        else:                       # pre-first-show fallback
+            dock.setFloating(False)
+            mw.addDockWidget(self._default_area, dock)
+            _dbg("after fallback re-dock")
         dock.show()
         dock.raise_()
+        # The dock is now docked in Qt's model (parented to the main window,
+        # area registered) but it KEEPS ITS OLD FLOATING RECTANGLE — verified
+        # by instrumentation 2026-08-04: geom stayed 950,515 294x901 through
+        # every step, so the panel rendered as a stray window over the plots
+        # while reporting itself docked. That was Rick's "clicking dock leaves
+        # the window on the main screen". QMainWindow's layout only reflows on
+        # its next relayout, so force one and give the dock a sane width.
+        lay = mw.layout()
+        if lay is not None:
+            lay.invalidate()
+            lay.activate()
+        try:
+            w = max(dock.widget().minimumWidth() if dock.widget() else 0, 290)
+            mw.resizeDocks([dock], [w], Qt.Horizontal)
+        except Exception:
+            pass
         self._sync()
+        _dbg("done")
 
     def _toggle_maximize(self):
         """Grow a floating panel to fit its contents, or restore it.
@@ -4438,8 +4517,8 @@ class _DockTitleBar(QtWidgets.QWidget):
         reset position — so no state desync can strand a dead button."""
         floating = self._visually_floating()
         self._float_btn.setToolTip(
-            "Dock this panel into its home column" if floating
-            else "Reset this panel to the end of its home column")
+            "Dock this panel back — restores the default panel layout"
+            if floating else "Restore the default panel layout")
         self._max_btn.setEnabled(floating)
         if not floating:
             self._pre_max_geom = None
@@ -6137,6 +6216,14 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
             self._geometry_applied = True
             self._restore_geometry()
             self._clamp_window_to_screen()
+            # Snapshot the PRISTINE arrangement before any saved state is
+            # applied — this is what the panel title bars' home button
+            # restores. restoreState is the only mechanism that reliably
+            # re-lays-out a dragged-out panel: every direct re-dock call
+            # sequence (setFloating/addDockWidget/removeDockWidget, in all
+            # orders) leaves Qt reporting the panel docked while it still
+            # renders as a window over the plots (instrumented 2026-08-04).
+            self._default_dock_state = self.saveState()
             # Restore the saved dock arrangement (positions, tabbing,
             # floating, visibility). Skipped silently on first run or if
             # the saved state predates a dock-name change.
