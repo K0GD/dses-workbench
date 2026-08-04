@@ -4271,6 +4271,24 @@ def _detach_icon(dock_it):
     return QtGui.QIcon(pm)
 
 
+def _restore_icon():
+    """Double-box 'restore' mark — the universal counterpart to maximize,
+    drawn rather than taken from a font so it matches _detach_icon and
+    renders identically on Windows/macOS/Linux."""
+    pm = QtGui.QPixmap(12, 12)
+    pm.fill(Qt.transparent)
+    p = QtGui.QPainter(pm)
+    p.setRenderHint(QtGui.QPainter.Antialiasing, True)
+    pen = QtGui.QPen(QtGui.QColor("#1e3a5f"))
+    pen.setWidthF(1.3)
+    p.setPen(pen)
+    p.drawRect(3, 1, 7, 7)      # back box
+    p.fillRect(1, 4, 7, 7, QtGui.QColor("#f7fafc"))
+    p.drawRect(1, 4, 7, 7)      # front box, offset — the classic restore mark
+    p.end()
+    return QtGui.QIcon(pm)
+
+
 class _DockTitleBar(QtWidgets.QWidget):
     """Tinted dock title bar with float/dock, maximize, and hide buttons.
 
@@ -4288,6 +4306,7 @@ class _DockTitleBar(QtWidgets.QWidget):
         self._dock = dock
         self._default_area = default_area
         self._pre_max_geom = None
+        self._max_geom = None
         # Tinted header so each panel's title reads as a header rather than
         # blending into its contents (Rick, 2026-08-04). Scoped by objectName
         # so the fill lands on the bar only — the child buttons keep their
@@ -4313,30 +4332,6 @@ class _DockTitleBar(QtWidgets.QWidget):
 
         def _btn(icon, tip, slot):
             b = QtWidgets.QToolButton(self)
-
-            def _logged_slot(*_a, _slot=slot, _tip=tip):
-                try:
-                    import tempfile, time as _t, os as _os
-                    with open(_os.path.join(tempfile.gettempdir(),
-                                            "dses_dock_debug.log"), "a") as f:
-                        f.write(f"{_t.strftime('%H:%M:%S')} BTN "
-                                f"{dock.windowTitle()!r} {_tip[:28]!r} fired"
-                                + chr(10))
-                except Exception:
-                    pass
-                try:
-                    _slot()
-                except Exception:
-                    try:
-                        import tempfile, traceback, os as _os
-                        with open(_os.path.join(tempfile.gettempdir(),
-                                                "dses_dock_debug.log"), "a") as f:
-                            f.write("SLOT RAISED:" + chr(10)
-                                    + traceback.format_exc() + chr(10))
-                    except Exception:
-                        pass
-
-            slot = _logged_slot
             b.setIcon(icon)
             b.setIconSize(QtCore.QSize(12, 12))
             b.setToolTip(tip)
@@ -4355,9 +4350,9 @@ class _DockTitleBar(QtWidgets.QWidget):
         _S = QtWidgets.QStyle
         self._icon_dock = _detach_icon(True)
         self._float_btn = _btn(self._icon_dock, "", self._dock_back)
-        self._max_btn = _btn(self.style().standardIcon(_S.SP_TitleBarMaxButton),
-                             "Enlarge this floating panel so all its controls "
-                             "fit (click again to restore)",
+        self._icon_max = self.style().standardIcon(_S.SP_TitleBarMaxButton)
+        self._icon_restore = _restore_icon()
+        self._max_btn = _btn(self._icon_max, "",   # tooltip set by _sync
                              self._toggle_maximize)
         _btn(self.style().standardIcon(_S.SP_TitleBarCloseButton),
              "Hide this panel (View menu brings it back)", dock.close)
@@ -4407,33 +4402,9 @@ class _DockTitleBar(QtWidgets.QWidget):
         dock = self._dock
         mw = self._main_window()
 
-        def _dbg(tag):
-            # Temporary diagnostics for the 2026-08-04 dock-button hunt:
-            # appends one line per step to the user temp dir on every home
-            # click. Harmless if left in; remove once the button is proven.
-            import tempfile, time as _t, traceback
-            path = os.path.join(tempfile.gettempdir(), "dses_dock_debug.log")
-            try:
-                g = dock.geometry()
-                area = mw.dockWidgetArea(dock) if mw else "?"
-                line = (f"{_t.strftime('%H:%M:%S')} {dock.windowTitle()!r} "
-                        f"{tag}: floating={dock.isFloating()} "
-                        f"win={type(dock.window()).__name__} "
-                        f"area={area!r} vis={dock.isVisible()} "
-                        f"geom={g.x()},{g.y()} {g.width()}x{g.height()}")
-            except Exception:
-                line = f"{tag}: DBG-FAILED " + traceback.format_exc(limit=2)
-            try:
-                with open(path, "a") as f:
-                    f.write(line + chr(10))
-            except Exception:
-                pass
-
         if mw is None:
-            _dbg("click but mw is None!")
             dock.setFloating(False)
             return
-        _dbg("click")
         # restoreState is the ONLY reliable way back. Direct re-dock calls
         # (setFloating(False) / addDockWidget / removeDockWidget, in every
         # order) all end with Qt reporting floating=False, parent=main
@@ -4445,11 +4416,9 @@ class _DockTitleBar(QtWidgets.QWidget):
         state = getattr(mw, "_default_dock_state", None)
         if state is not None:
             mw.restoreState(state)
-            _dbg("after restoreState(default)")
         else:                       # pre-first-show fallback
             dock.setFloating(False)
             mw.addDockWidget(self._default_area, dock)
-            _dbg("after fallback re-dock")
         dock.show()
         dock.raise_()
         # The dock is now docked in Qt's model (parented to the main window,
@@ -4469,14 +4438,17 @@ class _DockTitleBar(QtWidgets.QWidget):
         except Exception:
             pass
         self._sync()
-        _dbg("done")
 
     def _toggle_maximize(self):
         """Grow a floating panel to fit its contents, or restore it.
 
         Deliberately NOT full screen (Rick): the useful size is 'big enough
         that nothing is cut off', clamped to the screen so the title bar
-        stays reachable.
+        stays reachable. The button is a real toggle — while enlarged it
+        shows a distinct 'restore' (double-box) icon — and the panel stays
+        freely resizable in that state; dragging it to a size of your own
+        clears the enlarged state so the next click enlarges afresh rather
+        than snapping back to a stale rectangle.
         """
         dock = self._dock
         if not self._visually_floating():
@@ -4484,6 +4456,7 @@ class _DockTitleBar(QtWidgets.QWidget):
         if self._pre_max_geom is not None:
             dock.setGeometry(self._pre_max_geom)
             self._pre_max_geom = None
+            self._sync()
             return
         self._pre_max_geom = dock.geometry()
         outer = dock.widget()
@@ -4501,6 +4474,11 @@ class _DockTitleBar(QtWidgets.QWidget):
         x = min(max(g.x(), avail.x()), avail.right() - g.width())
         y = min(max(g.y(), avail.y()), avail.bottom() - g.height())
         dock.move(x, y)
+        # Remember what we grew it TO. If the user later resizes the panel
+        # by hand, _sync notices the mismatch and drops the enlarged state,
+        # so the icon and the behaviour stay honest.
+        self._max_geom = QtCore.QRect(dock.geometry())
+        self._sync()
 
     def paintEvent(self, event):
         # A plain QWidget subclass does NOT honor a stylesheet background on
@@ -4513,8 +4491,11 @@ class _DockTitleBar(QtWidgets.QWidget):
 
     def _sync(self, *_):
         """Buttons follow GROUND TRUTH (window parentage), not isFloating().
-        Home stays enabled in every state — floating: dock it; docked:
-        reset position — so no state desync can strand a dead button."""
+        The maximize button is a real toggle: while the panel is still at the
+        size we grew it to, it shows the double-box 'restore' icon; if the
+        user has since resized the panel by hand, the enlarged state is
+        dropped so the icon goes back to 'enlarge' and no stale rectangle is
+        restored later."""
         floating = self._visually_floating()
         self._float_btn.setToolTip(
             "Dock this panel back — restores the default panel layout"
@@ -4522,6 +4503,15 @@ class _DockTitleBar(QtWidgets.QWidget):
         self._max_btn.setEnabled(floating)
         if not floating:
             self._pre_max_geom = None
+            self._max_geom = None
+        elif self._max_geom is not None and self._dock.geometry() != self._max_geom:
+            self._pre_max_geom = None       # user resized: no longer 'enlarged'
+            self._max_geom = None
+        enlarged = self._pre_max_geom is not None
+        self._max_btn.setIcon(self._icon_restore if enlarged else self._icon_max)
+        self._max_btn.setToolTip(
+            "Restore this panel to its previous size" if enlarged
+            else "Enlarge this floating panel so all its controls fit")
 
 
 class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
@@ -4566,6 +4556,41 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
                 border-color: #0d4258;
             }
             QTabBar::tab:hover:!selected { background: #bfdcf5; }
+
+            /* Sliders: the stock Qt handle is a thin sliver that is fiddly
+               to grab, especially in a narrow dock (Rick, 2026-08-04). A
+               taller groove and a wide, high-contrast handle with a visible
+               hover/pressed state make them easy targets. */
+            QSlider::groove:horizontal {
+                height: 8px; border-radius: 4px;
+                background: #d7dee3; border: 1px solid #b9c5cc;
+            }
+            QSlider::sub-page:horizontal {
+                height: 8px; border-radius: 4px;
+                background: #156082;            /* filled portion, DSES teal */
+                border: 1px solid #0d4258;
+            }
+            QSlider::handle:horizontal {
+                width: 18px; height: 20px;
+                margin: -7px -1px;              /* overhang the groove */
+                border-radius: 5px;
+                background: #f7fafc;
+                border: 2px solid #156082;
+            }
+            QSlider::handle:horizontal:hover  { background: #dbeafe; }
+            QSlider::handle:horizontal:pressed { background: #156082; }
+            QSlider::handle:horizontal:disabled {
+                border-color: #b0bcc4; background: #eef1f3;
+            }
+            QSlider::groove:vertical {
+                width: 8px; border-radius: 4px;
+                background: #d7dee3; border: 1px solid #b9c5cc;
+            }
+            QSlider::handle:vertical {
+                height: 18px; width: 20px; margin: -1px -7px;
+                border-radius: 5px; background: #f7fafc;
+                border: 2px solid #156082;
+            }
         """)
         self.setWindowTitle(f"{APP_NAME}  —  v{APP_VERSION}")
         # Set the window/Dock icon to the bundled DSES pulsar on Windows/Linux.
