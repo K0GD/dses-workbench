@@ -4340,38 +4340,57 @@ class _DockTitleBar(QtWidgets.QWidget):
 
         dock.topLevelChanged.connect(self._sync)
         dock.dockLocationChanged.connect(lambda _a: self._sync())
+        # Drag-created floating wrappers change parentage WITHOUT firing
+        # either signal above, which is how the buttons got stranded in a
+        # stale state. A slow poll guarantees the buttons converge on the
+        # truth within a second no matter what Qt did.
+        self._sync_timer = QtCore.QTimer(self)
+        self._sync_timer.setInterval(1000)
+        self._sync_timer.timeout.connect(self._sync)
+        self._sync_timer.start()
         self._sync()
 
-    def _dock_back(self):
-        """Put the panel back at the end of its home column — deterministic.
+    def _main_window(self):
+        w = self._dock.parentWidget()
+        while w is not None and not isinstance(w, QtWidgets.QMainWindow):
+            w = w.parentWidget()
+        return w
 
-        History (2026-08-04): setFloating(False) re-docks into Qt's
-        REMEMBERED slot, which squeezed panels to nothing in a full column;
-        a timer-based tabify rescue then produced states where Qt thought
-        the panel was docked while it rendered floating, leaving the
-        buttons greyed and unresponsive. addDockWidget is the one primitive
-        that always lands visibly: it splits the home column and respects
-        minimum sizes, floating or not. No remembered slot, no timer, no
-        tabify. Clicking while already docked simply moves the panel to the
-        end of its home column — a benign 'reset position'.
+    def _visually_floating(self):
+        """Ground truth, immune to Qt's dock state machine: the panel is
+        floating iff its top-level window is NOT the main window. A
+        drag-floated dock can sit inside an internal floating wrapper
+        (QDockWidgetGroupWindow) where isFloating() lies — it reports False
+        because the dock is 'docked' INSIDE the wrapper — which is exactly
+        the max-disabled/dead-buttons state Rick kept hitting."""
+        mw = self._main_window()
+        return mw is not None and self._dock.window() is not mw
+
+    def _dock_back(self):
+        """Put the panel back at the end of its home column.
+
+        Order is EVERYTHING here, established empirically (2026-08-04) by a
+        real-drag harness that tried five sequences against drag-floated
+        docks on the Windows platform: setFloating(False) is a NO-OP on an
+        unregistered dock, so remove→setFloating→add (the previous order)
+        leaves the panel floating forever — the only failing sequence of
+        the five. Working order: removeDockWidget (detach from whatever it
+        is in — normal float, drag wrapper, confused slot), addDockWidget
+        (register fresh at the end of the home column, minimums honored),
+        and setFloating(False) LAST, once registered, which actually drops
+        the flag.
         """
         dock = self._dock
-        mw = dock.parentWidget()
-        while mw is not None and not isinstance(mw, QtWidgets.QMainWindow):
-            mw = mw.parentWidget()
+        mw = self._main_window()
         if mw is None:
             dock.setFloating(False)
             return
-        # BOTH calls are required, in this order. addDockWidget registers
-        # the target area but does NOT clear the floating state (verified:
-        # the dock keeps rendering floating while dockWidgetArea() already
-        # reports the new area — Rick's 'clicked dock, nothing happened');
-        # setFloating(False) alone re-docks into the unreliable remembered
-        # slot. Register the area first, then drop the float flag.
+        mw.removeDockWidget(dock)
         mw.addDockWidget(self._default_area, dock)
         dock.setFloating(False)
         dock.show()
         dock.raise_()
+        self._sync()
 
     def _toggle_maximize(self):
         """Grow a floating panel to fit its contents, or restore it.
@@ -4381,7 +4400,7 @@ class _DockTitleBar(QtWidgets.QWidget):
         stays reachable.
         """
         dock = self._dock
-        if not dock.isFloating():
+        if not self._visually_floating():
             return
         if self._pre_max_geom is not None:
             dock.setGeometry(self._pre_max_geom)
@@ -4414,12 +4433,10 @@ class _DockTitleBar(QtWidgets.QWidget):
         self.style().drawPrimitive(QtWidgets.QStyle.PE_Widget, opt, p, self)
 
     def _sync(self, *_):
-        """Maximize applies only to a floating panel (a docked one is sized
-        by the layout). The home button stays enabled in every state — its
-        action is safe and useful both floating (dock it) and docked (reset
-        position), and never being greyed means a state desync can't strand
-        the user with a dead button again."""
-        floating = self._dock.isFloating()
+        """Buttons follow GROUND TRUTH (window parentage), not isFloating().
+        Home stays enabled in every state — floating: dock it; docked:
+        reset position — so no state desync can strand a dead button."""
+        floating = self._visually_floating()
         self._float_btn.setToolTip(
             "Dock this panel into its home column" if floating
             else "Reset this panel to the end of its home column")
