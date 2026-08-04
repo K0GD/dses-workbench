@@ -1126,9 +1126,9 @@ class FftPlotWidget(QtWidgets.QWidget):
         toggle_col.setContentsMargins(0, 0, 0, 0)
         toggle_col.addWidget(self._toggle_btn)
         toggle_col.addStretch(1)
-        toggle_wrap = QtWidgets.QWidget()
-        toggle_wrap.setLayout(toggle_col)
-        layout.addWidget(toggle_wrap)
+        self._toggle_wrap = QtWidgets.QWidget()
+        self._toggle_wrap.setLayout(toggle_col)
+        layout.addWidget(self._toggle_wrap)
 
         self._panel = self._build_panel()
         # Scroll the controls so a tall stack never forces the whole window
@@ -1517,6 +1517,17 @@ class FftPlotWidget(QtWidgets.QWidget):
     def _on_toggle_panel(self, on):
         self._panel_scroll.setVisible(on)
         self._toggle_btn.setText("▸" if on else "◂")
+
+    def take_panel(self):
+        """Detach the control panel so the main window can host it in a
+        QDockWidget (1.2.0): the panel leaves this widget's layout (the plot
+        takes the full width), the collapse toggle disappears (the dock's
+        close button and View-menu toggle replace it), and the caller owns
+        the returned group box."""
+        panel = self._panel_scroll.takeWidget()
+        self._panel_scroll.hide()
+        self._toggle_wrap.hide()
+        return panel
 
     def _on_yrange_changed(self, _v):
         self._plot.setYRange(self._ymin_spin.value(), self._ymax_spin.value())
@@ -2030,8 +2041,8 @@ class WaterfallPlotWidget(QtWidgets.QWidget):
         toggle_col = QtWidgets.QVBoxLayout()
         toggle_col.setContentsMargins(0, 0, 0, 0)
         toggle_col.addWidget(self._toggle_btn); toggle_col.addStretch(1)
-        toggle_wrap = QtWidgets.QWidget(); toggle_wrap.setLayout(toggle_col)
-        layout.addWidget(toggle_wrap)
+        self._toggle_wrap = QtWidgets.QWidget(); self._toggle_wrap.setLayout(toggle_col)
+        layout.addWidget(self._toggle_wrap)
 
         self._panel = self._build_panel()
         # Scroll the controls (see FftPlotWidget) so the window can shrink.
@@ -2188,6 +2199,17 @@ class WaterfallPlotWidget(QtWidgets.QWidget):
     def _on_toggle_panel(self, on):
         self._panel_scroll.setVisible(on)
         self._toggle_btn.setText("▸" if on else "◂")
+
+    def take_panel(self):
+        """Detach the control panel so the main window can host it in a
+        QDockWidget (1.2.0): the panel leaves this widget's layout (the plot
+        takes the full width), the collapse toggle disappears (the dock's
+        close button and View-menu toggle replace it), and the caller owns
+        the returned group box."""
+        panel = self._panel_scroll.takeWidget()
+        self._panel_scroll.hide()
+        self._toggle_wrap.hide()
+        return panel
 
     def _on_intensity_changed(self, _v):
         self._intensity_min = self._imin_spin.value()
@@ -2851,11 +2873,16 @@ and drop them next to the program. (You don't need to change any code.)</li>
 </ul>
 
 <h3>Control panels (dockable)</h3>
-<p>The controls live in four dockable panels — <b>Observation</b>,
-<b>Tuning</b>, <b>Radio</b>, and <b>Recording</b>. Drag a panel by its title
-bar to rearrange, stack panels as tabs, tear one off into its own floating
-window (handy on a second monitor), or close it; the <b>View</b> menu shows
-and hides each panel, and your arrangement is remembered across runs. The
+<p>Every control panel is dockable. On the <b>right</b>:
+<b>Observation</b>, <b>Tuning</b>, <b>Radio</b>, and <b>Recording</b> — the
+science settings. On the <b>left</b>, beside the plots they belong to:
+<b>Spectrum Display</b> and <b>Waterfall Display</b>. Drag a panel by its
+title bar to rearrange, stack panels as tabs, tear one off into its own
+floating window (handy on a second monitor), or close it; the <b>View</b>
+menu shows and hides every panel, and your arrangement is remembered across
+runs. The two display panels are deliberately restricted to the left column
+(they describe the plots, so they stay next to them) — they can still be
+reordered there, tabbed together, or floated freely. The
 menu bar (File / View / Radio / Recording / Help) duplicates the important
 actions, and long status messages — recording filenames, analysis progress —
 appear in the full-width <b>status bar</b> at the bottom of the window where
@@ -4293,9 +4320,14 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
         # and narrow panels scroll instead of clipping controls. ---
         self._docks = []
 
-        def _make_dock(title, objname):
+        def _make_dock(title, objname, area=Qt.RightDockWidgetArea,
+                       allowed=None, min_width=290):
             dock = QtWidgets.QDockWidget(title, self)
             dock.setObjectName(objname)          # required for saveState()
+            if allowed is not None:
+                # Restrict where the dock may DROP (e.g. display panels are
+                # left-column-only); floating is always still allowed.
+                dock.setAllowedAreas(allowed)
             box = QtWidgets.QWidget()
             lay = QtWidgets.QVBoxLayout(box)
             lay.setContentsMargins(2, 2, 2, 2)
@@ -4307,10 +4339,10 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
             scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
             scroll.setVerticalScrollBarPolicy(_VBAR_POLICY)
             scroll.verticalScrollBar().setStyleSheet(_SCROLLBAR_QSS)
-            scroll.setMinimumWidth(290)
+            scroll.setMinimumWidth(min_width)
             scroll.setMinimumHeight(60)
             dock.setWidget(scroll)
-            self.addDockWidget(Qt.RightDockWidgetArea, dock)
+            self.addDockWidget(area, dock)
             self._docks.append(dock)
             # View menu toggle, inserted above the Full Screen separator (in
             # creation order — inserting before the separator each time).
@@ -4320,6 +4352,7 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
             def _add(w, _lay=lay):
                 _lay.insertWidget(_lay.count() - 1, w)
             return _add
+        self._make_dock = _make_dock             # reused after plots exist
 
         self._dock_add_observation = _make_dock("Observation", "dock_observation")
         self._dock_add_tuning = _make_dock("Tuning", "dock_tuning")
@@ -4998,6 +5031,21 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
         self.plots_splitter.setStretchFactor(0, 1)
         self.plots_splitter.setStretchFactor(1, 1)
         self.plots_splitter.setSizes([400, 400])
+
+        # Display-control panels become docks too (Rick, 2026-08-04), but
+        # LEFT-column-only: they describe the plots, so they live beside
+        # them — draggable/floatable/hidable like the rest, just not
+        # droppable into the right column of science controls.
+        _add_sd = self._make_dock("Spectrum Display", "dock_spectrum_display",
+                                  area=Qt.LeftDockWidgetArea,
+                                  allowed=Qt.LeftDockWidgetArea,
+                                  min_width=248)
+        _add_sd(self._fft_plot.take_panel())
+        _add_wd = self._make_dock("Waterfall Display", "dock_waterfall_display",
+                                  area=Qt.LeftDockWidgetArea,
+                                  allowed=Qt.LeftDockWidgetArea,
+                                  min_width=248)
+        _add_wd(self._waterfall_plot.take_panel())
 
         # --- Frequency preset radio group ---
         self._freq_preset_options = [408000000.0, 680500000.0, 1299500000.0,
