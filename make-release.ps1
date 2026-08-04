@@ -52,6 +52,7 @@ try {
     $files = @(
         'dses_spectrum_analyzer.py',
         'sigproc_fil.py',
+        'pulsar_planner.py',
         'ezra_txt.py',
         'fold_analysis.py',
         'fold_pdf.py',
