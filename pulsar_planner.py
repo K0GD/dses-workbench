@@ -316,7 +316,7 @@ def is_magnetar(row):
 
 def visible_now(rows, lat_deg, lon_deg, mask_deg=20.0, unix_ts=None,
                 center_hz=1.4e9, min_flux_mjy=None, include_magnetars=True,
-                height_m=0.0):
+                height_m=0.0, include_below=False):
     """Rows currently above `mask_deg`, annotated and sorted by flux
     (brightest first), then by time remaining.
 
@@ -332,7 +332,8 @@ def visible_now(rows, lat_deg, lon_deg, mask_deg=20.0, unix_ts=None,
                             lat_deg, lon_deg, ts, height_m)
     out = []
     for r, alt, az in zip(rows, alts, azs):
-        if alt < mask_deg:
+        below = alt < mask_deg
+        if below and not include_below:
             continue
         flux, flux_label = flux_for_freq(r, center_hz)
         mag = is_magnetar(r)
@@ -345,13 +346,55 @@ def visible_now(rows, lat_deg, lon_deg, mask_deg=20.0, unix_ts=None,
         item.update({
             "alt_deg": alt, "az_deg": az,
             "flux_mjy": flux, "flux_label": flux_label,
-            "magnetar": mag,
-            "hours_left": hours_above_mask(r["ra_deg"], r["dec_deg"],
-                                           lat_deg, lon_deg, ts, mask_deg),
+            "magnetar": mag, "below_mask": below,
         })
+        if below:
+            # Not up now: say when it will be, and for how long.
+            rise_h, span_h = next_window(r["ra_deg"], r["dec_deg"],
+                                         lat_deg, lon_deg, ts, mask_deg)
+            item["hours_left"] = 0.0
+            item["rise_in_h"] = rise_h
+            item["window_h"] = span_h
+        else:
+            item["hours_left"] = hours_above_mask(
+                r["ra_deg"], r["dec_deg"], lat_deg, lon_deg, ts, mask_deg)
+            item["rise_in_h"] = 0.0
+            item["window_h"] = item["hours_left"]
         out.append(item)
-    out.sort(key=lambda d: (-(d["flux_mjy"] or -1.0), -d["hours_left"]))
+    # Up-now first, then brightest, then most time remaining.
+    out.sort(key=lambda d: (d["below_mask"],
+                            -(d["flux_mjy"] or -1.0),
+                            -d["hours_left"]))
     return out
+
+
+def next_window(ra_deg, dec_deg, lat_deg, lon_deg, unix_ts, mask_deg,
+                horizon_hours=24.0, step_min=5.0):
+    """(hours_until_rise, hours_of_window) for a source below the mask.
+
+    Answers "when can I record this, and for how long?" — the question a
+    planner that only reports what is up right now cannot (Rick,
+    2026-08-04: B0329+54 is circumpolar from Haswell yet spends part of
+    each day below a usable elevation). Returns (None, 0.0) if the source
+    never clears the mask within the search horizon.
+    """
+    step = step_min * 60.0
+    n = int(horizon_hours * 3600.0 / step)
+    rise_i = None
+    for i in range(0, n + 1):
+        alt, _ = altaz(ra_deg, dec_deg, lat_deg, lon_deg, unix_ts + i * step)
+        if alt >= mask_deg:
+            rise_i = i
+            break
+    if rise_i is None:
+        return None, 0.0
+    rise_ts = unix_ts + rise_i * step
+    # Length of the window that starts there (nudged inside to avoid
+    # landing exactly on the boundary).
+    span = hours_above_mask(ra_deg, dec_deg, lat_deg, lon_deg,
+                            rise_ts + step, mask_deg,
+                            horizon_hours=horizon_hours, step_min=step_min)
+    return rise_i * step / 3600.0, span + step / 3600.0
 
 
 def sets_before(row, lat_deg, lon_deg, mask_deg, duration_s, unix_ts=None):

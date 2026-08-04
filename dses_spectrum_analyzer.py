@@ -2907,6 +2907,33 @@ menu bar (File / View / Radio / Recording / Help) duplicates the important
 actions, and long status messages — recording filenames, analysis progress —
 appear in the full-width <b>status bar</b> at the bottom of the window where
 they are never truncated.</p>
+<h4>Observe menu — Pulsars in View (Ctrl+P)</h4>
+<p>Answers "what can I record right now?" from the ATNF catalog: every
+pulsar above the site's elevation mask, sorted by flux <i>in the band you
+are tuned to</i> (S400 below ~900 MHz, S1400 above), with current az/el,
+period, DM, and how long each stays up. Selecting one fills the recording
+<b>Source</b> field and hands the recorder that pulsar's exact catalog
+RA/Dec for the <code>.fil</code> header — better than the position the app
+otherwise infers from the name.</p>
+<ul>
+<li><b>Search</b>: type part of a name (<code>b0329</code>,
+<code>J0332</code>), or filter numerically — <code>dm&lt;30</code>,
+<code>p&lt;0.1</code> (seconds), <code>flux&gt;10</code>,
+<code>alt&gt;40</code>, or <code>magnetar</code>. Terms combine, so
+<code>dm&lt;30 flux&gt;50</code> finds bright, low-dispersion targets.</li>
+<li><b>Include below mask</b>: also lists sources that are not up yet, and
+the <b>Next window</b> column says when each rises above the mask and how
+long the window lasts. (A source can be circumpolar — never setting — and
+still spend hours below a usable elevation.)</li>
+<li><b>Include magnetars</b>: magnetars are marked ★ and are never removed
+by a flux filter, because the catalog usually carries no flux for them.</li>
+<li>The catalog is downloaded once and cached beside your recordings, so
+the planner keeps working at a site with no internet. <b>Observe → Refresh
+Pulsar Catalog</b> re-downloads it.</li>
+<li>If a <b>Source</b> and a <b>Record for</b> duration are both set, the
+app warns at record time when that pulsar would set before the recording
+finishes.</li>
+</ul>
 <h4>Observation</h4>
 <p>The "what are you trying to do tonight?" selector. Pick a goal and every
 science-critical setting — band, sample rate, recording format, channels,
@@ -4360,15 +4387,36 @@ class PulsarPlannerDialog(QtWidgets.QDialog):
             "they would vanish under any flux sort. Kept visible by default.")
         self._magnetars.toggled.connect(self._refresh)
         top.addWidget(self._magnetars)
+        self._show_below = QtWidgets.QCheckBox("Include below mask")
+        self._show_below.setToolTip(
+            "Also list sources that are not up yet, with when their next "
+            "observing window opens and how long it lasts.")
+        self._show_below.toggled.connect(self._refresh)
+        top.addWidget(self._show_below)
         top.addStretch(1)
         self._summary = QtWidgets.QLabel("")
         top.addWidget(self._summary)
         v.addLayout(top)
 
-        self._table = QtWidgets.QTableWidget(0, 8, self)
+        srch = QtWidgets.QHBoxLayout()
+        srch.addWidget(QtWidgets.QLabel("Search:"))
+        self._search = QtWidgets.QLineEdit()
+        self._search.setPlaceholderText(
+            "name (B0329, J0332), or  dm<30,  p<0.1,  flux>10,  magnetar")
+        self._search.setClearButtonEnabled(True)
+        self._search.setToolTip(
+            "Type part of a name, or filter on numbers:\n"
+            "  dm<30      dm>100      p<0.1 (seconds)     p>1\n"
+            "  flux>10    alt>40      magnetar\n"
+            "Terms combine with AND; a bare word matches the J or B name.")
+        self._search.textChanged.connect(self._apply_filter)
+        srch.addWidget(self._search, 1)
+        v.addLayout(srch)
+
+        self._table = QtWidgets.QTableWidget(0, 9, self)
         self._table.setHorizontalHeaderLabels(
             ["Pulsar", "B name", "Alt °", "Az °", "P0 (s)", "DM",
-             "Flux (mJy)", "Time left"])
+             "Flux (mJy)", "Time left", "Next window"])
         self._table.setSelectionBehavior(QtWidgets.QTableWidget.SelectRows)
         self._table.setSelectionMode(QtWidgets.QTableWidget.SingleSelection)
         self._table.setEditTriggers(QtWidgets.QTableWidget.NoEditTriggers)
@@ -4397,11 +4445,55 @@ class PulsarPlannerDialog(QtWidgets.QDialog):
 
     def _refresh(self):
         import pulsar_planner
-        vis = pulsar_planner.visible_now(
-            self._rows, self._site["lat_deg"], self._site["lon_deg"],
-            mask_deg=self._mask.value(), center_hz=self._center_hz,
-            include_magnetars=self._magnetars.isChecked(),
-            height_m=self._site.get("amsl", 0.0))
+        QtWidgets.QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            vis = pulsar_planner.visible_now(
+                self._rows, self._site["lat_deg"], self._site["lon_deg"],
+                mask_deg=self._mask.value(), center_hz=self._center_hz,
+                include_magnetars=self._magnetars.isChecked(),
+                height_m=self._site.get("amsl", 0.0),
+                include_below=self._show_below.isChecked())
+        finally:
+            QtWidgets.QApplication.restoreOverrideCursor()
+        self._all = vis
+        self._apply_filter()
+
+    # -- search ------------------------------------------------------------
+
+    @staticmethod
+    def _matches(row, query):
+        """Free-text + numeric filter. Bare words match the J/B name;
+        `dm<30`, `p>1`, `flux>10`, `alt>40` compare numerically; the word
+        `magnetar` keeps only magnetars. Terms combine with AND."""
+        import re as _re
+        for term in query.lower().split():
+            m = _re.fullmatch(r"(dm|p|p0|flux|alt|az)([<>]=?)(-?\d+\.?\d*)",
+                              term)
+            if m:
+                key, op, val = m.group(1), m.group(2), float(m.group(3))
+                got = {"dm": row.get("dm"), "p": row.get("p0_s"),
+                       "p0": row.get("p0_s"), "flux": row.get("flux_mjy"),
+                       "alt": row.get("alt_deg"), "az": row.get("az_deg")}[key]
+                if got is None:
+                    return False        # can't satisfy a numeric test
+                if op == "<" and not got < val:   return False
+                if op == "<=" and not got <= val: return False
+                if op == ">" and not got > val:   return False
+                if op == ">=" and not got >= val: return False
+                continue
+            if term == "magnetar":
+                if not row.get("magnetar"):
+                    return False
+                continue
+            hay = (row["name"] + " " + (row.get("bname") or "")).lower()
+            if term not in hay.replace(" ", "") and term not in hay:
+                return False
+        return True
+
+    def _apply_filter(self):
+        q = self._search.text().strip()
+        vis = ([r for r in self._all if self._matches(r, q)] if q
+               else list(self._all))
         self._visible = vis
         self._table.setSortingEnabled(False)
         self._table.setRowCount(len(vis))
@@ -4415,6 +4507,16 @@ class PulsarPlannerDialog(QtWidgets.QDialog):
                     else f"{int(hrs)}h {int((hrs % 1) * 60):02d}m")
             flux = ("—" if r["flux_mjy"] is None
                     else f"{r['flux_mjy']:.1f} ({r['flux_label']})")
+            if r.get("below_mask"):
+                left = "— below mask —"
+                rise = r.get("rise_in_h")
+                win = r.get("window_h") or 0.0
+                nxt = ("never (this day)" if rise is None
+                       else f"in {int(rise)}h {int((rise % 1) * 60):02d}m"
+                            f"  ·  {win:.1f} h long")
+                nxt_sort = 1e6 if rise is None else rise
+            else:
+                nxt, nxt_sort = "up now", -1.0
             cells = [
                 item(r["name"] + ("  ★" if r["magnetar"] else "")),
                 item("" if r["bname"] == "*" else r["bname"]),
@@ -4424,7 +4526,9 @@ class PulsarPlannerDialog(QtWidgets.QDialog):
                      r["p0_s"] or 0.0),
                 item("—" if r["dm"] is None else f"{r['dm']:.2f}", r["dm"] or 0.0),
                 item(flux, r["flux_mjy"] if r["flux_mjy"] is not None else -1.0),
-                item(left, hrs),
+                item(left, hrs) if not r.get("below_mask")
+                else QtWidgets.QTableWidgetItem(left),
+                item(nxt, nxt_sort),
             ]
             for c, it in enumerate(cells):
                 self._table.setItem(i, c, it)
@@ -4436,10 +4540,15 @@ class PulsarPlannerDialog(QtWidgets.QDialog):
         self._table.sortItems(6, Qt.DescendingOrder)
         self._table.resizeColumnsToContents()
         n_mag = sum(1 for r in vis if r["magnetar"])
-        self._summary.setText(
-            f"{len(vis)} above {self._mask.value():.0f}°"
-            + (f"  ·  {n_mag} magnetar{'s' if n_mag != 1 else ''} (★)"
-               if n_mag else ""))
+        n_up = sum(1 for r in vis if not r.get("below_mask"))
+        parts = [f"{n_up} above {self._mask.value():.0f}°"]
+        if len(vis) != n_up:
+            parts.append(f"{len(vis) - n_up} below")
+        if n_mag:
+            parts.append(f"{n_mag} magnetar{'s' if n_mag != 1 else ''} (★)")
+        if self._search.text().strip():
+            parts.append(f"filtered from {len(self._all)}")
+        self._summary.setText("  ·  ".join(parts))
 
     def _accept_row(self, *_):
         row = self._table.currentRow()

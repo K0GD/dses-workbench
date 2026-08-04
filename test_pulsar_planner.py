@@ -120,6 +120,37 @@ def test_planning():
     check(sets and left == 0.0, "below-mask source fails a 1 h recording")
 
 
+def test_next_window():
+    print("\n3b. next observing window")
+    ts = 1754300000.0
+    # B0329+54 from Haswell: circumpolar (dec +54.6 > 90-38.4) yet it dips
+    # below a 20 deg mask each day — the case that motivated the column.
+    ra, dec = 53.2475, 54.5787
+    lo = min(pp.altaz(ra, dec, LAT, LON, ts + i * 600)[0] for i in range(144))
+    hi = max(pp.altaz(ra, dec, LAT, LON, ts + i * 600)[0] for i in range(144))
+    check(lo > 0.0, "B0329+54 never sets below the horizon", f"min alt {lo:.1f}")
+    check(lo < 20.0 < hi, "but does cross a 20 deg mask each day",
+          f"{lo:.1f}..{hi:.1f}")
+    rise, span = pp.next_window(ra, dec, LAT, LON, ts, 20.0)
+    check(rise is not None and 0.0 <= rise <= 24.0,
+          "next window found within a day", f"rise in {rise:.2f} h")
+    check(span > 1.0, "window has a usable length", f"{span:.1f} h")
+    # a source that never clears the mask reports no window
+    rise2, span2 = pp.next_window(0.0, -85.0, LAT, LON, ts, 20.0)
+    check(rise2 is None and span2 == 0.0, "never-visible source has no window")
+    # visible_now(include_below=True) annotates both kinds
+    rows = pp.Catalog._parse(SAMPLE)
+    allr = pp.visible_now(rows, LAT, LON, mask_deg=20.0, unix_ts=ts,
+                          include_below=True)
+    check(len(allr) == len(rows), "include_below returns every source",
+          f"{len(allr)}/{len(rows)}")
+    check(all(("rise_in_h" in r and "window_h" in r) for r in allr),
+          "every row annotated with rise/window")
+    ups = [r for r in allr if not r["below_mask"]]
+    check(all(r["window_h"] == r["hours_left"] for r in ups),
+          "up-now rows report their remaining time as the window")
+
+
 def test_cache():
     print("\n4. cache")
     with tempfile.TemporaryDirectory() as d:
@@ -163,6 +194,7 @@ if __name__ == "__main__":
     test_parse()
     test_coordinates()
     test_planning()
+    test_next_window()
     test_cache()
     test_live_fetch()
     print()
