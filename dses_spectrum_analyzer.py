@@ -239,6 +239,9 @@ DEFAULTS = {
         'lon_deg':  -103.156,
         'amsl':     4400.0,
         'name':     'DSES',
+        # Minimum elevation the dish can usefully observe at; the visibility
+        # planner treats anything below this as "not up".
+        'el_mask_deg': 20.0,
     },
     'spectrum': {
         'fft_size':        1024,
@@ -4302,6 +4305,157 @@ def _restore_icon():
     return QtGui.QIcon(pm)
 
 
+class _NumericItem(QtWidgets.QTableWidgetItem):
+    """Table cell that DISPLAYS a formatted string but SORTS numerically.
+
+    QTableWidgetItem's default comparison uses the display text, so
+    "63.7 (S400)" sorts below "8.9 (S400)" as a string. Carrying the value
+    separately and overriding __lt__ keeps the pretty text and the right
+    order."""
+
+    def __init__(self, text, value):
+        super().__init__(text)
+        self._value = float(value)
+        self.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+
+    def __lt__(self, other):
+        if isinstance(other, _NumericItem):
+            return self._value < other._value
+        return super().__lt__(other)
+
+
+class PulsarPlannerDialog(QtWidgets.QDialog):
+    """"What's up now?" — pulsars above the site's elevation mask, sorted by
+    flux in the tuned band, with time remaining before each sets.
+
+    Picking one fills the recording Source field and hands back the catalog's
+    exact RA/Dec, which is strictly better than the app's fallback of parsing
+    an approximate position out of the pulsar's name.
+    """
+
+    def __init__(self, rows, site, center_hz, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Pulsars in view")
+        self.resize(900, 520)
+        self.selected = None
+        self._rows = rows
+        self._site = site
+        self._center_hz = center_hz
+
+        v = QtWidgets.QVBoxLayout(self)
+        top = QtWidgets.QHBoxLayout()
+        top.addWidget(QtWidgets.QLabel("Elevation mask:"))
+        self._mask = QtWidgets.QDoubleSpinBox()
+        self._mask.setRange(0.0, 89.0)
+        self._mask.setDecimals(1)
+        self._mask.setSuffix(" °")
+        self._mask.setValue(site.get("mask_deg", 20.0))
+        self._mask.valueChanged.connect(self._refresh)
+        top.addWidget(self._mask)
+        top.addSpacing(12)
+        self._magnetars = QtWidgets.QCheckBox("Include magnetars")
+        self._magnetars.setChecked(True)
+        self._magnetars.setToolTip(
+            "Magnetars (psrcat TYPE AXP/SGR) usually have no catalog flux, so "
+            "they would vanish under any flux sort. Kept visible by default.")
+        self._magnetars.toggled.connect(self._refresh)
+        top.addWidget(self._magnetars)
+        top.addStretch(1)
+        self._summary = QtWidgets.QLabel("")
+        top.addWidget(self._summary)
+        v.addLayout(top)
+
+        self._table = QtWidgets.QTableWidget(0, 8, self)
+        self._table.setHorizontalHeaderLabels(
+            ["Pulsar", "B name", "Alt °", "Az °", "P0 (s)", "DM",
+             "Flux (mJy)", "Time left"])
+        self._table.setSelectionBehavior(QtWidgets.QTableWidget.SelectRows)
+        self._table.setSelectionMode(QtWidgets.QTableWidget.SingleSelection)
+        self._table.setEditTriggers(QtWidgets.QTableWidget.NoEditTriggers)
+        self._table.setSortingEnabled(True)
+        self._table.doubleClicked.connect(self._accept_row)
+        self._table.horizontalHeader().setStretchLastSection(True)
+        v.addWidget(self._table, 1)
+
+        note = QtWidgets.QLabel(
+            "Sorted by flux in the tuned band. “Time left” is how long the "
+            "source stays above the mask — check it against your recording "
+            "duration.")
+        note.setStyleSheet("color: gray;")
+        note.setWordWrap(True)
+        v.addWidget(note)
+
+        btns = QtWidgets.QDialogButtonBox()
+        self._use_btn = btns.addButton("Use as Source",
+                                       QtWidgets.QDialogButtonBox.AcceptRole)
+        btns.addButton(QtWidgets.QDialogButtonBox.Close)
+        btns.accepted.connect(self._accept_row)
+        btns.rejected.connect(self.reject)
+        v.addWidget(btns)
+
+        self._refresh()
+
+    def _refresh(self):
+        import pulsar_planner
+        vis = pulsar_planner.visible_now(
+            self._rows, self._site["lat_deg"], self._site["lon_deg"],
+            mask_deg=self._mask.value(), center_hz=self._center_hz,
+            include_magnetars=self._magnetars.isChecked(),
+            height_m=self._site.get("amsl", 0.0))
+        self._visible = vis
+        self._table.setSortingEnabled(False)
+        self._table.setRowCount(len(vis))
+        for i, r in enumerate(vis):
+            def item(text, sort_value=None):
+                if sort_value is None:
+                    return QtWidgets.QTableWidgetItem(text)
+                return _NumericItem(text, sort_value)
+            hrs = r["hours_left"]
+            left = ("circumpolar" if hrs >= 23.99
+                    else f"{int(hrs)}h {int((hrs % 1) * 60):02d}m")
+            flux = ("—" if r["flux_mjy"] is None
+                    else f"{r['flux_mjy']:.1f} ({r['flux_label']})")
+            cells = [
+                item(r["name"] + ("  ★" if r["magnetar"] else "")),
+                item("" if r["bname"] == "*" else r["bname"]),
+                item(f"{r['alt_deg']:.1f}", r["alt_deg"]),
+                item(f"{r['az_deg']:.1f}", r["az_deg"]),
+                item("—" if r["p0_s"] is None else f"{r['p0_s']:.6f}",
+                     r["p0_s"] or 0.0),
+                item("—" if r["dm"] is None else f"{r['dm']:.2f}", r["dm"] or 0.0),
+                item(flux, r["flux_mjy"] if r["flux_mjy"] is not None else -1.0),
+                item(left, hrs),
+            ]
+            for c, it in enumerate(cells):
+                self._table.setItem(i, c, it)
+        # Sort by flux, brightest first — the order an observer wants. Qt
+        # sorts on the display string unless a numeric UserRole is set, so
+        # the numeric columns carry one (see `item` above); enabling sorting
+        # after the fill would otherwise re-sort by column 0 (name).
+        self._table.setSortingEnabled(True)
+        self._table.sortItems(6, Qt.DescendingOrder)
+        self._table.resizeColumnsToContents()
+        n_mag = sum(1 for r in vis if r["magnetar"])
+        self._summary.setText(
+            f"{len(vis)} above {self._mask.value():.0f}°"
+            + (f"  ·  {n_mag} magnetar{'s' if n_mag != 1 else ''} (★)"
+               if n_mag else ""))
+
+    def _accept_row(self, *_):
+        row = self._table.currentRow()
+        if row < 0:
+            QtWidgets.QMessageBox.information(
+                self, "No pulsar selected",
+                "Select a row first, or double-click one.")
+            return
+        name_cell = self._table.item(row, 0).text().replace("  ★", "")
+        for r in self._visible:
+            if r["name"] == name_cell:
+                self.selected = r
+                break
+        self.accept()
+
+
 class _DockTitleBar(QtWidgets.QWidget):
     """Tinted dock title bar with float/dock, maximize, and hide buttons.
 
@@ -5964,6 +6118,22 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
         dev_act.triggered.connect(self._on_change_device_clicked)
         radio_menu.addAction(dev_act)
 
+        obs_menu = bar.addMenu("&Observe")
+        insight_act = QtGui.QAction("&Pulsars in View…", self)
+        insight_act.setShortcut("Ctrl+P")
+        insight_act.setToolTip(
+            "Which pulsars are above the horizon here, right now — with "
+            "P0, DM, flux in the tuned band, and time left before each sets")
+        insight_act.triggered.connect(self._show_pulsar_planner)
+        obs_menu.addAction(insight_act)
+        refresh_cat_act = QtGui.QAction("&Refresh Pulsar Catalog", self)
+        refresh_cat_act.setToolTip(
+            "Re-download the ATNF catalog (cached locally; works offline "
+            "afterwards)")
+        refresh_cat_act.triggered.connect(
+            lambda: self._show_pulsar_planner(force_refresh=True))
+        obs_menu.addAction(refresh_cat_act)
+
         rec_menu = bar.addMenu("Recor&ding")
         rec_start_act = QtGui.QAction("&Start Recording", self)
         rec_start_act.triggered.connect(lambda: self.set_record(1))
@@ -6023,6 +6193,93 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
         if act.isChecked() != any_visible:
             with _SignalBlocker(act):
                 act.setChecked(any_visible)
+
+    # --- Pulsar visibility planner ---------------------------------------
+
+    def _site_dict(self):
+        s = self._app_settings
+        return {"lat_deg": s.get_float('site', 'lat_deg'),
+                "lon_deg": s.get_float('site', 'lon_deg'),
+                "amsl": s.get_float('site', 'amsl'),
+                "mask_deg": s.get_float('site', 'el_mask_deg'),
+                "name": s.get_str('site', 'name')}
+
+    def _show_pulsar_planner(self, force_refresh=False):
+        """Open the "what's up now?" dialog. The catalog is fetched once and
+        cached next to the recordings, so the field boxes work offline."""
+        import pulsar_planner
+        cat = getattr(self, '_psr_catalog', None)
+        if cat is None or force_refresh:
+            cat = pulsar_planner.Catalog(cache_dir=self.recording_dir)
+            QtWidgets.QApplication.setOverrideCursor(Qt.WaitCursor)
+            self._status_bar.showMessage("Loading pulsar catalog…")
+            try:
+                ok = cat.load(force_refresh=force_refresh)
+            finally:
+                QtWidgets.QApplication.restoreOverrideCursor()
+            if not ok:
+                self._status_bar.clearMessage()
+                QtWidgets.QMessageBox.warning(
+                    self, "Pulsar catalog unavailable",
+                    "Could not load the ATNF catalog and no local cache is "
+                    f"present.\n\n{cat.error or 'No network connection.'}\n\n"
+                    "Connect once to build the cache; after that the planner "
+                    "works offline.")
+                return
+            self._psr_catalog = cat
+            self._status_bar.showMessage(
+                f"Pulsar catalog: {len(cat.rows)} sources ({cat.source})", 6000)
+
+        dlg = PulsarPlannerDialog(cat.rows, self._site_dict(),
+                                  self.center_freq, self)
+        if dlg.exec() == QtWidgets.QDialog.Accepted and dlg.selected:
+            r = dlg.selected
+            name = r["bname"] if r["bname"] != "*" else r["name"]
+            self._source_name_edit.setText(name)
+            self._on_source_name_changed()
+            # Exact catalog position beats the app's parse-the-name fallback;
+            # it goes straight into the .fil header for PRESTO.
+            self._catalog_radec = (r["raj"], r["decj"])
+            self._catalog_radec_for = name
+            self._save_setting('site', 'el_mask_deg', dlg._mask.value())
+            hrs = r["hours_left"]
+            left = ("circumpolar" if hrs >= 23.99
+                    else f"{int(hrs)}h {int((hrs % 1) * 60):02d}m above mask")
+            self._status_bar.showMessage(
+                f"Source: {name} — alt {r['alt_deg']:.1f}°, az "
+                f"{r['az_deg']:.1f}°, {left}"
+                + (f", P0 {r['p0_s']:.6f} s, DM {r['dm']:.2f}"
+                   if r["p0_s"] and r["dm"] else ""), 15000)
+
+    def _check_source_visibility(self):
+        """Warn if the named source sets before a timed recording finishes.
+        Returns True to proceed. Silent when there is no catalog loaded, no
+        source name, or no duration — the planner is an aid, not a gate."""
+        import pulsar_planner
+        cat = getattr(self, '_psr_catalog', None)
+        name = (self._source_name or "").strip()
+        dur = self._parse_duration_s(self._rec_duration_text)
+        if cat is None or not name or not dur:
+            return True
+        row = pulsar_planner.find_by_name(cat.rows, name)
+        if row is None:
+            return True
+        site = self._site_dict()
+        sets, left = pulsar_planner.sets_before(
+            row, site["lat_deg"], site["lon_deg"], site["mask_deg"], dur)
+        if not sets:
+            return True
+        mins = left * 60.0
+        r = QtWidgets.QMessageBox.warning(
+            self, "Source sets before the recording ends",
+            f"{name} drops below the {site['mask_deg']:.0f}° elevation mask "
+            f"in {mins:.0f} minutes, but the recording is set to run for "
+            f"{dur / 60.0:.0f} minutes.\n\n"
+            "The tail of the recording would be of an empty sky.\n\n"
+            "Record anyway?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No)
+        return r == QtWidgets.QMessageBox.Yes
 
     def _show_help_dialog(self):
         HelpDialog(self).exec()
@@ -6855,6 +7112,10 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
         live and writes a SIGPROC file directly; raw I/Q goes to a SigMF pair."""
         if self._playback_mode or self.uhd_usrp_source_0 is None:
             return  # nothing real to record from
+        if not self._check_source_visibility():
+            self.record = 0
+            self._record_callback(0)
+            return
         self._update_fil_geom_enabled()  # lock geometry while live
         if self._record_format == 'fil':
             self._start_fil_recording()
@@ -6966,13 +7227,22 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         path = os.path.join(self.recording_dir,
                             self._recording_basename(ts) + ".fil")
+        _raj, _dej = 0.0, 0.0
+        if (getattr(self, '_catalog_radec', None)
+                and getattr(self, '_catalog_radec_for', None)
+                == self._source_name.strip()):
+            _raj, _dej = self._catalog_radec
         try:
             sink = sigproc_fil.FilterbankSink(
                 path, nchans=self._fil_nchans, samp_rate=self.samp_rate,
                 center_freq_mhz=self.center_freq / 1e6,
                 tstart_mjd=sigproc_fil.unix_to_mjd(time.time()),
                 integrate=self._fil_integrate,
-                source_name=(self._source_name.strip() or "capture"))
+                source_name=(self._source_name.strip() or "capture"),
+                # Exact catalog position when the source came from the
+                # visibility planner; otherwise (0,0) and sigproc_fil falls
+                # back to parsing the position out of the name.
+                src_raj=_raj, src_dej=_dej)
         except Exception as exc:
             QtWidgets.QMessageBox.critical(
                 self, "Recording failed to start",
@@ -7267,6 +7537,8 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
     def _on_source_name_changed(self):
         self._source_name = self._source_name_edit.text().strip()
         self._save_setting('recording', 'source_name', self._source_name)
+        if getattr(self, '_catalog_radec_for', None) != self._source_name:
+            self._catalog_radec = None      # hand-typed name: no exact coords
         self._sync_fold_fields_to_source()
 
     def _source_is_catalog_pulsar(self):

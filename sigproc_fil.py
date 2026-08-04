@@ -276,7 +276,8 @@ class FilterbankWriter:
 
     def __init__(self, path, *, nchans, samp_rate, center_freq_mhz,
                  total_bw_mhz=None, tstart_mjd, integrate=1, nbits=32,
-                 source_name="capture", window=True, telescope_id=12):
+                 source_name="capture", window=True, telescope_id=12,
+                 src_raj=0.0, src_dej=0.0):
         if nbits != 32:
             raise ValueError("FilterbankWriter supports only nbits=32 "
                              "(8-bit needs whole-file statistics)")
@@ -303,6 +304,7 @@ class FilterbankWriter:
                              foff=self.foff, nchans=self.nchans, nbits=nbits,
                              tstart=tstart_mjd, tsamp=self.tsamp,
                              telescope_id=telescope_id,
+                             src_raj=src_raj, src_dej=src_dej,
                              rawdatafile=self.path.name)
         self._fh = open(self.path, "wb")
         self._fh.write(hdr)
@@ -445,7 +447,7 @@ if _HAVE_GR:
         def __init__(self, path, *, nchans, samp_rate, center_freq_mhz,
                      total_bw_mhz=None, tstart_mjd, integrate=1,
                      source_name="capture", window=True, telescope_id=12,
-                     pad_gaps=True):
+                     pad_gaps=True, src_raj=0.0, src_dej=0.0):
             gr.sync_block.__init__(self, name="filterbank_sink",
                                    in_sig=[np.complex64], out_sig=None)
             self._writer = FilterbankWriter(
@@ -453,7 +455,8 @@ if _HAVE_GR:
                 center_freq_mhz=center_freq_mhz, total_bw_mhz=total_bw_mhz,
                 tstart_mjd=tstart_mjd, integrate=integrate,
                 source_name=source_name, window=window,
-                telescope_id=telescope_id)
+                telescope_id=telescope_id,
+                src_raj=src_raj, src_dej=src_dej)
             self._pad_gaps = bool(pad_gaps)
             self._rx_time_key = pmt.intern("rx_time")
             self._time_ref = None       # (abs input offset, radio seconds)
