@@ -441,7 +441,16 @@ flagging for Soapy sources.
 - Full expression (Observation menu, first-run wizard, visibility-planner
   tie-in "B0329+54 rises 21:40 → Observe") belongs to the 1.2.0 redesign.
 
-## v1.2.0 — UI redesign: menus + dockable panels (Rick, 2026-08-02)
+## v1.2.0 — UI redesign: menus + dockable panels — CORE LANDED on main 2026-08-04
+
+Landed: QMainWindow shell, four dockable panels (rearrange/tab/tear-off/
+hide, persisted via saveState), menu bar (File/View/Radio/Recording/Help),
+full-width status bar with recording-status mirroring. Verified live on
+the B210 incl. persistence of a floating panel across relaunch.
+REMAINING before the 1.2.0 cut: Rick's hands-on pass; macOS test (native
+menu bar!) + drift-scan box test (dock behavior on headless Openbox/xrdp
+— re-check the 0x0-screen guards); docs sync + PDF; version bump; cut.
+
 
 - [ ] **Replace the fixed two-column sidebar with a menu bar + dockable
       panels.** DECIDED: dockable panels (PyCharm/Chirp style), not MDI.
@@ -472,9 +481,9 @@ flagging for Soapy sources.
       the field wants it), then do this as the headline of 1.2.0 with
       nothing else competing.
 
-## v1.1.9 / next feature release
+## v1.1.9 items — ROLLED INTO 1.2.0 (Rick, 2026-08-04); both LANDED on main 2026-08-04
 
-- [ ] **Hot-plug receiver detection (Rick, 2026-08-03):** when the SA opens
+- [x] **Hot-plug receiver detection (Rick, 2026-08-03) — DONE 2026-08-04, verified live end-to-end:** when the SA opens
       with no receiver detected (today: playback mode or the exit dialog),
       allow the receiver to be connected or powered on later and get
       detected WITHOUT restarting the app. Design sketch: in playback/
@@ -485,7 +494,7 @@ flagging for Soapy sources.
       the flowgraph rebuild machinery already exists in the device-switch
       path). Also covers the B210 powered off at session start at Haswell.
 
-- [ ] **Waterfall scroll direction (Rick, 2026-08-03):** new rows currently
+- [x] **Waterfall scroll direction (Rick, 2026-08-03) — DONE 2026-08-04 (new-at-top, axis reads age):** new rows currently
       appear at the BOTTOM and history scrolls up; the convention Rick is
       used to (SDR#/GQRX/SDRangel) is new-at-top, history flowing down.
       WHY it is this way: `WaterfallPlotWidget.on_frame` does
