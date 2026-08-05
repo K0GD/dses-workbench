@@ -148,14 +148,14 @@ Accept the prompt; conda downloads and installs the three packages. If the launc
 
 Download the application from the distribution site. You can either use the direct links below, or browse the folder <https://gpstime.com/sw_distribution/b210_sa/> and pick the newest `dses-spectrum-analyzer-*.zip`:
 
-- **Application (zip):** <https://gpstime.com/sw_distribution/b210_sa/dses-spectrum-analyzer-1.1.8.zip>
+- **Application (zip):** <https://gpstime.com/sw_distribution/b210_sa/dses-spectrum-analyzer-1.2.0.zip>
 - **This guide (PDF):** <https://gpstime.com/sw_distribution/b210_sa/DSES_RFI_Spectrum_Analyzer_Installation.pdf>
 
 The zip is roughly 60 MB — it includes a short sample recording so the program can run in playback mode when no radio is attached. (Replace `1.1.6` in the link with a newer version number if a later release has been published.)
 
 ### 3.1 Windows 11
 
-1. Extract the zip anywhere you have write permission. A common choice is `Documents\DSES-Spectrum-Analyzer`. The extracted folder will be `dses-spectrum-analyzer-1.1.8\` and will contain `dses_spectrum_analyzer.py`, `launcher.bat`, `launcher.ps1`, `install-shortcut.ps1`, `LICENSE`, the `icons\` folder, and this guide.
+1. Extract the zip anywhere you have write permission. A common choice is `Documents\DSES-Spectrum-Analyzer`. The extracted folder will be `dses-spectrum-analyzer-1.2.0\` and will contain `dses_spectrum_analyzer.py`, `launcher.bat`, `launcher.ps1`, `install-shortcut.ps1`, `LICENSE`, the `icons\` folder, and this guide.
 2. Double-click **`launcher.bat`** to start the application.
 3. The first time you run it, the launcher searches for Radioconda in this order: the `RADIOCONDA_ROOT` environment variable, any currently-activated conda env, `%LOCALAPPDATA%\radioconda`, `C:\ProgramData\radioconda`, `%USERPROFILE%\radioconda`, a cached config file, then `conda info --base` if `conda` is on PATH. If none of these find a working install, you'll get a prompt asking for the path; type it in and the launcher remembers it for next time.
 4. (Optional) Create a desktop shortcut (with the app's pulsar icon) by running **`install-shortcut.ps1`**. The reliable way — which works regardless of your PowerShell execution policy — is to open PowerShell in the extracted folder and run:
@@ -174,12 +174,12 @@ After the first run, the app's window opens with the spectrum and waterfall plot
 
    ``bash
    mkdir -p ~/Applications && cd ~/Applications
-   unzip ~/Downloads/dses-spectrum-analyzer-1.1.8.zip
-   cd dses-spectrum-analyzer-1.1.8
+   unzip ~/Downloads/dses-spectrum-analyzer-1.2.0.zip
+   cd dses-spectrum-analyzer-1.2.0
    chmod +x launcher.sh
    ``
 
-   The extracted `dses-spectrum-analyzer-1.1.8/` folder contains `dses_spectrum_analyzer.py`, `launcher.sh`, `dses-spectrum-analyzer.desktop`, `LICENSE`, the `icons/` folder, and this guide. (Avoid system locations like `/opt` unless you extract with `sudo` — keeping it in your home directory avoids permission issues.)
+   The extracted `dses-spectrum-analyzer-1.2.0/` folder contains `dses_spectrum_analyzer.py`, `launcher.sh`, `dses-spectrum-analyzer.desktop`, `LICENSE`, the `icons/` folder, and this guide. (Avoid system locations like `/opt` unless you extract with `sudo` — keeping it in your home directory avoids permission issues.)
 
 2. Launch:
 
@@ -204,8 +204,8 @@ The steps are the same as Linux. Extract it into your personal **`~/Applications
 
 ``bash
 mkdir -p ~/Applications && cd ~/Applications
-unzip ~/Downloads/dses-spectrum-analyzer-1.1.8.zip
-cd dses-spectrum-analyzer-1.1.8
+unzip ~/Downloads/dses-spectrum-analyzer-1.2.0.zip
+cd dses-spectrum-analyzer-1.2.0
 chmod +x launcher.sh
 ./launcher.sh
 ``
@@ -225,7 +225,7 @@ On Apple Silicon, **make sure** you installed the `arm64` build of Radioconda. M
 If the Finder warns about an unidentified developer when running `launcher.sh`, clear the quarantine attribute on the unzipped folder:
 
 ``bash
-xattr -dr com.apple.quarantine dses-spectrum-analyzer-1.1.8
+xattr -dr com.apple.quarantine dses-spectrum-analyzer-1.2.0
 ``
 
 
@@ -353,7 +353,7 @@ Radioconda does **not** need reinstalling for an app update.
 If you'd rather apply it yourself, each release is a self-contained zip:
 
 1. **Close** the running app.
-2. **Extract** the new zip alongside the old one — a new folder named with the version (e.g. `dses-spectrum-analyzer-1.1.8`) — or overwrite the old folder's files.
+2. **Extract** the new zip alongside the old one — a new folder named with the version (e.g. `dses-spectrum-analyzer-1.2.0`) — or overwrite the old folder's files.
 3. **Run** `launcher.bat` (Windows) or `launcher.sh` (macOS/Linux) from the **new** folder.
 
 ### What is preserved across versions
@@ -449,7 +449,7 @@ The GR flow graph is running but no samples are arriving. Usual causes:
 ### macOS: "developer cannot be verified"
 
 ``bash
-xattr -dr com.apple.quarantine /path/to/dses-spectrum-analyzer-1.1.8
+xattr -dr com.apple.quarantine /path/to/dses-spectrum-analyzer-1.2.0
 ``
 
 For the optional Desktop **`.app`** icon (built by `install-shortcut.command`), the same warning can appear the first time you double-click it — right-click the app → **Open** once, or approve it in **System Settings → Privacy & Security → Open Anyway**. You only need to do this once per machine.
@@ -534,7 +534,7 @@ At launch the program enumerates attached SDRs (UHD + SoapySDR) and decides what
 
 - **Two or more radios attached**: a picker dialog always appears so you can choose which one to use. Your previous choice is pre-selected, so you can just press Enter to use the same radio as last time. Your selection is remembered for next launch.
 
-- **No SDR attached, but a bundled SigMF sample is present**: the program falls back to **playback mode** — see below.
+- **No SDR attached, but a bundled SigMF sample is present**: the program falls back to **playback mode** — see below. It keeps watching for a receiver in the background: connect or power one on and, within a few seconds, a dialog offers a one-click restart to use it — no manual shut-down-and-relaunch dance.
 
 - **No SDR and no sample**: an error dialog explains how to fix it and the program exits.
 
@@ -552,7 +552,23 @@ If no SDR is attached, the program looks next to the application file for `sampl
 
 - To replace the sample with your own, save a SigMF recording, rename the two files to `sample.sigmf-data` and `sample.sigmf-meta`, and drop them next to the program. (You don't need to change any code.)
 
-### Sidebar controls (right side)
+### Control panels (dockable)
+
+Every control panel is dockable. On the **right**: **Observation**, **Tuning**, **Radio**, and **Recording** — the science settings. On the **left**, beside the plots they belong to: **Spectrum Display** and **Waterfall Display**. Drag a panel by its title bar to rearrange, stack panels as tabs, tear one off into its own floating window (handy on a second monitor), or close it; the **View** menu is organised by column — **Display Panels (left)** and **Control Panels (right)** — and each of those opens onto a *Show this column* switch that hides or restores the whole column in one click, followed by that column's individual panels. Hiding a column remembers which of its panels were open, so showing it again brings back exactly those (a panel you had closed on purpose stays closed). Your arrangement is remembered across runs. To float a panel, **drag it out by its title bar**. The title bar's three buttons act on it afterwards: the first **docks a floating panel back** into the window — which restores the default panel layout, the one arrangement Qt reliably rebuilds, so a panel can always be recovered. The second **enlarges** a floating panel just enough that all of its controls are visible; while enlarged the button shows a double-box *restore* icon and a click returns the panel to its previous size (resizing the panel by hand clears that state, so the next click enlarges afresh). It is greyed out while the panel is docked, where the layout sets the size. **✕** hides the panel. When a column runs out of room Qt stacks panels as tabs along its edge — those tabs are colored (pastel blue, DSES teal when selected) so the stack is easy to spot. The two display panels are deliberately restricted to the left column (they describe the plots, so they stay next to them) — they can still be reordered there, tabbed together, or floated freely. The menu bar (File / View / Radio / Recording / Help) duplicates the important actions, and long status messages — recording filenames, analysis progress — appear in the full-width **status bar** at the bottom of the window where they are never truncated.
+
+#### Observe menu — Pulsars in View (Ctrl+P)
+
+Answers "what can I record right now?" from the ATNF catalog: every pulsar above the site's elevation mask, sorted by flux *in the band you are tuned to* (S400 below ~900 MHz, S1400 above), with current az/el, period, DM, and how long each stays up. Selecting one fills the recording **Source** field and hands the recorder that pulsar's exact catalog RA/Dec for the `.fil` header — better than the position the app otherwise infers from the name.
+
+- **Search**: type part of a name (`b0329`, `J0332`), or filter numerically — `dm<30`, `p<0.1` (seconds), `flux>10`, `alt>40`, or `magnetar`. Terms combine, so `dm<30 flux>50` finds bright, low-dispersion targets.
+
+- **Include below mask**: also lists sources that are not up yet, and the **Next window** column says when each rises above the mask and how long the window lasts. (A source can be circumpolar — never setting — and still spend hours below a usable elevation.)
+
+- **Include magnetars**: magnetars are marked ★ and are never removed by a flux filter, because the catalog usually carries no flux for them.
+
+- The catalog is downloaded once and cached beside your recordings, so the planner keeps working at a site with no internet. **Observe → Refresh Pulsar Catalog** re-downloads it.
+
+- If a **Source** and a **Record for** duration are both set, the app warns at record time when that pulsar would set before the recording finishes.
 
 #### Observation
 
@@ -616,7 +632,7 @@ Sweep runs continuously, redrawing the wide trace after each pass; the waterfall
 
 #### Recording
 
-- **Folder**: where recordings land. Defaults to `~/Documents/DSES_SA_Recordings`.
+- **Folder**: where recordings land. Defaults to `~/Documents/DSES_SA_Recordings`. Change it with this button or from **File → Set Recording Folder…**; the folder is checked for writability and the next recording uses it immediately (it cannot be changed while a recording is running, so a run is never split across two folders). **File → Open Recordings Folder** opens the current one in your file manager.
 
 - **Source**: optional source / pulsar name (e.g. `B0329+54`). When set it is folded into the recording filename and written into the SIGPROC `.fil` header (`source_name`, plus RA/Dec derived from the name) and the SigMF description, so PRESTO/prepfold pick it up. Blank gives a timestamp-only filename. Locked while recording.
 
@@ -654,7 +670,7 @@ Live FFT magnitude in dB. Use the control panel on the right side to adjust:
 
 ### Waterfall (bottom plot)
 
-Scrolling 2-D image of FFT vs. time. Newest row at the bottom.
+Scrolling 2-D image of FFT vs. time. Newest row at the **top**, history flowing down (the SDR#/GQRX convention); the left axis reads as age in rows.
 
 - **Intensity Min/Max**: dB range that maps to the colormap. **Autoscale intensity** picks the 5%–99% percentile of the current data.
 
