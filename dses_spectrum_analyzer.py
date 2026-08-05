@@ -20,6 +20,29 @@ import os
 import sys
 os.environ["PYQTGRAPH_QT_LIB"] = "PySide6"
 
+
+# --- Keep PyQt5 (Qt5) OUT of this process. -------------------------------
+# This app is PySide6/Qt6-only, but `from gnuradio import uhd` optionally
+# imports a PyQt5 widget (ReplayMsgPushButton, unused here), which loads the
+# whole Qt5 stack NEXT TO Qt6. Two Qts in one process is why macOS printed
+# duplicate-ObjC-class warnings at every launch, and it can be fatal: Qt6's
+# QGuiApplication.setOverrideCursor(WaitCursor) built its cursor bitmap via a
+# QImage call that resolved into Qt5's copy -> SIGSEGV in QImage::format()
+# (crash report 2026-08-05, opening the pulsar planner). gnuradio.uhd guards
+# that import with `except ModuleNotFoundError`, so raising exactly that from
+# a meta-path hook makes gnuradio skip its PyQt5 extras cleanly — UHD itself
+# is untouched. Must be installed before ANY gnuradio/Qt import.
+class _PyQt5Blocker:
+    def find_spec(self, name, path=None, target=None):
+        if name == "PyQt5" or name.startswith("PyQt5."):
+            raise ModuleNotFoundError(
+                f"{name} is blocked: this app is PySide6-only "
+                "(see _PyQt5Blocker at the top of dses_spectrum_analyzer.py)")
+        return None
+
+
+sys.meta_path.insert(0, _PyQt5Blocker())
+
 # Quiet known-benign chatter from underlying native libraries before any of
 # them get imported. See the README; users can override any of these from
 # the shell because we use setdefault rather than overwriting.
@@ -6440,7 +6463,9 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
         dlg = UpdateNotificationDialog(latest, url, notes, APP_VERSION, parent=self)
         dlg.dismissed_for_version.connect(self._on_update_dismissed)
         dlg.install_requested.connect(self._install_update)
-        dlg.show()  # non-modal
+        dlg.show()  # non-modal, but bring it to the front so it isn't missed
+        dlg.raise_()
+        dlg.activateWindow()
         # Keep a reference so it isn't garbage-collected when this slot returns.
         self._update_dialog = dlg
 
@@ -8012,8 +8037,56 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
 
 
 
+def _set_macos_app_name(name):
+    """macOS shows the *main bundle's* CFBundleName in the bold application menu
+    (next to the Apple menu), so a plain `python dses_spectrum_analyzer.py` reads
+    'Python' there — which hides that Help/File/etc. belong to this app. Rewrite
+    CFBundleName at runtime via the ObjC runtime (no PyObjC dependency). Must run
+    BEFORE QApplication builds the native menu bar. Fully guarded: it only mutates
+    the info dict if that dict actually implements setObject:forKey: (an immutable
+    NSDictionary does not — calling it would raise an ObjC exception that ctypes
+    could not catch), and any failure just leaves the default name."""
+    if sys.platform != 'darwin':
+        return
+    try:
+        import ctypes
+        from ctypes import util, c_void_p, c_char_p, c_uint32, c_bool, CFUNCTYPE
+        objc = ctypes.CDLL(util.find_library('objc'))
+        cf = ctypes.CDLL(util.find_library('CoreFoundation'))
+        objc.objc_getClass.restype = c_void_p
+        objc.objc_getClass.argtypes = [c_char_p]
+        objc.sel_registerName.restype = c_void_p
+        objc.sel_registerName.argtypes = [c_char_p]
+        cid = c_void_p
+        msg = CFUNCTYPE(cid, cid, cid)(('objc_msgSend', objc))            # (id, SEL)->id
+        msg_resp = CFUNCTYPE(c_bool, cid, cid, cid)(('objc_msgSend', objc))  # respondsToSelector:
+        msg_set = CFUNCTYPE(None, cid, cid, cid, cid)(('objc_msgSend', objc))  # setObject:forKey:
+        bundle = msg(objc.objc_getClass(b'NSBundle'),
+                     objc.sel_registerName(b'mainBundle'))
+        if not bundle:
+            return
+        info = msg(bundle, objc.sel_registerName(b'infoDictionary'))
+        if not info:
+            return
+        set_sel = objc.sel_registerName(b'setObject:forKey:')
+        if not msg_resp(info, objc.sel_registerName(b'respondsToSelector:'), set_sel):
+            return  # immutable dict — don't risk an ObjC exception
+        cf.CFStringCreateWithCString.restype = c_void_p
+        cf.CFStringCreateWithCString.argtypes = [c_void_p, c_char_p, c_uint32]
+        kUTF8 = 0x08000100
+        val = cf.CFStringCreateWithCString(None, name.encode('utf-8'), kUTF8)
+        key = cf.CFStringCreateWithCString(None, b'CFBundleName', kUTF8)
+        if val and key:
+            msg_set(info, set_sel, val, key)
+    except Exception:
+        pass
+
+
 def main(top_block_cls=dses_spectrum_analyzer, options=None):
 
+    # macOS: make the application menu read the app name instead of "python".
+    # Must precede QApplication (which builds the native menu bar).
+    _set_macos_app_name(APP_NAME)
     qapp = QtWidgets.QApplication(sys.argv)
     # Drive QStandardPaths.AppDataLocation to %APPDATA%/DSES_Analyzer (Windows)
     # / ~/Library/Application Support/DSES_Analyzer (mac) / ~/.local/share/...
