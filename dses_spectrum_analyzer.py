@@ -4943,26 +4943,27 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
             }
         """)
         self.setWindowTitle(f"{APP_NAME}  —  v{APP_VERSION}")
-        # Set the window/Dock icon to the bundled DSES pulsar on Windows/Linux.
+        # Set the window/Dock icon to the bundled DSES pulsar on ALL platforms.
         #
-        # macOS is deliberately EXCLUDED: this process has BOTH Qt5 (pulled in
-        # by GNU Radio's qtgui blocks) and Qt6 (PySide6) loaded, and setting a
-        # raster icon there runs Qt6's setWindowIcon into Qt5's macOS bitmap
-        # path (qt_mac_bitmapInfoForImage / QImage::format) and SIGSEGVs. The
-        # old themed icon never crashed only because QIcon.fromTheme() is empty
-        # on macOS. On macOS the Dock icon comes from the .app bundle's .icns
-        # (install-shortcut.command) instead, so we simply skip it here.
-        if sys.platform != 'darwin':
-            try:
-                icon_png = Path(__file__).resolve().parent / "icons" / "dses_sa.png"
-                icon = (QtGui.QIcon(str(icon_png)) if icon_png.is_file()
-                        else QtGui.QIcon.fromTheme('gnuradio-grc'))
-                self.setWindowIcon(icon)
-                app = QtWidgets.QApplication.instance()
-                if app is not None and not icon.isNull():
-                    app.setWindowIcon(icon)
-            except BaseException as exc:
-                print(f"Qt GUI: Could not set Icon: {str(exc)}", file=sys.stderr)
+        # History: macOS used to be excluded because Qt5 (pulled in by
+        # gnuradio.uhd's optional PyQt5 widget) and Qt6 (PySide6) were BOTH
+        # loaded, and a raster setWindowIcon ran Qt6 into Qt5's macOS bitmap
+        # path (qt_mac_bitmapInfoForImage / QImage::format) and SIGSEGVed —
+        # the same collision that later crashed setOverrideCursor. Since the
+        # _PyQt5Blocker at the top of this file (2026-08-05), Qt5 never loads,
+        # so the hazard is gone and macOS gets the icon too (a dev/git run
+        # shows it in the Dock; installed .app runs still use the bundle's
+        # .icns from install-shortcut.command).
+        try:
+            icon_png = Path(__file__).resolve().parent / "icons" / "dses_sa.png"
+            icon = (QtGui.QIcon(str(icon_png)) if icon_png.is_file()
+                    else QtGui.QIcon.fromTheme('gnuradio-grc'))
+            self.setWindowIcon(icon)
+            app = QtWidgets.QApplication.instance()
+            if app is not None and not icon.isNull():
+                app.setWindowIcon(icon)
+        except BaseException as exc:
+            print(f"Qt GUI: Could not set Icon: {str(exc)}", file=sys.stderr)
 
         # Start stderr capture BEFORE the USRP source is built so we catch
         # any overflow indicators emitted during stream startup.
