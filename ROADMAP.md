@@ -444,7 +444,7 @@ flagging for Soapy sources.
 - Full expression (Observation menu, first-run wizard, visibility-planner
   tie-in "B0329+54 rises 21:40 → Observe") belongs to the 1.2.0 redesign.
 
-## v1.2.0 — UI redesign: menus + dockable panels — CORE LANDED on main 2026-08-04
+## v1.2.0 — SHIPPED 2026-08-05 (cut + published from Windows)
 
 Landed: QMainWindow shell, four dockable panels (rearrange/tab/tear-off/
 hide, persisted via saveState), menu bar (File/View/Radio/Recording/Help),
