@@ -4908,6 +4908,39 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
                 border-radius: 5px; background: #f7fafc;
                 border: 2px solid #156082;
             }
+
+            /* Inner control groups (FFT, Averaging, Sweep, Mode, …): now
+               that the redundant outer boxes are flattened (Rick,
+               2026-08-05), each group title becomes a small pastel "pill"
+               tab — a miniature of the dock header (same pastel blue /
+               navy / border family), so the hierarchy reads: strong shaded
+               bar = dock, small pill = group. A faint pastel wash lifts
+               each group off the window background. */
+            QGroupBox {
+                border: 1px solid #b9cfe0;
+                border-radius: 6px;
+                background: rgba(219, 234, 254, 40);
+                margin-top: 11px;               /* room for the title pill */
+                padding-top: 6px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                subcontrol-position: top left;
+                left: 8px;
+                padding: 1px 8px;
+                color: #1e3a5f;                 /* dock-header navy  */
+                background: #dbeafe;            /* dock-header pastel */
+                border: 1px solid #93b4d4;
+                border-radius: 4px;
+            }
+            /* Flattened outer boxes (title moved to the dock header):
+               stay invisible — no frame, no wash, no title space. */
+            QGroupBox[dsesFlat="true"] {
+                border: none;
+                background: transparent;
+                margin-top: 0px;
+                padding-top: 0px;
+            }
         """)
         self.setWindowTitle(f"{APP_NAME}  —  v{APP_VERSION}")
         # Set the window/Dock icon to the bundled DSES pulsar on Windows/Linux.
@@ -5013,7 +5046,22 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
             dock.visibilityChanged.connect(
                 lambda _v, a=area: self._refresh_dock_column_checks(a))
             # Insert groups above the trailing stretch.
-            def _add(w, _lay=lay):
+            def _add(w, _lay=lay, _title=title):
+                # The dock's shaded title bar already names the panel, so an
+                # outer group box with the SAME title is redundant chrome
+                # (Rick, 2026-08-05): drop its title and outline. Inner groups
+                # with their own names ("Sweep", "Mode", …) keep theirs.
+                _dock_t = _title.strip().lower()
+                _box_t = (w.title().strip().rstrip(':').lower()
+                          if isinstance(w, QtWidgets.QGroupBox) else None)
+                if _box_t is not None and (
+                        _box_t == _dock_t
+                        or (_dock_t == "radio" and _box_t == "rx")):
+                    w.setTitle("")
+                    w.setFlat(True)
+                    # Exempt from the QGroupBox pill/outline styling in the
+                    # main-window stylesheet (QGroupBox[dsesFlat="true"]).
+                    w.setProperty("dsesFlat", True)
                 _lay.insertWidget(_lay.count() - 1, w)
             return _add
         self._make_dock = _make_dock             # reused after plots exist
