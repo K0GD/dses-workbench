@@ -520,10 +520,23 @@ menu bar!) + drift-scan box test (dock behavior on headless Openbox/xrdp
 
 ## Validation tooling (after 1.1.8 ships, possibly after 1.2.0)
 
-- [ ] **B210-TX pulsar simulator = BUILT-IN TEST (DECIDED 2026-08-03; BIT
-      framing Rick 2026-08-03):**
-      **BENCH-PROVEN 2026-08-05 (Windows, B210 s/n 8003886) — core built,
-      hardware PASS; remaining: the in-app "Self test" UI.** What landed:
+- [x] **B210-TX pulsar simulator = BUILT-IN TEST (DECIDED 2026-08-03; BIT
+      framing Rick 2026-08-03) — DONE 2026-08-05 incl. the in-app UI.**
+      **IN-APP "Self Test" SHIPPED (Observe menu, per Rick): modal dialog
+      (duration spin, live countdown, PASS/FAIL readout, Open Fold PDF),
+      full radio state save/restore (tuning model incl. preset/manual/
+      offsets, rate, gain, antenna), TX spliced into the RUNNING app
+      flowgraph via lock/unlock, private FilterbankSink to
+      <recordings>/self_test/, PRESTO fold on the shared analysis worker
+      slot, grade() vs injected truth. Guards: playback / non-B210 /
+      sweep / recording / analysis-in-progress. LIVE-VERIFIED 2026-08-05
+      end-to-end in the real app on the real B210 (driver script through
+      the production path): PASS — DETECTION, chi2 248 (30 s capture),
+      P exact, DM 54.8 of 50, and STATE-restore byte-identical (Rick's
+      1422 MHz / 16 MS/s / gain 40 / A:RX2 all back). Help text added
+      (Observe menu section); pulsar_sim.py added to BOTH make-release
+      ship lists (lazy import — the completeness guard can't see it).**
+      **BENCH-PROVEN 2026-08-05 (Windows, B210 s/n 8003886).** What landed:
       `pulsar_sim.py` (synthesis core: SimSpec ground truth incl. a
       `dm_resolution` honesty metric, grid-quantized seamless loop,
       Gaussian-envelope NOISE carrier, coherent cold-plasma dispersion —
@@ -545,10 +558,10 @@ menu bar!) + drift-scan box test (dock behavior on headless Openbox/xrdp
       wandered to 19 of 26.76); BIT default is now P=100 ms, duty 2%,
       DM 50 @ 420 MHz/2 MS/s -> 11.2 ms sweep vs 2 ms pulses =
       dm_resolution +/-4.5. Defaults deliberately far from 1420 MHz.
-      TODO to close this item: host the same TX branch in the app as the
-      "Self test" action with the PASS/FAIL readout (harness code is the
-      blueprint), and a site variant note (B-side RX while the feed stays
-      on A). synthesize the pulsar in software and
+      (The former TODO — hosting the TX branch in the app — is the shipped
+      Self Test above. Site note: at Haswell the feed stays on receiver A;
+      the self test parks RX on the A-side RX2 port and restores the
+      antenna afterwards, so no recabling is ever needed.) synthesize the pulsar in software and
       transmit it from the SAME B210's TX side (full duplex; no second
       unit needed) while the app records — but as an APP FEATURE, not a
       standalone tool: a B210 is single-process, so the app must host the

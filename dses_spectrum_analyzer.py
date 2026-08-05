@@ -2967,6 +2967,23 @@ Pulsar Catalog</b> re-downloads it.</li>
 app warns at record time when that pulsar would set before the recording
 finishes.</li>
 </ul>
+<h4>Observe menu — B210 Self Test</h4>
+<p>A built-in test of the <i>entire</i> pulsar chain — SDR, channelizer,
+filterbank writer, timebase, PRESTO fold, verdict — with no test equipment
+at all. The B210's own transmitter plays a synthetic pulsar (100 ms period,
+DM 50, noise-carrier pulses with real cold-plasma dispersion) at
+<b>minimum TX gain</b> on 420 MHz, far from the protected hydrogen-line
+band; the receiver records the B210's internal TX→RX leakage — no cable or
+attenuator needed. After the capture (default 90 s) the app folds the
+recording at the injected period and DM and grades PASS/FAIL: the period
+must come back exact, the DM near 50 (a DM stuck at 0 means dispersion was
+lost), and the significance high. Your tuning, sample rate, gain, and
+antenna are saved before the test and restored right after the capture,
+while the fold runs. Run it before packing for a field session: a PASS
+means a real pulsar that reaches the feed will survive the pipeline.
+Requires a USRP B200/B210 and an installed PRESTO. The recording and its
+fold PDF land in a <code>self_test</code> folder inside your recordings
+folder.</p>
 <h4>Observation</h4>
 <p>The "what are you trying to do tonight?" selector. Pick a goal and every
 science-critical setting — band, sample rate, recording format, channels,
@@ -4596,6 +4613,183 @@ class PulsarPlannerDialog(QtWidgets.QDialog):
                 self.selected = r
                 break
         self.accept()
+
+
+# === B210 built-in self test (Observe menu) ===
+#
+# Bench-proven parameters (2026-08-05, s/n 8003886): internal TX->RX leakage
+# at MINIMUM TX gain carries the test — no cable, no pad. 420 MHz keeps the
+# transmission far from the protected 1420 MHz band. The 11.2 ms dispersion
+# sweep against 2 ms pulses gives prepfold real DM leverage (+/-4.5); the
+# first bench run recovered DM 51.45 of 50 injected at chi2 1118.
+SELFTEST_FREQ_HZ = 420e6
+SELFTEST_RATE_HZ = 2e6
+SELFTEST_PERIOD_S = 0.1
+SELFTEST_DM = 50.0
+SELFTEST_DUTY = 0.02
+SELFTEST_AMP = 0.5
+SELFTEST_RX_GAIN_DB = 40.0
+SELFTEST_NCHANS = 128
+SELFTEST_SOURCE_NAME = "B210BIT"
+
+
+class B210SelfTestDialog(QtWidgets.QDialog):
+    """Modal driver for the B210 built-in test: the main window hosts the
+    actual TX/RX flowgraph surgery (_selftest_* methods); this dialog is the
+    countdown, progress, and PASS/FAIL readout. Modal on purpose — every
+    control that could disturb the test (retune, rate, record) lives in the
+    main window, and 90 s of hands-off is exactly what a self test wants."""
+
+    def __init__(self, mw):
+        super().__init__(mw)
+        self._mw = mw
+        self._phase = "idle"        # idle -> capture -> analyze -> done
+        self._left = 0
+        self.setWindowTitle("B210 Self Test")
+        self.setModal(True)
+        lay = QtWidgets.QVBoxLayout(self)
+
+        intro = QtWidgets.QLabel(
+            "Transmits a synthetic dispersed pulsar from this B210's own TX "
+            "at <b>minimum gain</b> (420 MHz, nowhere near the protected "
+            "1420 MHz band) and records it off the internal TX→RX "
+            "leakage — <b>no cable needed</b>. The recording is folded with "
+            "PRESTO and graded against the injected truth, proving the whole "
+            "chain — SDR, channelizer, writer, timebase, PRESTO — before "
+            "telescope time is spent.<br><br>"
+            "Your tuning, rate, gain, and antenna are restored when the "
+            "capture ends.")
+        intro.setWordWrap(True)
+        lay.addWidget(intro)
+
+        params = QtWidgets.QLabel(
+            f"Injected: P = {SELFTEST_PERIOD_S*1e3:.0f} ms, "
+            f"DM = {SELFTEST_DM:g}, duty {SELFTEST_DUTY*100:.0f}%, "
+            f"{SELFTEST_FREQ_HZ/1e6:g} MHz @ "
+            f"{SELFTEST_RATE_HZ/1e6:g} MS/s, {SELFTEST_NCHANS} channels")
+        params.setStyleSheet("color: gray;")
+        lay.addWidget(params)
+
+        row = QtWidgets.QHBoxLayout()
+        row.addWidget(QtWidgets.QLabel("Capture length:"))
+        self._dur_spin = QtWidgets.QSpinBox()
+        self._dur_spin.setRange(30, 300)
+        self._dur_spin.setValue(90)
+        self._dur_spin.setSuffix(" s")
+        self._dur_spin.setToolTip(
+            "90 s is the bench-proven default; longer buys significance.")
+        row.addWidget(self._dur_spin)
+        row.addStretch(1)
+        lay.addLayout(row)
+
+        self._status = QtWidgets.QLabel("Ready.")
+        self._status.setWordWrap(True)
+        lay.addWidget(self._status)
+
+        self._results = QtWidgets.QPlainTextEdit()
+        self._results.setReadOnly(True)
+        self._results.setVisible(False)
+        self._results.setMinimumHeight(140)
+        lay.addWidget(self._results)
+
+        btns = QtWidgets.QHBoxLayout()
+        self._start_btn = QtWidgets.QPushButton("Start Self Test")
+        self._start_btn.clicked.connect(self._on_start)
+        btns.addWidget(self._start_btn)
+        self._pdf_btn = QtWidgets.QPushButton("Open Fold PDF")
+        self._pdf_btn.setVisible(False)
+        self._pdf_path = ""
+        self._pdf_btn.clicked.connect(self._open_pdf)
+        btns.addWidget(self._pdf_btn)
+        btns.addStretch(1)
+        self._close_btn = QtWidgets.QPushButton("Close")
+        self._close_btn.clicked.connect(self.reject)
+        btns.addWidget(self._close_btn)
+        lay.addLayout(btns)
+
+        self._timer = QtCore.QTimer(self)
+        self._timer.setInterval(1000)
+        self._timer.timeout.connect(self._tick)
+        self.resize(520, 380)
+
+    # --- driving ---------------------------------------------------------
+    def _on_start(self):
+        err = self._mw._selftest_begin(self)
+        if err:
+            QtWidgets.QMessageBox.information(self, "Self test", err)
+            return
+        self._phase = "capture"
+        self._left = int(self._dur_spin.value())
+        self._start_btn.setEnabled(False)
+        self._dur_spin.setEnabled(False)
+        self._close_btn.setText("Abort")
+        self._timer.start()
+        self._tick(first=True)
+
+    def _tick(self, first=False):
+        if self._phase != "capture":
+            return
+        if not first:
+            self._left -= 1
+        if self._left <= 0:
+            self._timer.stop()
+            self._phase = "analyze"
+            self._close_btn.setText("Close")
+            self.on_progress("capture done — radio restored; folding with "
+                             "PRESTO…")
+            self._mw._selftest_finish_capture(self)
+        else:
+            gaps = self._mw._selftest_gap_events()
+            self._status.setText(
+                f"Recording the internal leakage: {self._left} s left"
+                + (f"  (gap events {gaps})" if gaps else ""))
+
+    # --- callbacks from the main window ----------------------------------
+    def on_progress(self, msg):
+        self._status.setText(str(msg))
+
+    def on_failed(self, msg):
+        self._phase = "done"
+        self._status.setText("Self test FAILED to run.")
+        self._results.setPlainText(str(msg))
+        self._results.setVisible(True)
+        self._start_btn.setEnabled(True)
+        self._dur_spin.setEnabled(True)
+        self._close_btn.setText("Close")
+
+    def on_result(self, ok, checks, res, pdf_path):
+        self._phase = "done"
+        verdict = res.get("verdict", "?")
+        head = "BUILT-IN TEST PASS" if ok else "BUILT-IN TEST FAIL"
+        self._status.setText(
+            ("✅ " if ok else "❌ ") + head
+            + f"   (PRESTO verdict: {verdict})")
+        lines = list(checks)
+        if res.get("chi2_red") is not None:
+            lines.append(f"reduced chi-squared {res['chi2_red']:.1f}")
+        gaps = self._mw._selftest_capture_info()
+        if gaps:
+            lines.append(f"recorder: {gaps}")
+        self._results.setPlainText("\n".join(lines))
+        self._results.setVisible(True)
+        self._start_btn.setEnabled(True)
+        self._start_btn.setText("Run Again")
+        self._dur_spin.setEnabled(True)
+        if pdf_path:
+            self._pdf_path = pdf_path
+            self._pdf_btn.setVisible(True)
+
+    def _open_pdf(self):
+        if self._pdf_path:
+            QtGui.QDesktopServices.openUrl(
+                QtCore.QUrl.fromLocalFile(self._pdf_path))
+
+    def reject(self):
+        if self._phase == "capture":
+            self._timer.stop()
+            self._mw._selftest_abort()
+            self._phase = "idle"
+        super().reject()
 
 
 class _DockTitleBar(QtWidgets.QWidget):
@@ -6324,6 +6518,15 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
         refresh_cat_act.triggered.connect(
             lambda: self._show_pulsar_planner(force_refresh=True))
         obs_menu.addAction(refresh_cat_act)
+        obs_menu.addSeparator()
+        selftest_act = QtGui.QAction("B210 &Self Test…", self)
+        selftest_act.setToolTip(
+            "Transmit a synthetic dispersed pulsar from the B210's own TX "
+            "at minimum gain, record the internal leakage, fold it with "
+            "PRESTO, and grade PASS/FAIL — proves the whole chain with no "
+            "cable before telescope time is spent")
+        selftest_act.triggered.connect(self._show_selftest_dialog)
+        obs_menu.addAction(selftest_act)
 
         rec_menu = bar.addMenu("Recor&ding")
         rec_start_act = QtGui.QAction("&Start Recording", self)
@@ -7630,6 +7833,245 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
         _p, _dm = self._manual_fold_params()
         self._start_analysis(snap, self._source_name.strip(), quick=True,
                              fold_p_s=_p, fold_dm=_dm)
+
+    # --- B210 built-in self test (Observe menu) ---------------------------
+    #
+    # The dialog (B210SelfTestDialog) is the UI; these methods do the
+    # flowgraph surgery: save the user's radio state, retune to the bench-
+    # proven test geometry, splice a TX branch (vector_source -> usrp_sink
+    # on the SAME B210, minimum gain) plus a private FilterbankSink, record,
+    # tear down, restore, then fold with PRESTO and grade against the
+    # injected ground truth. Bench-proven 2026-08-05: internal TX->RX
+    # leakage suffices — no cable.
+
+    def _show_selftest_dialog(self):
+        reason = self._selftest_unavailable_reason()
+        if reason:
+            QtWidgets.QMessageBox.information(self, "B210 Self Test", reason)
+            return
+        # Keep the reference on self: the PRESTO fold outlives exec() when
+        # the user closes the dialog mid-analysis, and the worker's queued
+        # signals must land on a live QObject, not a collected one.
+        self._selftest_dialog = B210SelfTestDialog(self)
+        self._selftest_dialog.exec()
+
+    def _selftest_unavailable_reason(self):
+        """None when the self test can run now, else a human-readable why."""
+        if self._playback_mode:
+            return ("The self test needs a live radio — the app is in "
+                    "playback mode.")
+        if self._device_driver != DRIVER_UHD_B200:
+            return ("The self test uses the radio's own transmitter and "
+                    "currently supports the USRP B200/B210 only.")
+        if self._source is None or self.uhd_usrp_source_0 is None:
+            return "No radio is running."
+        if self._sweep_active:
+            return "Switch to Live mode first — Sweep retunes continuously."
+        if self.record or self._fil_sink is not None \
+                or self._sigmf_sink is not None or self._ezra_sink is not None:
+            return "Stop the recording first."
+        if getattr(self, '_analysis_thread', None) is not None \
+                and self._analysis_thread.is_alive():
+            return "An analysis is already in progress — wait for it to finish."
+        if getattr(self, '_selftest_active', False):
+            return "A self test is already running."
+        return None
+
+    def _selftest_begin(self, dialog):
+        """Configure the radio and splice the TX + recorder chains. Returns
+        None on success, else an error string (nothing left spliced)."""
+        reason = self._selftest_unavailable_reason()
+        if reason:
+            return reason
+        import pulsar_sim
+
+        # Save the user's radio state (tuning model, not just the computed
+        # center, so the preset/manual/offset widgets restore faithfully).
+        self._selftest_saved = {
+            'freq_preset': self.freq_preset,
+            'freq_manual': self.freq_manual,
+            'freq_offset': self.freq_offset,
+            'freq_offset_0': self.freq_offset_0,
+            'samp_rate': float(self.samp_rate),
+            'gain': float(self.gain),
+            'antenna': self._source.current_antenna,
+        }
+        self._selftest_active = True
+        dialog.on_progress("Configuring the radio for the test…")
+        QtWidgets.QApplication.processEvents()
+        tx = vec = sink = None
+        try:
+            # Test geometry via the app's own setters so every widget and
+            # saved setting stays consistent.
+            self.set_freq_offset_0(0.0)
+            self.set_freq_offset(0.0)
+            self.set_freq_manual(SELFTEST_FREQ_HZ)
+            self.set_freq_preset(0)
+            self.set_samp_rate(SELFTEST_RATE_HZ)
+            self.set_gain(SELFTEST_RX_GAIN_DB)
+            self._gain_win.set_value(SELFTEST_RX_GAIN_DB)
+            # RX must sit on an RX2 port — TX owns the shared TX/RX-A port.
+            ant = next((a for a in self._source.antennas
+                        if a.endswith("RX2")), None)
+            if ant and ant != self._source.current_antenna:
+                self.set_antenna(ant)
+                self._sync_antenna_combo()
+
+            iq, spec = pulsar_sim.synth(
+                float(self.samp_rate), float(self.center_freq),
+                SELFTEST_PERIOD_S, SELFTEST_DM, duty=SELFTEST_DUTY,
+                n_periods=10, amplitude=SELFTEST_AMP, noise_floor=0.0,
+                seed=2026)
+            self._selftest_spec = spec
+
+            tx = uhd.usrp_sink(
+                f"serial={self._device_serial}",
+                uhd.stream_args(cpu_format="fc32", channels=[0]),
+            )
+            tx.set_samp_rate(float(self.samp_rate))
+            tx.set_center_freq(float(self.center_freq), 0)
+            tx.set_antenna("TX/RX", 0)
+            tx.set_gain(0.0, 0)     # MINIMUM — the roadmap protected-band rule
+
+            outdir = os.path.join(self.recording_dir, "self_test")
+            os.makedirs(outdir, exist_ok=True)
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            path = os.path.join(outdir, f"{SELFTEST_SOURCE_NAME}_{ts}.fil")
+            sink = sigproc_fil.FilterbankSink(
+                path, nchans=SELFTEST_NCHANS, samp_rate=float(self.samp_rate),
+                center_freq_mhz=float(self.center_freq) / 1e6,
+                tstart_mjd=sigproc_fil.unix_to_mjd(time.time()),
+                source_name=SELFTEST_SOURCE_NAME)
+            vec = blocks.vector_source_c(iq, True)
+
+            self.lock()
+            try:
+                self.connect(vec, tx)
+                self.connect((self.uhd_usrp_source_0, 0), (sink, 0))
+            finally:
+                self.unlock()
+        except Exception as exc:
+            self._selftest_active = False
+            if sink is not None:
+                try:
+                    sink.close()
+                except Exception:
+                    pass
+            self._selftest_restore_settings()
+            return f"Could not start the self test:\n\n{exc}"
+
+        self._selftest_tx = tx
+        self._selftest_vec = vec
+        self._selftest_sink = sink
+        self._selftest_path = path
+        self._selftest_info = None
+        return None
+
+    def _selftest_gap_events(self):
+        sink = getattr(self, '_selftest_sink', None)
+        return sink.gap_events if sink is not None else 0
+
+    def _selftest_capture_info(self):
+        return getattr(self, '_selftest_info', None)
+
+    def _selftest_teardown(self):
+        """Unsplice TX + recorder, close the .fil, release the TX handle,
+        restore the user's radio state. Safe to call twice."""
+        sink = getattr(self, '_selftest_sink', None)
+        tx = getattr(self, '_selftest_tx', None)
+        vec = getattr(self, '_selftest_vec', None)
+        if sink is not None or tx is not None:
+            try:
+                self.lock()
+                try:
+                    if vec is not None and tx is not None:
+                        self.disconnect(vec, tx)
+                    if sink is not None:
+                        self.disconnect((self.uhd_usrp_source_0, 0), (sink, 0))
+                finally:
+                    self.unlock()
+            except Exception as exc:
+                print(f"Self test disconnect failed: {exc}", file=sys.stderr)
+        if sink is not None:
+            try:
+                self._selftest_info = sink.close()
+            except Exception as exc:
+                print(f"Self test sink close failed: {exc}", file=sys.stderr)
+        self._selftest_sink = None
+        self._selftest_tx = None
+        self._selftest_vec = None
+        import gc
+        gc.collect()        # release the TX streamer/device handle promptly
+        self._selftest_restore_settings()
+
+    def _selftest_restore_settings(self):
+        st = getattr(self, '_selftest_saved', None)
+        if not st:
+            return
+        self._selftest_saved = None
+        try:
+            self.set_freq_manual(st['freq_manual'])
+            self.set_freq_offset_0(st['freq_offset_0'])
+            self.set_freq_offset(st['freq_offset'])
+            self.set_freq_preset(st['freq_preset'])
+            self.set_samp_rate(st['samp_rate'])
+            self.set_gain(st['gain'])
+            self._gain_win.set_value(st['gain'])
+            if st['antenna'] and st['antenna'] != self._source.current_antenna:
+                self.set_antenna(st['antenna'])
+                self._sync_antenna_combo()
+        except Exception as exc:
+            print(f"Self test settings restore failed: {exc}", file=sys.stderr)
+
+    def _selftest_abort(self):
+        self._selftest_teardown()
+        self._selftest_active = False
+        self._recording_status.setText(
+            "Self test aborted — settings restored")
+
+    def _selftest_finish_capture(self, dialog):
+        """Capture over: tear down, restore the radio, then fold on a worker
+        thread and grade against the injected truth."""
+        self._selftest_teardown()
+        spec = self._selftest_spec
+        path = self._selftest_path
+
+        sig = self._AnalysisSignals()
+        sig.progress.connect(dialog.on_progress)
+        sig.done.connect(lambda res: self._selftest_grade(dialog, res))
+        sig.failed.connect(lambda msg: self._selftest_fail(dialog, msg))
+        self._selftest_sig = sig    # keep a ref while the thread runs
+
+        def _work():
+            try:
+                import fold_analysis
+                res = fold_analysis.analyze_fil(
+                    path, source_name=SELFTEST_SOURCE_NAME,
+                    fold_p_s=spec.period_s, fold_dm=spec.dm,
+                    progress=sig.progress.emit)
+                sig.done.emit(res)
+            except Exception as exc:
+                sig.failed.emit(str(exc))
+
+        # Claims the shared analysis slot so quick-look/auto-analysis wait.
+        self._analysis_thread = threading.Thread(
+            target=_work, name="selftest-analysis", daemon=True)
+        self._analysis_thread.start()
+
+    def _selftest_fail(self, dialog, msg):
+        self._selftest_active = False
+        dialog.on_failed(
+            f"The capture completed (kept at\n{self._selftest_path})\n"
+            f"but the PRESTO fold did not:\n\n{msg}")
+
+    def _selftest_grade(self, dialog, res):
+        import pulsar_sim
+        self._selftest_active = False
+        ok, checks = pulsar_sim.grade(self._selftest_spec, res)
+        pdf = res.get('pdf', '')
+        self._recording_status.setText(
+            "Self test " + ("PASS" if ok else "FAIL"))
+        dialog.on_result(ok, checks, res, pdf)
 
     def _stop_recording(self):
         """Pull whichever recording sink is active out of the flowgraph and

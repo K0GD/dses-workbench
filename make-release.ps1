@@ -53,6 +53,7 @@ try {
         'dses_spectrum_analyzer.py',
         'sigproc_fil.py',
         'pulsar_planner.py',
+        'pulsar_sim.py',
         'ezra_txt.py',
         'fold_analysis.py',
         'fold_pdf.py',
