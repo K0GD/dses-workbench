@@ -1551,6 +1551,12 @@ class FftPlotWidget(QtWidgets.QWidget):
         close button and View-menu toggle replace it), and the caller owns
         the returned group box."""
         panel = self._panel_scroll.takeWidget()
+        # The fixed 230 px width was for the old embedded-sidebar layout (kept
+        # the two plot regions equal). In a dock it would pin the contents at
+        # 230 px however wide the (floating) panel is stretched — so relax it
+        # to a minimum and let the panel grow with its dock.
+        panel.setMinimumWidth(230)
+        panel.setMaximumWidth(16777215)   # QWIDGETSIZE_MAX (undo setFixedWidth)
         self._panel_scroll.hide()
         self._toggle_wrap.hide()
         return panel
@@ -2233,6 +2239,10 @@ class WaterfallPlotWidget(QtWidgets.QWidget):
         close button and View-menu toggle replace it), and the caller owns
         the returned group box."""
         panel = self._panel_scroll.takeWidget()
+        # Same as the spectrum panel: relax the old sidebar fixed width so the
+        # contents grow with the dock instead of pinning at 230 px.
+        panel.setMinimumWidth(230)
+        panel.setMaximumWidth(16777215)   # QWIDGETSIZE_MAX (undo setFixedWidth)
         self._panel_scroll.hide()
         self._toggle_wrap.hide()
         return panel
