@@ -521,7 +521,34 @@ menu bar!) + drift-scan box test (dock behavior on headless Openbox/xrdp
 ## Validation tooling (after 1.1.8 ships, possibly after 1.2.0)
 
 - [ ] **B210-TX pulsar simulator = BUILT-IN TEST (DECIDED 2026-08-03; BIT
-      framing Rick 2026-08-03):** synthesize the pulsar in software and
+      framing Rick 2026-08-03):**
+      **BENCH-PROVEN 2026-08-05 (Windows, B210 s/n 8003886) — core built,
+      hardware PASS; remaining: the in-app "Self test" UI.** What landed:
+      `pulsar_sim.py` (synthesis core: SimSpec ground truth incl. a
+      `dm_resolution` honesty metric, grid-quantized seamless loop,
+      Gaussian-envelope NOISE carrier, coherent cold-plasma dispersion —
+      sign convention derived AND verified to 0.06 us against the law;
+      `grade()` PASS/FAIL vs injected truth), `test_pulsar_sim.py`
+      (fast math suite + `--presto` offline round trip: synth -> app
+      channelizer -> .fil -> WSL prepfold = DETECTION, P exact, DM 48.0
+      vs 50 injected — the FIRST end-to-end DM validation ever on this
+      pipeline), and `tools/b210_bit.py` (bench harness: one B210 full
+      duplex, TX loops the waveform out TX/RX-A at MIN gain, RX2-A ->
+      FilterbankSink .fil -> analyze_fil -> grade). HEADLINE: **internal
+      TX->RX leakage alone carries the test — NO cable, NO pad, NO
+      accessories** (15 s probe: pulse ~10 sigma AND the dispersion sweep
+      visibly marching across the band). Full 90 s graded run: DETECTION,
+      chi2_red 1118, P recovered 100.00000 ms (0.000% off), **DM 51.45
+      vs 50 injected (3% on real hardware)**, 0 gap events. GEOMETRY
+      LESSON (quantified B0950+08 physics): DM leverage = sweep vs pulse
+      width; 10 ms pulses over a 6 ms sweep -> +/-22 DM slack (prepfold
+      wandered to 19 of 26.76); BIT default is now P=100 ms, duty 2%,
+      DM 50 @ 420 MHz/2 MS/s -> 11.2 ms sweep vs 2 ms pulses =
+      dm_resolution +/-4.5. Defaults deliberately far from 1420 MHz.
+      TODO to close this item: host the same TX branch in the app as the
+      "Self test" action with the PASS/FAIL readout (harness code is the
+      blueprint), and a site variant note (B-side RX while the feed stays
+      on A). synthesize the pulsar in software and
       transmit it from the SAME B210's TX side (full duplex; no second
       unit needed) while the app records — but as an APP FEATURE, not a
       standalone tool: a B210 is single-process, so the app must host the
