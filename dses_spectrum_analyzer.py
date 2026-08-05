@@ -6898,22 +6898,23 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
             self._app_settings.set('window', 'y', int(y))
             self._app_settings.set('window', 'width', int(w))
             self._app_settings.set('window', 'height', int(h))
+            # Dock arrangement too: closeEvent AND the SIGINT/SIGTERM handler
+            # both come through here, so a terminal Ctrl-C / kill no longer
+            # loses the dock layout (gap found in the 1.2.0 Mac test pass —
+            # it was previously saved only in closeEvent).
+            try:
+                state = bytes(self.saveState().toBase64()).decode('ascii')
+                self._app_settings.set('window', 'dock_state', state)
+            except Exception:
+                pass
             self._app_settings.save()
         except Exception as exc:
             print(f"Geometry save failed: {exc}", file=sys.stderr)
 
     def closeEvent(self, event):
-        # Save window geometry + dock arrangement + flush setting edits.
+        # Save window geometry + dock arrangement + flush setting edits
+        # (all inside _save_geometry, shared with the SIGINT/SIGTERM path).
         self._save_geometry()
-        try:
-            state = bytes(self.saveState().toBase64()).decode('ascii')
-            self._app_settings.set('window', 'dock_state', state)
-        except Exception:
-            pass
-        try:
-            self._app_settings.save()
-        except OSError as exc:
-            print(f"Settings save on close failed: {exc}", file=sys.stderr)
         # Stop recording first (gracefully flush the SigMF file) before
         # tearing down the flowgraph.
         try:
