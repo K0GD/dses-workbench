@@ -446,6 +446,14 @@ flagging for Soapy sources.
 
 ## v1.2.0 — SHIPPED 2026-08-05 (cut + published from Windows)
 
+**Group announcement SENT (Rick, 2026-08-05):** email to the six DSES radio
+astronomers covering both recent releases — 1.1.8 (presets, recording
+integrity, auto-analysis PDFs, ezRA drift scan, true sample rates, Ray's
+fixes) and 1.2.0 (dockable-panels redesign, pulsar visibility planner,
+hot-plug detection, waterfall new-at-top, macOS Qt fix) — plus
+getting-started steps (Radioconda + conda one-liner + zip + launcher;
+playback mode needs no radio) for members who haven't installed yet.
+
 Landed: QMainWindow shell, four dockable panels (rearrange/tab/tear-off/
 hide, persisted via saveState), menu bar (File/View/Radio/Recording/Help),
 full-width status bar with recording-status mirroring. Verified live on
