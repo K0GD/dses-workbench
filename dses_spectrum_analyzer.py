@@ -2984,6 +2984,18 @@ means a real pulsar that reaches the feed will survive the pipeline.
 Requires a USRP B200/B210 and an installed PRESTO. The recording and its
 fold PDF land in a <code>self_test</code> folder inside your recordings
 folder.</p>
+<p>Beyond the standard test, two advanced modes make it a general pulsar
+<i>simulator</i>: <b>Simulate a catalog pulsar</b> picks any source from
+the ATNF catalog (magnetars included) and injects its exact catalog period
+and DM, and <b>Custom</b> opens every parameter — frequency (any B210
+frequency, 70–6000 MHz), sample rate, period, DM, duty cycle, amplitude,
+RX gain, channels, and capture length. A live readout translates the
+chosen geometry into what matters: the dispersion sweep across the band
+and the DM resolution it can honestly support, pulse width vs sample time,
+and pulses per capture — narrow bands at high frequency constrain DM
+weakly, and the readout says so before you spend the time. TX gain is
+always locked at minimum: the internal leakage is all the test needs, so
+even the protected 1420 MHz band is safe.</p>
 <h4>Observation</h4>
 <p>The "what are you trying to do tonight?" selector. Pick a goal and every
 science-critical setting — band, sample rate, recording format, channels,
@@ -4651,36 +4663,140 @@ class B210SelfTestDialog(QtWidgets.QDialog):
 
         intro = QtWidgets.QLabel(
             "Transmits a synthetic dispersed pulsar from this B210's own TX "
-            "at <b>minimum gain</b> (420 MHz, nowhere near the protected "
-            "1420 MHz band) and records it off the internal TX→RX "
+            "at <b>minimum gain</b> and records it off the internal TX→RX "
             "leakage — <b>no cable needed</b>. The recording is folded with "
             "PRESTO and graded against the injected truth, proving the whole "
             "chain — SDR, channelizer, writer, timebase, PRESTO — before "
-            "telescope time is spent.<br><br>"
-            "Your tuning, rate, gain, and antenna are restored when the "
-            "capture ends.")
+            "telescope time is spent. Your tuning, rate, gain, and antenna "
+            "are restored when the capture ends.")
         intro.setWordWrap(True)
         lay.addWidget(intro)
 
-        params = QtWidgets.QLabel(
-            f"Injected: P = {SELFTEST_PERIOD_S*1e3:.0f} ms, "
-            f"DM = {SELFTEST_DM:g}, duty {SELFTEST_DUTY*100:.0f}%, "
-            f"{SELFTEST_FREQ_HZ/1e6:g} MHz @ "
-            f"{SELFTEST_RATE_HZ/1e6:g} MS/s, {SELFTEST_NCHANS} channels")
-        params.setStyleSheet("color: gray;")
-        lay.addWidget(params)
+        # --- signal choice: bench default / catalog pulsar / custom -------
+        sig_box = QtWidgets.QGroupBox("Test signal")
+        sv = QtWidgets.QVBoxLayout(sig_box)
+        self._mode_default = QtWidgets.QRadioButton(
+            f"Standard self test  ({SELFTEST_PERIOD_S*1e3:.0f} ms, "
+            f"DM {SELFTEST_DM:g}, {SELFTEST_FREQ_HZ/1e6:g} MHz — "
+            f"the bench-proven geometry)")
+        self._mode_catalog = QtWidgets.QRadioButton(
+            "Simulate a catalog pulsar / magnetar:")
+        self._mode_custom = QtWidgets.QRadioButton("Custom (set everything)")
+        self._mode_default.setChecked(True)
+        sv.addWidget(self._mode_default)
+        crow = QtWidgets.QHBoxLayout()
+        crow.addWidget(self._mode_catalog)
+        self._cat_btn = QtWidgets.QPushButton("Pick from catalog…")
+        self._cat_btn.clicked.connect(self._pick_catalog)
+        crow.addWidget(self._cat_btn)
+        self._cat_label = QtWidgets.QLabel("(none picked)")
+        self._cat_label.setStyleSheet("color: gray;")
+        crow.addWidget(self._cat_label, 1)
+        sv.addLayout(crow)
+        sv.addWidget(self._mode_custom)
+        for rb in (self._mode_default, self._mode_catalog, self._mode_custom):
+            rb.toggled.connect(self._on_mode_changed)
+        lay.addWidget(sig_box)
+        self._cat_pick = None       # dict from the planner, once picked
 
-        row = QtWidgets.QHBoxLayout()
-        row.addWidget(QtWidgets.QLabel("Capture length:"))
+        # --- parameters (editable outside Standard mode) ------------------
+        self._grid_box = QtWidgets.QGroupBox("Parameters")
+        g = QtWidgets.QGridLayout(self._grid_box)
+
+        def _dspin(lo, hi, val, dec, suffix, tip=""):
+            s = QtWidgets.QDoubleSpinBox()
+            s.setRange(lo, hi)
+            s.setDecimals(dec)
+            s.setValue(val)
+            if suffix:
+                s.setSuffix(suffix)
+            if tip:
+                s.setToolTip(tip)
+            s.valueChanged.connect(self._update_consequences)
+            return s
+
+        self._freq_spin = _dspin(70.0, 6000.0, SELFTEST_FREQ_HZ / 1e6, 4,
+                                 " MHz", "Any B210 frequency, 70–6000 MHz. "
+                                 "TX stays at minimum gain, so even the "
+                                 "protected 1420 MHz band is safe — nothing "
+                                 "measurable leaves the enclosure.")
+        g.addWidget(QtWidgets.QLabel("Frequency:"), 0, 0)
+        g.addWidget(self._freq_spin, 0, 1)
+
+        self._rate_combo = QtWidgets.QComboBox()
+        rates = [0.625e6, 1e6, 1.25e6, 2e6, 4e6, 5e6, 8e6, 10e6, 16e6]
+        for r in rates:
+            self._rate_combo.addItem(_pretty_rate(r), r)
+        self._rate_combo.setCurrentIndex(rates.index(SELFTEST_RATE_HZ))
+        self._rate_combo.currentIndexChanged.connect(self._update_consequences)
+        self._rate_combo.setToolTip(
+            "Wider bands buy DM leverage (bigger dispersion sweep) at the "
+            "cost of disk and USB load. 2 MS/s is the bench-proven default.")
+        g.addWidget(QtWidgets.QLabel("Sample rate:"), 0, 2)
+        g.addWidget(self._rate_combo, 0, 3)
+
+        self._period_spin = _dspin(1.0, 15000.0, SELFTEST_PERIOD_S * 1e3, 5,
+                                   " ms", "Pulse period. Magnetar periods "
+                                   "(2–12 s) work; the loop buffer holds "
+                                   "one full period minimum.")
+        g.addWidget(QtWidgets.QLabel("Period:"), 1, 0)
+        g.addWidget(self._period_spin, 1, 1)
+
+        self._dm_spin = _dspin(0.0, 3000.0, SELFTEST_DM, 4, "",
+                               "Dispersion measure to inject (pc cm⁻³). "
+                               "0 = no dispersion.")
+        g.addWidget(QtWidgets.QLabel("DM:"), 1, 2)
+        g.addWidget(self._dm_spin, 1, 3)
+
+        self._duty_spin = _dspin(0.1, 50.0, SELFTEST_DUTY * 100, 1, " %",
+                                 "Pulse FWHM as a fraction of the period.")
+        g.addWidget(QtWidgets.QLabel("Duty:"), 2, 0)
+        g.addWidget(self._duty_spin, 2, 1)
+
+        self._amp_spin = _dspin(0.01, 1.0, SELFTEST_AMP, 2, "",
+                                "Peak envelope, fraction of DAC full scale.")
+        g.addWidget(QtWidgets.QLabel("Amplitude:"), 2, 2)
+        g.addWidget(self._amp_spin, 2, 3)
+
+        self._rxgain_spin = _dspin(0.0, 76.0, SELFTEST_RX_GAIN_DB, 0, " dB",
+                                   "RX gain during the test (40 dB is the "
+                                   "bench-proven leakage-path value).")
+        g.addWidget(QtWidgets.QLabel("RX gain:"), 3, 0)
+        g.addWidget(self._rxgain_spin, 3, 1)
+
+        self._nchans_spin = QtWidgets.QSpinBox()
+        self._nchans_spin.setRange(16, 4096)
+        self._nchans_spin.setValue(SELFTEST_NCHANS)
+        self._nchans_spin.setToolTip("Filterbank channels for the .fil.")
+        self._nchans_spin.valueChanged.connect(self._update_consequences)
+        g.addWidget(QtWidgets.QLabel("Channels:"), 3, 2)
+        g.addWidget(self._nchans_spin, 3, 3)
+
+        g.addWidget(QtWidgets.QLabel("Capture:"), 4, 0)
         self._dur_spin = QtWidgets.QSpinBox()
-        self._dur_spin.setRange(30, 300)
+        self._dur_spin.setRange(30, 600)
         self._dur_spin.setValue(90)
         self._dur_spin.setSuffix(" s")
         self._dur_spin.setToolTip(
-            "90 s is the bench-proven default; longer buys significance.")
-        row.addWidget(self._dur_spin)
-        row.addStretch(1)
-        lay.addLayout(row)
+            "90 s is the bench-proven default; long-period sources need "
+            "more to accumulate pulses.")
+        self._dur_spin.valueChanged.connect(self._update_consequences)
+        g.addWidget(self._dur_spin, 4, 1)
+        txnote = QtWidgets.QLabel("TX gain: locked at minimum")
+        txnote.setStyleSheet("color: gray;")
+        txnote.setToolTip(
+            "The roadmap rule: never radiate next to the dish. Internal "
+            "leakage at minimum gain is all the test needs.")
+        g.addWidget(txnote, 4, 2, 1, 2)
+        lay.addWidget(self._grid_box)
+
+        # live consequences readout (observation-presets style)
+        self._conseq = QtWidgets.QLabel("")
+        self._conseq.setWordWrap(True)
+        self._conseq.setStyleSheet("color: gray;")
+        lay.addWidget(self._conseq)
+        self._grid_box.setEnabled(False)    # Standard mode
+        self._update_consequences()
 
         self._status = QtWidgets.QLabel("Ready.")
         self._status.setWordWrap(True)
@@ -4711,11 +4827,139 @@ class B210SelfTestDialog(QtWidgets.QDialog):
         self._timer = QtCore.QTimer(self)
         self._timer.setInterval(1000)
         self._timer.timeout.connect(self._tick)
-        self.resize(520, 380)
+        self.resize(680, 640)
+
+    # --- modes / catalog / consequences ----------------------------------
+    def _on_mode_changed(self, *_):
+        std = self._mode_default.isChecked()
+        self._grid_box.setEnabled(not std)
+        if std:
+            # snap the fields back to the bench-proven defaults
+            self._freq_spin.setValue(SELFTEST_FREQ_HZ / 1e6)
+            i = self._rate_combo.findData(SELFTEST_RATE_HZ)
+            if i >= 0:
+                self._rate_combo.setCurrentIndex(i)
+            self._period_spin.setValue(SELFTEST_PERIOD_S * 1e3)
+            self._dm_spin.setValue(SELFTEST_DM)
+            self._duty_spin.setValue(SELFTEST_DUTY * 100)
+            self._amp_spin.setValue(SELFTEST_AMP)
+            self._rxgain_spin.setValue(SELFTEST_RX_GAIN_DB)
+            self._nchans_spin.setValue(SELFTEST_NCHANS)
+        elif self._mode_catalog.isChecked() and self._cat_pick:
+            self._apply_catalog_pick()
+        self._update_consequences()
+
+    def _pick_catalog(self):
+        """Reuse the pulsar planner as a picker; visibility is irrelevant for
+        a simulation, so below-mask sources are listed too."""
+        self._mode_catalog.setChecked(True)
+        cat = self._mw._ensure_psr_catalog()
+        if cat is None:
+            return
+        dlg = PulsarPlannerDialog(cat.rows, self._mw._site_dict(),
+                                  self._mw.center_freq, self)
+        dlg._show_below.setChecked(True)
+        if dlg.exec() == QtWidgets.QDialog.Accepted and dlg.selected:
+            r = dlg.selected
+            if not r.get("p0_s"):
+                QtWidgets.QMessageBox.information(
+                    self, "No period in catalog",
+                    f"{r['name']} has no catalog period (P0) — it cannot "
+                    f"be simulated. Pick another source or use Custom.")
+                return
+            self._cat_pick = r
+            self._apply_catalog_pick()
+            self._update_consequences()
+
+    def _apply_catalog_pick(self):
+        r = self._cat_pick
+        name = r["bname"] if r.get("bname") and r["bname"] != "*" else r["name"]
+        self._period_spin.setValue(float(r["p0_s"]) * 1e3)
+        self._dm_spin.setValue(float(r.get("dm") or 0.0))
+        self._cat_label.setText(
+            f"{name} — P {r['p0_s']*1e3:.3f} ms, DM {r.get('dm') or 0:.2f}")
+        self._cat_label.setStyleSheet("")
+        # long-period sources need a longer capture to accumulate pulses
+        want = int(min(600, max(90, 30 * float(r["p0_s"]))))
+        if want > self._dur_spin.value():
+            self._dur_spin.setValue(want)
+
+    def _sim_source_name(self):
+        if self._mode_default.isChecked():
+            return SELFTEST_SOURCE_NAME
+        if self._mode_catalog.isChecked() and self._cat_pick:
+            r = self._cat_pick
+            name = r["bname"] if r.get("bname") and r["bname"] != "*" \
+                else r["name"]
+            return "SIM-" + "".join(c for c in name
+                                    if c.isalnum() or c in "+-")
+        return "B210SIM"
+
+    def _collect_params(self):
+        import math
+        period = self._period_spin.value() / 1e3
+        rate = float(self._rate_combo.currentData())
+        n_periods = max(1, min(20, int(math.ceil(1.0 / max(period, 1e-3)))))
+        return {
+            "freq": self._freq_spin.value() * 1e6,
+            "rate": rate,
+            "period": period,
+            "dm": self._dm_spin.value(),
+            "duty": self._duty_spin.value() / 100.0,
+            "amp": self._amp_spin.value(),
+            "rx_gain": self._rxgain_spin.value(),
+            "nchans": int(self._nchans_spin.value()),
+            "n_periods": n_periods,
+            "source_name": self._sim_source_name(),
+        }
+
+    def _update_consequences(self, *_):
+        import pulsar_sim
+        p = self._collect_params()
+        spec = pulsar_sim.SimSpec(
+            samp_rate=p["rate"], center_freq_hz=p["freq"],
+            period_s=p["period"], dm=p["dm"], duty=p["duty"],
+            n_periods=p["n_periods"], amplitude=p["amp"], noise_floor=0.0,
+            seed=0)
+        tsamp_ms = p["nchans"] / p["rate"] * 1e3
+        fwhm_ms = p["duty"] * p["period"] * 1e3
+        pulses = int(self._dur_spin.value() / p["period"])
+        buf_mb = p["period"] * p["n_periods"] * p["rate"] * 8 / 1e6
+        parts = [f"pulse {fwhm_ms:.2f} ms vs tsamp {tsamp_ms:.3f} ms",
+                 f"{pulses} pulses in the capture",
+                 f"TX buffer {buf_mb:.0f} MB"]
+        warn = None
+        if p["dm"] > 0:
+            parts.insert(0, f"DM sweep {spec.dispersion_sweep_s*1e3:.2f} ms "
+                            f"(resolution ±{spec.dm_resolution:.1f})")
+            if spec.dm_resolution > max(2.0, 0.5 * p["dm"]):
+                warn = ("this geometry can barely constrain the DM — the "
+                        "grade will accept a wide range; lower the frequency "
+                        "or raise the rate for real DM leverage")
+        if fwhm_ms < 3 * tsamp_ms:
+            warn = "pulse is under 3 samples wide — raise duty or rate"
+        if pulses < 20:
+            warn = f"only {pulses} pulses — lengthen the capture"
+        if buf_mb > 512:
+            warn = "TX buffer too large — lower the rate for this period"
+        self._conseq.setText("  ·  ".join(parts)
+                             + (f"\nNote: {warn}." if warn else ""))
+        self._conseq.setStyleSheet(
+            "color: #b45309;" if warn else "color: gray;")
 
     # --- driving ---------------------------------------------------------
     def _on_start(self):
-        err = self._mw._selftest_begin(self)
+        p = self._collect_params()
+        if p["period"] * p["n_periods"] * p["rate"] * 8 > 512e6:
+            QtWidgets.QMessageBox.information(
+                self, "Self test", "The TX loop buffer would exceed 512 MB "
+                "— lower the sample rate for this pulse period.")
+            return
+        if self._mode_catalog.isChecked() and not self._cat_pick:
+            QtWidgets.QMessageBox.information(
+                self, "Self test", "Pick a pulsar from the catalog first.")
+            return
+        err = self._mw._selftest_begin(self, p)
         if err:
             QtWidgets.QMessageBox.information(self, "Self test", err)
             return
@@ -6615,31 +6859,40 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
                 "mask_deg": s.get_float('site', 'el_mask_deg'),
                 "name": s.get_str('site', 'name')}
 
+    def _ensure_psr_catalog(self, force_refresh=False):
+        """Load (or return the cached) ATNF catalog; None + a warning dialog
+        on failure. Shared by the planner and the self-test simulator."""
+        import pulsar_planner
+        cat = getattr(self, '_psr_catalog', None)
+        if cat is not None and not force_refresh:
+            return cat
+        cat = pulsar_planner.Catalog(cache_dir=self.recording_dir)
+        QtWidgets.QApplication.setOverrideCursor(Qt.WaitCursor)
+        self._status_bar.showMessage("Loading pulsar catalog…")
+        try:
+            ok = cat.load(force_refresh=force_refresh)
+        finally:
+            QtWidgets.QApplication.restoreOverrideCursor()
+        if not ok:
+            self._status_bar.clearMessage()
+            QtWidgets.QMessageBox.warning(
+                self, "Pulsar catalog unavailable",
+                "Could not load the ATNF catalog and no local cache is "
+                f"present.\n\n{cat.error or 'No network connection.'}\n\n"
+                "Connect once to build the cache; after that the planner "
+                "works offline.")
+            return None
+        self._psr_catalog = cat
+        self._status_bar.showMessage(
+            f"Pulsar catalog: {len(cat.rows)} sources ({cat.source})", 6000)
+        return cat
+
     def _show_pulsar_planner(self, force_refresh=False):
         """Open the "what's up now?" dialog. The catalog is fetched once and
         cached next to the recordings, so the field boxes work offline."""
-        import pulsar_planner
-        cat = getattr(self, '_psr_catalog', None)
-        if cat is None or force_refresh:
-            cat = pulsar_planner.Catalog(cache_dir=self.recording_dir)
-            QtWidgets.QApplication.setOverrideCursor(Qt.WaitCursor)
-            self._status_bar.showMessage("Loading pulsar catalog…")
-            try:
-                ok = cat.load(force_refresh=force_refresh)
-            finally:
-                QtWidgets.QApplication.restoreOverrideCursor()
-            if not ok:
-                self._status_bar.clearMessage()
-                QtWidgets.QMessageBox.warning(
-                    self, "Pulsar catalog unavailable",
-                    "Could not load the ATNF catalog and no local cache is "
-                    f"present.\n\n{cat.error or 'No network connection.'}\n\n"
-                    "Connect once to build the cache; after that the planner "
-                    "works offline.")
-                return
-            self._psr_catalog = cat
-            self._status_bar.showMessage(
-                f"Pulsar catalog: {len(cat.rows)} sources ({cat.source})", 6000)
+        cat = self._ensure_psr_catalog(force_refresh=force_refresh)
+        if cat is None:
+            return
 
         dlg = PulsarPlannerDialog(cat.rows, self._site_dict(),
                                   self.center_freq, self)
@@ -7894,13 +8147,24 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
             return "A self test is already running."
         return None
 
-    def _selftest_begin(self, dialog):
+    def _selftest_begin(self, dialog, params=None):
         """Configure the radio and splice the TX + recorder chains. Returns
-        None on success, else an error string (nothing left spliced)."""
+        None on success, else an error string (nothing left spliced).
+        `params` (from the dialog's advanced modes) overrides the bench
+        defaults: freq/rate/period/dm/duty/amp/rx_gain/nchans/n_periods/
+        source_name."""
         reason = self._selftest_unavailable_reason()
         if reason:
             return reason
         import pulsar_sim
+        if params is None:
+            params = {
+                "freq": SELFTEST_FREQ_HZ, "rate": SELFTEST_RATE_HZ,
+                "period": SELFTEST_PERIOD_S, "dm": SELFTEST_DM,
+                "duty": SELFTEST_DUTY, "amp": SELFTEST_AMP,
+                "rx_gain": SELFTEST_RX_GAIN_DB, "nchans": SELFTEST_NCHANS,
+                "n_periods": 10, "source_name": SELFTEST_SOURCE_NAME,
+            }
 
         # Save the user's radio state (tuning model, not just the computed
         # center, so the preset/manual/offset widgets restore faithfully).
@@ -7922,11 +8186,11 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
             # saved setting stays consistent.
             self.set_freq_offset_0(0.0)
             self.set_freq_offset(0.0)
-            self.set_freq_manual(SELFTEST_FREQ_HZ)
+            self.set_freq_manual(params["freq"])
             self.set_freq_preset(0)
-            self.set_samp_rate(SELFTEST_RATE_HZ)
-            self.set_gain(SELFTEST_RX_GAIN_DB)
-            self._gain_win.set_value(SELFTEST_RX_GAIN_DB)
+            self.set_samp_rate(params["rate"])
+            self.set_gain(params["rx_gain"])
+            self._gain_win.set_value(params["rx_gain"])
             # RX must sit on an RX2 port — TX owns the shared TX/RX-A port.
             ant = next((a for a in self._source.antennas
                         if a.endswith("RX2")), None)
@@ -7936,9 +8200,9 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
 
             iq, spec = pulsar_sim.synth(
                 float(self.samp_rate), float(self.center_freq),
-                SELFTEST_PERIOD_S, SELFTEST_DM, duty=SELFTEST_DUTY,
-                n_periods=10, amplitude=SELFTEST_AMP, noise_floor=0.0,
-                seed=2026)
+                params["period"], params["dm"], duty=params["duty"],
+                n_periods=params["n_periods"], amplitude=params["amp"],
+                noise_floor=0.0, seed=2026)
             self._selftest_spec = spec
 
             tx = uhd.usrp_sink(
@@ -7953,13 +8217,19 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
             outdir = os.path.join(self.recording_dir, "self_test")
             os.makedirs(outdir, exist_ok=True)
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            path = os.path.join(outdir, f"{SELFTEST_SOURCE_NAME}_{ts}.fil")
+            path = os.path.join(outdir, f"{params['source_name']}_{ts}.fil")
             sink = sigproc_fil.FilterbankSink(
-                path, nchans=SELFTEST_NCHANS, samp_rate=float(self.samp_rate),
+                path, nchans=params["nchans"],
+                samp_rate=float(self.samp_rate),
                 center_freq_mhz=float(self.center_freq) / 1e6,
                 tstart_mjd=sigproc_fil.unix_to_mjd(time.time()),
-                source_name=SELFTEST_SOURCE_NAME)
+                source_name=params["source_name"])
             vec = blocks.vector_source_c(iq, True)
+            # Deep buffer on the TX edge: at >=4 MS/s the sink starves on
+            # ordinary buffers whenever the GUI/GIL pauses, and TX underflows
+            # stretch the pulse spacing — the first live 4 MS/s run FAILED
+            # its own period check from exactly that (2026-08-05).
+            vec.set_min_output_buffer(1 << 22)
 
             self.lock()
             try:
@@ -7967,6 +8237,9 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
                 self.connect((self.uhd_usrp_source_0, 0), (sink, 0))
             finally:
                 self.unlock()
+            # Same host-stall hygiene a real recording gets (GC confinement
+            # + 1 ms Windows timer); idempotent and torn down with the test.
+            self._begin_realtime_mode()
         except Exception as exc:
             self._selftest_active = False
             if sink is not None:
@@ -7981,6 +8254,7 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
         self._selftest_vec = vec
         self._selftest_sink = sink
         self._selftest_path = path
+        self._selftest_source_name = params["source_name"]
         self._selftest_info = None
         return None
 
@@ -8017,6 +8291,7 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
         self._selftest_sink = None
         self._selftest_tx = None
         self._selftest_vec = None
+        self._end_realtime_mode()
         import gc
         gc.collect()        # release the TX streamer/device handle promptly
         self._selftest_restore_settings()
@@ -8052,6 +8327,8 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
         self._selftest_teardown()
         spec = self._selftest_spec
         path = self._selftest_path
+        srcname = getattr(self, '_selftest_source_name',
+                          SELFTEST_SOURCE_NAME)
 
         sig = self._AnalysisSignals()
         sig.progress.connect(dialog.on_progress)
@@ -8063,7 +8340,7 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
             try:
                 import fold_analysis
                 res = fold_analysis.analyze_fil(
-                    path, source_name=SELFTEST_SOURCE_NAME,
+                    path, source_name=srcname,
                     fold_p_s=spec.period_s, fold_dm=spec.dm,
                     progress=sig.progress.emit)
                 sig.done.emit(res)
@@ -8085,6 +8362,7 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
         import pulsar_sim
         self._selftest_active = False
         ok, checks = pulsar_sim.grade(self._selftest_spec, res)
+        checks = ["Injected: " + self._selftest_spec.describe(), ""] + checks
         pdf = res.get('pdf', '')
         self._recording_status.setText(
             "Self test " + ("PASS" if ok else "FAIL"))
