@@ -638,6 +638,15 @@ menu bar!) + drift-scan box test (dock behavior on headless Openbox/xrdp
       3000X, only 20 Mpts — sells analog BW we don't need). Premium
       fallback if the wall is ever hit: SDG7032A (512 Mpts, vector/IQ
       mode, ~$4k) or used Keysight 33622A + 336MEM2U (64 Mpts/ch).
+      **AWG PURCHASE CANCELED (Rick, 2026-08-06)** — the external-I/Q
+      vector upgrade is off the table for now; the analysis above is
+      kept for reference should it ever come back. What remains of this
+      leg without an AWG: the E4438C's internal pulse generator + UNB
+      attenuator (gated pulses at an exact catalog period, GPS-locked
+      10 MHz reference, calibrated absolute levels for sensitivity
+      sweeps) — no dispersion, no vector modulation. The B210 simulator
+      (shipped 2026-08-05) covers the vector/DM side. A NEW project is
+      incoming from Rick that supersedes this priority.
 
 ## Backlog / unscheduled
 
