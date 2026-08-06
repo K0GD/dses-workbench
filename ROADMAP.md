@@ -521,7 +521,11 @@ menu bar!) + drift-scan box test (dock behavior on headless Openbox/xrdp
 ## Validation tooling (after 1.1.8 ships, possibly after 1.2.0)
 
 - [x] **B210-TX pulsar simulator = BUILT-IN TEST (DECIDED 2026-08-03; BIT
-      framing Rick 2026-08-03) — DONE 2026-08-05 incl. the in-app UI.**
+      framing Rick 2026-08-03) — DONE 2026-08-05 incl. the in-app UI;
+      SHIPPED in release 1.3.0 (2026-08-06) together with the advanced
+      simulator modes and the geometry solver, after passing hardware
+      tests on BOTH dev machines (Mac: zero TX underflows, period exact
+      even at 4 MS/s).**
       **IN-APP "Self Test" SHIPPED (Observe menu, per Rick): modal dialog
       (duration spin, live countdown, PASS/FAIL readout, Open Fold PDF),
       full radio state save/restore (tuning model incl. preset/manual/
