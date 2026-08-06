@@ -4754,8 +4754,13 @@ class B210SelfTestDialog(QtWidgets.QDialog):
         g.addWidget(self._duty_spin, 2, 1)
 
         self._amp_spin = _dspin(0.01, 1.0, SELFTEST_AMP, 2, "",
-                                "Peak envelope, fraction of DAC full scale.")
-        g.addWidget(QtWidgets.QLabel("Amplitude:"), 2, 2)
+                                "Peak pulse envelope as a fraction of TX DAC "
+                                "full scale. The carrier is noise (high crest "
+                                "factor), so 0.5 = the classic 6 dB backoff: "
+                                "~2% clipping at the pulse crest, invisible "
+                                "in the fold. 1.0 clips 37% and distorts the "
+                                "pulse statistics.")
+        g.addWidget(QtWidgets.QLabel("TX DAC amplitude:"), 2, 2)
         g.addWidget(self._amp_spin, 2, 3)
 
         self._rxgain_spin = _dspin(0.0, 76.0, SELFTEST_RX_GAIN_DB, 0, " dB",
