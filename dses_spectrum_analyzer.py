@@ -4684,6 +4684,7 @@ class B210SelfTestDialog(QtWidgets.QDialog):
 
         self._status = QtWidgets.QLabel("Ready.")
         self._status.setWordWrap(True)
+        self._status.setTextFormat(QtCore.Qt.PlainText)
         lay.addWidget(self._status)
 
         self._results = QtWidgets.QPlainTextEdit()
@@ -4720,6 +4721,9 @@ class B210SelfTestDialog(QtWidgets.QDialog):
             return
         self._phase = "capture"
         self._left = int(self._dur_spin.value())
+        self._status.setStyleSheet(self._STYLE_QUIET)
+        self._results.setVisible(False)
+        self._pdf_btn.setVisible(False)
         self._start_btn.setEnabled(False)
         self._dur_spin.setEnabled(False)
         self._close_btn.setText("Abort")
@@ -4744,13 +4748,26 @@ class B210SelfTestDialog(QtWidgets.QDialog):
                 f"Recording the internal leakage: {self._left} s left"
                 + (f"  (gap events {gaps})" if gaps else ""))
 
+    # Status-line looks per phase (Rick 2026-08-05: the analysis line that
+    # takes over after capture must stand out, not read like fine print).
+    _STYLE_QUIET = ""
+    _STYLE_BUSY = ("font-weight: bold; color: #92400e; "
+                   "background: #fef3c7; border-radius: 4px; padding: 6px;")
+    _STYLE_PASS = ("font-weight: bold; font-size: 12pt; color: #166534; "
+                   "background: #dcfce7; border-radius: 4px; padding: 6px;")
+    _STYLE_FAIL = ("font-weight: bold; font-size: 12pt; color: #991b1b; "
+                   "background: #fee2e2; border-radius: 4px; padding: 6px;")
+
     # --- callbacks from the main window ----------------------------------
     def on_progress(self, msg):
         self._status.setText(str(msg))
+        if self._phase == "analyze":
+            self._status.setStyleSheet(self._STYLE_BUSY)
 
     def on_failed(self, msg):
         self._phase = "done"
         self._status.setText("Self test FAILED to run.")
+        self._status.setStyleSheet(self._STYLE_FAIL)
         self._results.setPlainText(str(msg))
         self._results.setVisible(True)
         self._start_btn.setEnabled(True)
@@ -4761,9 +4778,9 @@ class B210SelfTestDialog(QtWidgets.QDialog):
         self._phase = "done"
         verdict = res.get("verdict", "?")
         head = "BUILT-IN TEST PASS" if ok else "BUILT-IN TEST FAIL"
-        self._status.setText(
-            ("✅ " if ok else "❌ ") + head
-            + f"   (PRESTO verdict: {verdict})")
+        self._status.setText(head + f"   (PRESTO verdict: {verdict})")
+        self._status.setStyleSheet(self._STYLE_PASS if ok
+                                   else self._STYLE_FAIL)
         lines = list(checks)
         if res.get("chi2_red") is not None:
             lines.append(f"reduced chi-squared {res['chi2_red']:.1f}")
