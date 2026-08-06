@@ -148,14 +148,14 @@ Accept the prompt; conda downloads and installs the three packages. If the launc
 
 Download the application from the distribution site. You can either use the direct links below, or browse the folder <https://gpstime.com/sw_distribution/b210_sa/> and pick the newest `dses-spectrum-analyzer-*.zip`:
 
-- **Application (zip):** <https://gpstime.com/sw_distribution/b210_sa/dses-spectrum-analyzer-1.2.0.zip>
+- **Application (zip):** <https://gpstime.com/sw_distribution/b210_sa/dses-spectrum-analyzer-1.3.0.zip>
 - **This guide (PDF):** <https://gpstime.com/sw_distribution/b210_sa/DSES_RFI_Spectrum_Analyzer_Installation.pdf>
 
 The zip is roughly 60 MB — it includes a short sample recording so the program can run in playback mode when no radio is attached. (Replace `1.1.6` in the link with a newer version number if a later release has been published.)
 
 ### 3.1 Windows 11
 
-1. Extract the zip anywhere you have write permission. A common choice is `Documents\DSES-Spectrum-Analyzer`. The extracted folder will be `dses-spectrum-analyzer-1.2.0\` and will contain `dses_spectrum_analyzer.py`, `launcher.bat`, `launcher.ps1`, `install-shortcut.ps1`, `LICENSE`, the `icons\` folder, and this guide.
+1. Extract the zip anywhere you have write permission. A common choice is `Documents\DSES-Spectrum-Analyzer`. The extracted folder will be `dses-spectrum-analyzer-1.3.0\` and will contain `dses_spectrum_analyzer.py`, `launcher.bat`, `launcher.ps1`, `install-shortcut.ps1`, `LICENSE`, the `icons\` folder, and this guide.
 2. Double-click **`launcher.bat`** to start the application.
 3. The first time you run it, the launcher searches for Radioconda in this order: the `RADIOCONDA_ROOT` environment variable, any currently-activated conda env, `%LOCALAPPDATA%\radioconda`, `C:\ProgramData\radioconda`, `%USERPROFILE%\radioconda`, a cached config file, then `conda info --base` if `conda` is on PATH. If none of these find a working install, you'll get a prompt asking for the path; type it in and the launcher remembers it for next time.
 4. (Optional) Create a desktop shortcut (with the app's pulsar icon) by running **`install-shortcut.ps1`**. The reliable way — which works regardless of your PowerShell execution policy — is to open PowerShell in the extracted folder and run:
@@ -174,12 +174,12 @@ After the first run, the app's window opens with the spectrum and waterfall plot
 
    ``bash
    mkdir -p ~/Applications && cd ~/Applications
-   unzip ~/Downloads/dses-spectrum-analyzer-1.2.0.zip
-   cd dses-spectrum-analyzer-1.2.0
+   unzip ~/Downloads/dses-spectrum-analyzer-1.3.0.zip
+   cd dses-spectrum-analyzer-1.3.0
    chmod +x launcher.sh
    ``
 
-   The extracted `dses-spectrum-analyzer-1.2.0/` folder contains `dses_spectrum_analyzer.py`, `launcher.sh`, `dses-spectrum-analyzer.desktop`, `LICENSE`, the `icons/` folder, and this guide. (Avoid system locations like `/opt` unless you extract with `sudo` — keeping it in your home directory avoids permission issues.)
+   The extracted `dses-spectrum-analyzer-1.3.0/` folder contains `dses_spectrum_analyzer.py`, `launcher.sh`, `dses-spectrum-analyzer.desktop`, `LICENSE`, the `icons/` folder, and this guide. (Avoid system locations like `/opt` unless you extract with `sudo` — keeping it in your home directory avoids permission issues.)
 
 2. Launch:
 
@@ -204,8 +204,8 @@ The steps are the same as Linux. Extract it into your personal **`~/Applications
 
 ``bash
 mkdir -p ~/Applications && cd ~/Applications
-unzip ~/Downloads/dses-spectrum-analyzer-1.2.0.zip
-cd dses-spectrum-analyzer-1.2.0
+unzip ~/Downloads/dses-spectrum-analyzer-1.3.0.zip
+cd dses-spectrum-analyzer-1.3.0
 chmod +x launcher.sh
 ./launcher.sh
 ``
@@ -225,7 +225,7 @@ On Apple Silicon, **make sure** you installed the `arm64` build of Radioconda. M
 If the Finder warns about an unidentified developer when running `launcher.sh`, clear the quarantine attribute on the unzipped folder:
 
 ``bash
-xattr -dr com.apple.quarantine dses-spectrum-analyzer-1.2.0
+xattr -dr com.apple.quarantine dses-spectrum-analyzer-1.3.0
 ``
 
 
@@ -353,7 +353,7 @@ Radioconda does **not** need reinstalling for an app update.
 If you'd rather apply it yourself, each release is a self-contained zip:
 
 1. **Close** the running app.
-2. **Extract** the new zip alongside the old one — a new folder named with the version (e.g. `dses-spectrum-analyzer-1.2.0`) — or overwrite the old folder's files.
+2. **Extract** the new zip alongside the old one — a new folder named with the version (e.g. `dses-spectrum-analyzer-1.3.0`) — or overwrite the old folder's files.
 3. **Run** `launcher.bat` (Windows) or `launcher.sh` (macOS/Linux) from the **new** folder.
 
 ### What is preserved across versions
@@ -449,7 +449,7 @@ The GR flow graph is running but no samples are arriving. Usual causes:
 ### macOS: "developer cannot be verified"
 
 ``bash
-xattr -dr com.apple.quarantine /path/to/dses-spectrum-analyzer-1.2.0
+xattr -dr com.apple.quarantine /path/to/dses-spectrum-analyzer-1.3.0
 ``
 
 For the optional Desktop **`.app`** icon (built by `install-shortcut.command`), the same warning can appear the first time you double-click it — right-click the app → **Open** once, or approve it in **System Settings → Privacy & Security → Open Anyway**. You only need to do this once per machine.
@@ -566,9 +566,17 @@ Answers "what can I record right now?" from the ATNF catalog: every pulsar above
 
 - **Include magnetars**: magnetars are marked ★ and are never removed by a flux filter, because the catalog usually carries no flux for them.
 
+- **What do I need?**: solves the dispersion arithmetic backwards for the selected source — which of the dish's bands (and how much bandwidth) would make its *DM measurable*, and what to set in the self-test simulator. Dispersion delay goes as 1/frequency², so a small DM at L-band is simply unresolvable: the fold still detects the pulsar, but its DM search slides toward zero and means nothing. The answer says so plainly rather than leaving you to discover it after the drive.
+
 - The catalog is downloaded once and cached beside your recordings, so the planner keeps working at a site with no internet. **Observe → Refresh Pulsar Catalog** re-downloads it.
 
 - If a **Source** and a **Record for** duration are both set, the app warns at record time when that pulsar would set before the recording finishes.
+
+#### Observe menu — B210 Self Test
+
+A built-in test of the *entire* pulsar chain — SDR, channelizer, filterbank writer, timebase, PRESTO fold, verdict — with no test equipment at all. The B210's own transmitter plays a synthetic pulsar (100 ms period, DM 50, noise-carrier pulses with real cold-plasma dispersion) at **minimum TX gain** on 420 MHz, far from the protected hydrogen-line band; the receiver records the B210's internal TX→RX leakage — no cable or attenuator needed. After the capture (default 90 s) the app folds the recording at the injected period and DM and grades PASS/FAIL: the period must come back exact, the DM near 50 (a DM stuck at 0 means dispersion was lost), and the significance high. Your tuning, sample rate, gain, and antenna are saved before the test and restored right after the capture, while the fold runs. Run it before packing for a field session: a PASS means a real pulsar that reaches the feed will survive the pipeline. Requires a USRP B200/B210 and an installed PRESTO. The recording and its fold PDF land in a `self_test` folder inside your recordings folder.
+
+Beyond the standard test, two advanced modes make it a general pulsar *simulator*: **Simulate a catalog pulsar** picks any source from the ATNF catalog (magnetars included) and injects its exact catalog period and DM, and **Custom** opens every parameter — frequency (any B210 frequency, 70–6000 MHz), sample rate, period, DM, duty cycle, amplitude, RX gain, channels, and capture length. A live readout translates the chosen geometry into what matters: the dispersion sweep across the band and the DM resolution it can honestly support, pulse width vs sample time, and pulses per capture — narrow bands at high frequency constrain DM weakly, and the readout says so before you spend the time. After picking a catalog source, **Suggest geometry** goes further and solves for settings that can actually measure that source's DM, filling them in for you (it knows the internal leakage weakens at low frequency and that the duplex transmitter holds its timing best at or below 2 MS/s). TX gain is always locked at minimum: the internal leakage is all the test needs, so even the protected 1420 MHz band is safe.
 
 #### Observation
 
@@ -636,11 +644,11 @@ Sweep runs continuously, redrawing the wide trace after each pass; the waterfall
 
 - **Source**: optional source / pulsar name (e.g. `B0329+54`). When set it is folded into the recording filename and written into the SIGPROC `.fil` header (`source_name`, plus RA/Dec derived from the name) and the SigMF description, so PRESTO/prepfold pick it up. Blank gives a timestamp-only filename. Locked while recording.
 
-- **Format**: *Raw I/Q (SigMF)* writes full-rate complex samples to a SigMF `.sigmf-meta`/`.sigmf-data` pair — exact, but large (e.g. ~192 MB/s at 24 Msps). *Filterbank (.fil)* channelizes the stream live and writes a SIGPROC filterbank (`telescope_id 12`) straight to disk, so the giant raw I/Q is never stored. The `.fil` is what PRESTO folds; it is produced by the same validated code as the offline `iq_to_fil.py` converter. *Drift scan (ezRA .txt)* writes integrated spectra (one row every ~10–15 s with the default geometry) in the ezRA data format, so the file feeds Ted Cline's free ezRA suite (ezCon → ezPlot/ezSky/ezGal) directly — hydrogen-line drift scans with the same radio that records pulsars. The filename follows the ezCol convention (`<prefix>YYMMDD_HH.txt`).
+- **Format**: *Raw I/Q (SigMF)* writes full-rate complex samples to a SigMF `.sigmf-meta`/`.sigmf-data` pair — exact, but large (e.g. ~192 MB/s at 24 Msps). *Filterbank (.fil)* channelizes the stream live and writes a SIGPROC filterbank (`telescope_id 12`) straight to disk, so the giant raw I/Q is never stored. The `.fil` is what PRESTO folds; it is produced by the same validated code as the offline `iq_to_fil.py` converter. *Drift scan (ezRA .txt)* writes integrated spectra (one row every ~10&ndash;15 s with the default geometry) in the ezRA data format, so the file feeds Ted Cline's free ezRA suite (ezCon &rarr; ezPlot/ezSky/ezGal) directly &mdash; hydrogen-line drift scans with the same radio that records pulsars. The filename follows the ezCol convention (`<prefix>YYMMDD_HH.txt`).
 
-- **Channels** / **Integrate** (filterbank only): the FFT channel count and how many power frames are summed per output sample, so `tsamp = channels × integrate / sample rate`. Locked while recording.
+- **Channels** / **Integrate** (filterbank only): the FFT channel count and how many power frames are summed per output sample, so `tsamp = channels &times; integrate / sample rate`. Locked while recording.
 
-- **Az / El** (drift scan only): the dish pointing written into the ezRA file header (`azDeg`/`elDeg`). The observing-site identity (latitude, longitude, altitude, name) comes from the `[site]` section of the settings file — defaults are the DSES Haswell 60-ft dish. FFT bins, integration count, and the band-edge trim follow the dish's proven ezCol geometry and are adjustable via `[recording]` `ez_*` settings.
+- **Az / El** (drift scan only): the dish pointing written into the ezRA file header (`azDeg`/`elDeg`). The observing-site identity (latitude, longitude, altitude, name) comes from the `[site]` section of the settings file &mdash; defaults are the DSES Haswell 60-ft dish. FFT bins, integration count, and the band-edge trim follow the dish's proven ezCol geometry and are adjustable via `[recording]` `ez_*` settings.
 
 - **Record for**: optional fixed length — minutes (e.g. `30`) or `H:MM` / `HH:MM:SS` (e.g. `1:30`). The recording auto-stops when it is reached and the counter shows a countdown; blank records until you stop it. Locked while recording.
 
