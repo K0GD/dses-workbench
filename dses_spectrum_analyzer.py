@@ -2960,6 +2960,13 @@ long the window lasts. (A source can be circumpolar — never setting — and
 still spend hours below a usable elevation.)</li>
 <li><b>Include magnetars</b>: magnetars are marked ★ and are never removed
 by a flux filter, because the catalog usually carries no flux for them.</li>
+<li><b>What do I need?</b>: solves the dispersion arithmetic backwards for
+the selected source — which of the dish's bands (and how much bandwidth)
+would make its <i>DM measurable</i>, and what to set in the self-test
+simulator. Dispersion delay goes as 1/frequency², so a small DM at L-band
+is simply unresolvable: the fold still detects the pulsar, but its DM
+search slides toward zero and means nothing. The answer says so plainly
+rather than leaving you to discover it after the drive.</li>
 <li>The catalog is downloaded once and cached beside your recordings, so
 the planner keeps working at a site with no internet. <b>Observe → Refresh
 Pulsar Catalog</b> re-downloads it.</li>
@@ -2993,7 +3000,11 @@ RX gain, channels, and capture length. A live readout translates the
 chosen geometry into what matters: the dispersion sweep across the band
 and the DM resolution it can honestly support, pulse width vs sample time,
 and pulses per capture — narrow bands at high frequency constrain DM
-weakly, and the readout says so before you spend the time. TX gain is
+weakly, and the readout says so before you spend the time. After picking a
+catalog source, <b>Suggest geometry</b> goes further and solves for
+settings that can actually measure that source's DM, filling them in for
+you (it knows the internal leakage weakens at low frequency and that the
+duplex transmitter holds its timing best at or below 2 MS/s). TX gain is
 always locked at minimum: the internal leakage is all the test needs, so
 even the protected 1420 MHz band is safe.</p>
 <h4>Observation</h4>
@@ -4498,12 +4509,79 @@ class PulsarPlannerDialog(QtWidgets.QDialog):
         btns = QtWidgets.QDialogButtonBox()
         self._use_btn = btns.addButton("Use as Source",
                                        QtWidgets.QDialogButtonBox.AcceptRole)
+        self._geom_btn = btns.addButton("What do I need?…",
+                                        QtWidgets.QDialogButtonBox.ActionRole)
+        self._geom_btn.setToolTip(
+            "Solve for the geometry that would make this source's DM "
+            "measurable — which band and bandwidth to observe at, and what "
+            "to set in the self-test simulator")
+        self._geom_btn.clicked.connect(self._show_geometry_advice)
         btns.addButton(QtWidgets.QDialogButtonBox.Close)
         btns.accepted.connect(self._accept_row)
         btns.rejected.connect(self.reject)
         v.addWidget(btns)
 
         self._refresh()
+
+    def _selected_row(self):
+        row = self._table.currentRow()
+        if row < 0:
+            return None
+        name_cell = self._table.item(row, 0).text().replace("  ★", "")
+        for r in self._visible:
+            if r["name"] == name_cell:
+                return r
+        return None
+
+    def _show_geometry_advice(self):
+        """Invert the dispersion arithmetic for the selected source: what
+        frequency/bandwidth actually resolves its DM (Rick 2026-08-06, after
+        B0950+08 railed to DM 0 at 420 MHz but measured cleanly at 160)."""
+        import pulsar_sim
+        r = self._selected_row()
+        if r is None:
+            QtWidgets.QMessageBox.information(
+                self, "No pulsar selected", "Select a row first.")
+            return
+        if not r.get("p0_s"):
+            QtWidgets.QMessageBox.information(
+                self, "No period in catalog",
+                f"{r['name']} has no catalog period, so its geometry cannot "
+                f"be solved.")
+            return
+        name = r["bname"] if r.get("bname") and r["bname"] != "*" \
+            else r["name"]
+        rec = pulsar_sim.recommend_geometry(
+            float(r["p0_s"]), float(r.get("dm") or 0.0), name=name)
+
+        dlg = QtWidgets.QDialog(self)
+        dlg.setWindowTitle(f"Geometry for {name}")
+        lay = QtWidgets.QVBoxLayout(dlg)
+        head = QtWidgets.QLabel(
+            "Dispersion delay goes as 1/frequency², so a source's DM is only "
+            "measurable when the sweep across your band is a decent fraction "
+            "of the pulse width. This solves for what that takes.")
+        head.setWordWrap(True)
+        lay.addWidget(head)
+        text = QtWidgets.QPlainTextEdit("\n".join(rec["lines"]))
+        text.setReadOnly(True)
+        f = QtGui.QFont("Consolas")
+        f.setStyleHint(QtGui.QFont.Monospace)
+        text.setFont(f)
+        text.setMinimumSize(720, 340)
+        lay.addWidget(text)
+        note = QtWidgets.QLabel(
+            "A source whose DM cannot be resolved is still perfectly "
+            "detectable — fold at the catalog DM and report the DM as "
+            "unconstrained rather than as a measurement.")
+        note.setWordWrap(True)
+        note.setStyleSheet("color: gray;")
+        lay.addWidget(note)
+        bb = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Close)
+        bb.rejected.connect(dlg.reject)
+        lay.addWidget(bb)
+        dlg.resize(780, 520)
+        dlg.exec()
 
     def _refresh(self):
         import pulsar_planner
@@ -4613,17 +4691,13 @@ class PulsarPlannerDialog(QtWidgets.QDialog):
         self._summary.setText("  ·  ".join(parts))
 
     def _accept_row(self, *_):
-        row = self._table.currentRow()
-        if row < 0:
+        r = self._selected_row()
+        if r is None:
             QtWidgets.QMessageBox.information(
                 self, "No pulsar selected",
                 "Select a row first, or double-click one.")
             return
-        name_cell = self._table.item(row, 0).text().replace("  ★", "")
-        for r in self._visible:
-            if r["name"] == name_cell:
-                self.selected = r
-                break
+        self.selected = r
         self.accept()
 
 
@@ -4689,6 +4763,13 @@ class B210SelfTestDialog(QtWidgets.QDialog):
         self._cat_btn = QtWidgets.QPushButton("Pick from catalog…")
         self._cat_btn.clicked.connect(self._pick_catalog)
         crow.addWidget(self._cat_btn)
+        self._suggest_btn = QtWidgets.QPushButton("Suggest geometry")
+        self._suggest_btn.setToolTip(
+            "Solve for a frequency, rate, duty, gain and capture length "
+            "that can actually measure this source's DM — then fill them in")
+        self._suggest_btn.setEnabled(False)
+        self._suggest_btn.clicked.connect(self._suggest_geometry)
+        crow.addWidget(self._suggest_btn)
         self._cat_label = QtWidgets.QLabel("(none picked)")
         self._cat_label.setStyleSheet("color: gray;")
         crow.addWidget(self._cat_label, 1)
@@ -4885,8 +4966,47 @@ class B210SelfTestDialog(QtWidgets.QDialog):
             self._apply_catalog_pick()
             self._update_consequences()
 
+    def _suggest_geometry(self):
+        """Fill the parameter grid with a geometry that can actually measure
+        the picked source's DM. Custom mode, so the user can then tweak."""
+        import pulsar_sim
+        if not self._cat_pick:
+            return
+        r = self._cat_pick
+        name = r["bname"] if r.get("bname") and r["bname"] != "*" \
+            else r["name"]
+        rec = pulsar_sim.recommend_geometry(
+            float(r["p0_s"]), float(r.get("dm") or 0.0),
+            duty=self._duty_spin.value() / 100.0, name=name)
+        sim = rec["sim"]
+        if not sim:
+            QtWidgets.QMessageBox.information(
+                self, "No geometry resolves this DM",
+                "\n".join(rec["lines"][-2:])
+                + "\n\nThe source is still worth simulating — the period "
+                  "test remains meaningful; only the DM will be "
+                  "unconstrained.")
+            return
+        self._mode_custom.setChecked(True)     # keeps P/DM, unlocks the grid
+        self._period_spin.setValue(float(r["p0_s"]) * 1e3)
+        self._dm_spin.setValue(float(r.get("dm") or 0.0))
+        self._freq_spin.setValue(sim["center_hz"] / 1e6)
+        i = self._rate_combo.findData(sim["rate_hz"])
+        if i >= 0:
+            self._rate_combo.setCurrentIndex(i)
+        self._duty_spin.setValue(sim["duty"] * 100.0)
+        self._rxgain_spin.setValue(sim["rx_gain_db"])
+        self._nchans_spin.setValue(int(sim["nchans"]))
+        self._dur_spin.setValue(int(sim["capture_s"]))
+        self._cat_label.setText(
+            f"{name} — P {r['p0_s']*1e3:.3f} ms, DM {r.get('dm') or 0:.2f}  "
+            f"(geometry solved: DM to ±{sim['dm_res']:.2f})")
+        self._cat_label.setStyleSheet("")
+        self._update_consequences()
+
     def _apply_catalog_pick(self):
         r = self._cat_pick
+        self._suggest_btn.setEnabled(True)
         name = r["bname"] if r.get("bname") and r["bname"] != "*" else r["name"]
         self._period_spin.setValue(float(r["p0_s"]) * 1e3)
         self._dm_spin.setValue(float(r.get("dm") or 0.0))

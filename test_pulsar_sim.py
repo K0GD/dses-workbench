@@ -174,8 +174,62 @@ def test_grade():
     check(not ok4, "weak significance fails")
 
 
+def test_geometry_solver():
+    print("\n5. geometry solver (vs measured hardware runs)")
+    # B0950+08 at the bench default: measured DM railed to 0 (unresolvable)
+    r = ps.dm_resolution_for(420e6, 2e6, 0.253065, 0.02)
+    check(r > 2.97, "B0950 @420 MHz/2 MS/s is correctly called unresolvable",
+          f"dm_res ±{r:.1f} vs DM 2.97 — matches the DM=0 rail we measured")
+    # …and at 160 MHz/2 MS/s/1% duty it measured 3.42 vs 2.97 (error 0.45)
+    r2 = ps.dm_resolution_for(160e6, 2e6, 0.253065, 0.01)
+    check(r2 < 1.0, "B0950 @160 MHz is called resolvable", f"dm_res ±{r2:.2f}")
+    check(abs(3.42 - 2.97) <= 2 * r2,
+          "measured B0950 error sits inside the predicted resolution",
+          f"error 0.45 vs ±{r2:.2f}")
+    # B0329 July Haswell geometry: measured DM 25.3 vs catalog 26.76
+    r3 = ps.dm_resolution_for(420e6, 20e6, 0.71452, 0.05)
+    check(abs(26.76 - 25.3) <= 2 * r3,
+          "measured B0329 error sits inside the predicted resolution",
+          f"error 1.46 vs ±{r3:.2f}")
+
+    # inverse solvers must agree with the forward calculation
+    target = 2.97 / 3
+    bw = ps.min_bandwidth_hz_for(420e6, 0.253065, 2.97, 0.02, target)
+    fc = ps.max_center_hz_for(2e6, 0.253065, 2.97, 0.02, target)
+    check(abs(ps.dm_resolution_for(420e6, bw, 0.253065, 0.02) - target) < 0.01,
+          "min-bandwidth solver inverts the forward formula",
+          f"{bw / 1e6:.1f} MHz at 420 MHz")
+    check(abs(ps.dm_resolution_for(fc, 2e6, 0.253065, 0.02) - target) < 0.01,
+          "max-frequency solver inverts the forward formula",
+          f"{fc / 1e6:.0f} MHz at 2 MS/s")
+
+    # channel rule reproduces the proven Haswell UHF tsamp (204.8 µs)
+    n, _ = ps.channels_for(26.76, 420e6, 20e6, 0.71452, 0.05)
+    check(abs(n / 20e6 - 204.8e-6) < 1e-6,
+          "channel rule reproduces the proven Haswell tsamp",
+          f"{n} ch → {n / 20e6 * 1e6:.1f} µs")
+
+    # the recommendation for B0950 must land on the verified geometry
+    rec = ps.recommend_geometry(0.253065, 2.97, duty=0.02, name="B0950+08")
+    s = rec["sim"]
+    check(s and s["center_hz"] == 160e6 and s["rate_hz"] == 2e6
+          and s["rx_gain_db"] == 70.0,
+          "solver reproduces the hardware-verified B0950 geometry",
+          f"{s['center_hz'] / 1e6:g} MHz, {s['rate_hz'] / 1e6:g} MS/s, "
+          f"{s['rx_gain_db']:.0f} dB")
+    check(not any(x["resolves"] for x in rec["real"]),
+          "no DSES feed can resolve B0950's DM (the July lesson)")
+    rec2 = ps.recommend_geometry(0.71452, 26.7641, duty=0.05, name="B0329+54")
+    check(any(x["resolves"] for x in rec2["real"]),
+          "B0329's DM IS resolvable at a real DSES band",
+          "408 MHz — where it was in fact measured")
+    # never recommend a rate the duplex TX can't hold, when a safe one exists
+    check(s["rate_hz"] <= ps.SAFE_DUPLEX_RATE_HZ,
+          "suggestion stays within the safe duplex rate")
+
+
 def test_presto_roundtrip():
-    print("\n5. offline PRESTO round trip (--presto; slow)")
+    print("\n6. offline PRESTO round trip (--presto; slow)")
     if "--presto" not in sys.argv:
         print("  SKIP  (pass --presto to run)")
         return
@@ -219,6 +273,7 @@ if __name__ == "__main__":
     test_pulse_shape()
     test_dispersion()
     test_grade()
+    test_geometry_solver()
     test_presto_roundtrip()
     print()
     if FAILURES:
