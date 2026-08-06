@@ -137,6 +137,16 @@ with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as z:
 "
 
 size=$(stat -c %s "$archive" 2>/dev/null || stat -f %z "$archive")
+
+# Emit the .sha256 sidecar with the EXACT name and format the in-app updater
+# fetches: updater.sha256_url_for() turns "...-<v>.zip" into "...-<v>.sha256"
+# (NOT ".zip.sha256"), and fetch_published_sha256() reads "<hex>  <filename>".
+# A hand-named sidecar 404'd the 1.3.0 update on the Mac (2026-08-06).
+sidecar="${archive%.zip}.sha256"
+hash=$(python3 -c "import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())" "$archive")
+printf '%s  %s\n' "$hash" "$(basename "$archive")" > "$sidecar"
+
 echo ""
 echo "Wrote $archive ($((size / 1024)) KB)"
+echo "Wrote $sidecar (updater-convention name + format)"
 echo "Staging tree retained at $stage"

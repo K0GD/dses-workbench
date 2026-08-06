@@ -202,8 +202,18 @@ try {
         }
     }
     $size = (Get-Item $zip).Length
+    # Emit the .sha256 sidecar with the EXACT name and format the in-app
+    # updater fetches: updater.sha256_url_for() turns "...-<v>.zip" into
+    # "...-<v>.sha256" (NOT ".zip.sha256"), and fetch_published_sha256()
+    # reads "<hex>  <filename>". A hand-named sidecar 404'd the 1.3.0
+    # update on the Mac (2026-08-06) — generate it here so publishing is
+    # just "upload everything in dist/".
+    $hash = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLower()
+    $sidecar = $zip -replace '\.zip$', '.sha256'
+    "$hash  $(Split-Path $zip -Leaf)`n" | Out-File -FilePath $sidecar -Encoding ascii -NoNewline
     Write-Host ""
     Write-Host "Wrote $zip ($([math]::Round($size/1KB, 1)) KB)"
+    Write-Host "Wrote $sidecar (updater-convention name + format)"
     Write-Host "Staging tree retained at $stage"
 } finally {
     Pop-Location
