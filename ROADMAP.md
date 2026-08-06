@@ -444,6 +444,31 @@ flagging for Soapy sources.
 - Full expression (Observation menu, first-run wizard, visibility-planner
   tie-in "B0329+54 rises 21:40 → Observe") belongs to the 1.2.0 redesign.
 
+## v1.3.0 — SHIPPED 2026-08-06 (cut + published from Windows)
+
+**Group announcement SENT (Rick, 2026-08-06):** email to the DSES radio
+astronomers covering 1.3.0 — led by the planner's **"What do I need?"**
+solver framed as a planning tool that needs NO radio at all (which band /
+bandwidth can measure a given source's DM — the B0950+08 July lesson,
+automated), then the B210 Self Test (radio proves its own pulsar chain,
+no cable, PASS/FAIL vs injected truth, verified Windows + macOS), the
+full simulator modes (any catalog pulsar/magnetar or fully custom,
+70 MHz–6 GHz), the B0950 milestone (first genuine DM measurement by our
+chain: injected 2.97, measured 3.4), update path (Help → Check for
+Updates), and getting-started steps for members without an SDR
+(playback mode + planner work radio-less).
+
+Landed: pulsar_sim.py (noise-carrier synthesis, coherent dispersion
+verified to 0.06 µs, seamless loop, geometry-aware grading, geometry
+solver), Observe → B210 Self Test (three modes, TX always at minimum
+gain, full state save/restore, live consequences readout, stage
+explanations, PASS/FAIL banner), planner "What do I need?…" + Self Test
+"Suggest geometry", tools/b210_bit.py bench harness, test_pulsar_sim.py
+(math suite + offline PRESTO round trip + solver-vs-measurements).
+Hardware-verified on BOTH dev machines; Mac: zero TX underflows, period
+exact even at 4 MS/s. Publish incident (sha sidecar name 404'd the Mac
+updater) closed same-day; make-release now emits the sidecar itself.
+
 ## v1.2.0 — SHIPPED 2026-08-05 (cut + published from Windows)
 
 **Group announcement SENT (Rick, 2026-08-05):** email to the six DSES radio
