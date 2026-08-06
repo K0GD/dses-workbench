@@ -4808,6 +4808,15 @@ class B210SelfTestDialog(QtWidgets.QDialog):
         self._status.setTextFormat(QtCore.Qt.PlainText)
         lay.addWidget(self._status)
 
+        # A plain-language line under the status explaining what the current
+        # pipeline stage is doing (Rick 2026-08-06: the stage names are nice,
+        # but say what the commands are FOR).
+        self._explain = QtWidgets.QLabel("")
+        self._explain.setWordWrap(True)
+        self._explain.setStyleSheet("color: gray; font-style: italic;")
+        self._explain.setVisible(False)
+        lay.addWidget(self._explain)
+
         self._results = QtWidgets.QPlainTextEdit()
         self._results.setReadOnly(True)
         self._results.setVisible(False)
@@ -4971,6 +4980,12 @@ class B210SelfTestDialog(QtWidgets.QDialog):
         self._phase = "capture"
         self._left = int(self._dur_spin.value())
         self._status.setStyleSheet(self._STYLE_QUIET)
+        self._explain.setText(
+            "The TX is looping the dispersed pulse train out of TX/RX-A at "
+            "minimum gain; RX2-A is recording the internal leakage straight "
+            "into a filterbank .fil — watch the spectrum display and you "
+            "can see the pulses.")
+        self._explain.setVisible(True)
         self._results.setVisible(False)
         self._pdf_btn.setVisible(False)
         self._start_btn.setEnabled(False)
@@ -4997,6 +5012,31 @@ class B210SelfTestDialog(QtWidgets.QDialog):
                 f"Recording the internal leakage: {self._left} s left"
                 + (f"  (gap events {gaps})" if gaps else ""))
 
+    # What each pipeline stage is doing, keyed by a substring of the
+    # progress message it emits (first match wins).
+    _STAGE_NOTES = (
+        ("readfile", "readfile checks that the recording is a well-formed "
+                     "SIGPROC filterbank — header, geometry, and duration "
+                     "all sane before any science is attempted."),
+        ("rfifind", "rfifind scans the data in small time/frequency blocks "
+                    "for interference and builds a mask, so RFI can neither "
+                    "bury the pulse nor masquerade as one."),
+        ("prepfold", "prepfold folds every sample at the injected period "
+                     "and dedisperses at the injected DM, then searches "
+                     "nearby periods and DMs for the sharpest profile — "
+                     "the heart of the test. Its chi-squared says how "
+                     "decisively the pulse beats noise."),
+        ("rendering", "converting prepfold's PostScript plot for the "
+                      "report."),
+        ("writing PDF", "assembling the self-contained fold report — "
+                        "plots, the exact commands run, results table, "
+                        "and verdict — saved next to the .fil."),
+        ("folding with PRESTO", "the radio is back on your settings; the "
+                                "recording now goes through the same "
+                                "PRESTO pipeline a real observation "
+                                "gets."),
+    )
+
     # Status-line looks per phase (Rick 2026-08-05: the analysis line that
     # takes over after capture must stand out, not read like fine print).
     _STYLE_QUIET = ""
@@ -5009,14 +5049,21 @@ class B210SelfTestDialog(QtWidgets.QDialog):
 
     # --- callbacks from the main window ----------------------------------
     def on_progress(self, msg):
-        self._status.setText(str(msg))
+        msg = str(msg)
+        self._status.setText(msg)
         if self._phase == "analyze":
             self._status.setStyleSheet(self._STYLE_BUSY)
+        for key, note in self._STAGE_NOTES:
+            if key in msg:
+                self._explain.setText(note)
+                self._explain.setVisible(True)
+                break
 
     def on_failed(self, msg):
         self._phase = "done"
         self._status.setText("Self test FAILED to run.")
         self._status.setStyleSheet(self._STYLE_FAIL)
+        self._explain.setVisible(False)
         self._results.setPlainText(str(msg))
         self._results.setVisible(True)
         self._start_btn.setEnabled(True)
@@ -5030,6 +5077,7 @@ class B210SelfTestDialog(QtWidgets.QDialog):
         self._status.setText(head + f"   (PRESTO verdict: {verdict})")
         self._status.setStyleSheet(self._STYLE_PASS if ok
                                    else self._STYLE_FAIL)
+        self._explain.setVisible(False)
         lines = list(checks)
         if res.get("chi2_red") is not None:
             lines.append(f"reduced chi-squared {res['chi2_red']:.1f}")
