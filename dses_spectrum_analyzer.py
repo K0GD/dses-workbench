@@ -7971,14 +7971,10 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
         if self._ezra_sink is not None:
             return  # already recording
         st = self._app_settings
-        name = ezra_txt.ezra_filename(self._ez_prefix)
-        path = os.path.join(self.recording_dir, name)
-        # ezCol convention for a same-hour rerun: append a letter.
-        for letter in 'abcdefghijklmnopqrstuvwxyz':
-            if not os.path.exists(path):
-                break
-            path = os.path.join(self.recording_dir,
-                                name[:-4] + letter + ".txt")
+        # ezCol naming incl. the same-hour rerun letter (shared helper —
+        # the sink reuses it when it rolls to a new file at UTC midnight).
+        path = str(ezra_txt.ezra_unique_path(self.recording_dir,
+                                             self._ez_prefix))
         try:
             sink = ezra_txt.EzraTxtSink(
                 path, fft_bins=self._ez_fft_bins,
@@ -7992,7 +7988,10 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
                 az_deg=self._ez_az_deg, el_deg=self._ez_el_deg,
                 gain_text=f"{self.gain:g}",
                 keep_fraction=self._ez_keep_fraction,
-                provenance=f"DSES_Spectrum_Analyzer {APP_VERSION}")
+                provenance=f"DSES_Spectrum_Analyzer {APP_VERSION}",
+                # ezCol convention for multi-day drift scans: a new file per
+                # UTC day, rolled automatically at midnight.
+                roll_daily=True, roll_prefix=self._ez_prefix)
         except Exception as exc:
             QtWidgets.QMessageBox.critical(
                 self, "Recording failed to start",
@@ -8048,12 +8047,17 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
         except Exception as exc:
             print(f"ezRA close failed: {exc}", file=sys.stderr)
         self._on_recording_stopped()
-        path = getattr(self, '_ezra_sink_path', '')
+        # After a midnight rollover the session spans several files — report
+        # the LAST file plus the day count, and list them all in the tooltip.
+        path = (info or {}).get('path') or getattr(self, '_ezra_sink_path', '')
         if path:
             rows = (info or {}).get('nrows', 0)
+            nfiles = (info or {}).get('files', 1)
+            multi = f" in {nfiles} daily files" if nfiles > 1 else ""
             self._recording_status.setText(
-                f"Saved → {os.path.basename(path)} ({rows} rows)")
-            self._recording_status.setToolTip(path)
+                f"Saved → {os.path.basename(path)} ({rows} rows{multi})")
+            self._recording_status.setToolTip(
+                "\n".join((info or {}).get('paths', [path])))
         else:
             self._recording_status.setText("Idle")
             self._recording_status.setToolTip("")
@@ -8894,6 +8898,20 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
         """1 Hz: refresh the elapsed/countdown text; auto-stop at the target."""
         if self._rec_start_time is None:
             return
+        # Multi-day drift scan: after the UTC-midnight rollover the sink is
+        # writing a NEW daily file — keep the status line naming the current
+        # one (reading .path is just an attribute fetch; the worker thread
+        # owns the actual file handle).
+        sink = getattr(self, '_ezra_sink', None)
+        if sink is not None:
+            cur = str(sink.path)
+            if cur != getattr(self, '_ezra_sink_path', cur):
+                self._ezra_sink_path = cur
+                self._recording_status.setText(
+                    f"Recording → {os.path.basename(cur)} (day "
+                    f"{len(sink._writer.paths)} of this scan)")
+                self._recording_status.setToolTip(
+                    "\n".join(sink._writer.paths))
         elapsed = time.monotonic() - self._rec_start_time
         gaps = self._rec_gap_suffix()
         if self._rec_duration_s > 0:

@@ -48,6 +48,44 @@ n = ezra_filename("DSES", datetime(2025, 11, 13, 19, 53, 8, tzinfo=timezone.utc)
 assert n == "DSES251113_19.txt", n
 print("2. ezCol filename convention OK:", n)
 
+# --- 2b. UTC-midnight daily rollover (multi-day drift scans) -----------------
+import shutil
+from ezra_txt import ezra_unique_path
+rdir = tempfile.mkdtemp()
+UTC = timezone.utc
+start = datetime(2026, 8, 14, 23, 58, 0, tzinfo=UTC)
+w = EzraTxtWriter(ezra_unique_path(rdir, "DSES", start),
+                  lat_deg=38.3808, lon_deg=-103.156, amsl=4400.0,
+                  site_name="DSES", freq_min_mhz=1414.4, freq_max_mhz=1422.4,
+                  bin_qty=64, az_deg=0, el_deg=87, gain_text="40",
+                  provenance="DSES_Spectrum_Analyzer test",
+                  roll_daily=True, roll_prefix="DSES")
+row = np.full(64, 1e-10)
+for ts in (start,                                              # day 1
+           datetime(2026, 8, 14, 23, 59, 40, tzinfo=UTC),
+           datetime(2026, 8, 15, 0, 0, 5, tzinfo=UTC),         # -> day 2
+           datetime(2026, 8, 15, 12, 0, 0, tzinfo=UTC),
+           datetime(2026, 8, 16, 0, 0, 12, tzinfo=UTC)):       # -> day 3
+    w.write_row(row, utc=ts)
+info = w.close()
+assert info["files"] == 3, info
+assert info["nrows"] == 5, info
+names = [os.path.basename(p) for p in info["paths"]]
+assert names == ["DSES260814_23.txt", "DSES260815_00.txt",
+                 "DSES260816_00.txt"], names
+day_rows = []
+for p in info["paths"]:
+    lines = open(p).read().splitlines()
+    assert lines[0].startswith("from ")                 # full header per file
+    assert lines[6] == "# frequency spectrums of RMS power in dB"
+    assert re.fullmatch(r"freqMin 1414\.4 freqMax 1422\.4 freqBinQty 64",
+                        lines[2])
+    day_rows.append(len(lines) - 7)
+assert day_rows == [2, 2, 1], day_rows                  # rows split by UTC day
+shutil.rmtree(rdir)
+print("2b. UTC-midnight rollover OK: 5 rows -> 3 daily files (2/2/1), "
+      "full header each")
+
 # --- 3. integrator: tone lands in the right ascending-frequency bin ---------
 rows = []
 integ = EzraIntegrator(fft_bins=256, integ_frames=4, on_row=rows.append,

@@ -26,7 +26,10 @@ No trailing flags (4096-bin reference rows have exactly 4097 fields).
 
 Like ezCol (which keeps the central 8 MHz of a 10 MS/s capture), the writer
 can trim the anti-alias filter skirts via ``keep_fraction``; freqMin/Max and
-freqBinQty always describe the bins actually written.
+freqBinQty always describe the bins actually written. Also like ezCol,
+multi-day recordings roll to a NEW file at UTC midnight (``roll_daily=True``)
+— one file per UTC day, each with a full header, so ezCon consumes a
+multi-day campaign as its usual series of daily files.
 
 Pure Python/numpy; the GNU Radio sink is defined only when gnuradio imports,
 mirroring sigproc_fil.py.
@@ -45,36 +48,81 @@ def ezra_filename(prefix, utc=None):
     return f"{prefix}{utc:%y%m%d_%H}.txt"
 
 
+def ezra_unique_path(directory, prefix, utc=None):
+    """ezCol-convention path in `directory` that does not exist yet: a
+    same-hour rerun appends a letter (DSES251113_19.txt -> ..._19a.txt),
+    exactly like ezCol."""
+    name = ezra_filename(prefix, utc)
+    path = Path(directory) / name
+    for letter in "abcdefghijklmnopqrstuvwxyz":
+        if not path.exists():
+            break
+        path = Path(directory) / (name[:-4] + letter + ".txt")
+    return path
+
+
 class EzraTxtWriter:
     """Append ezRA .txt spectrum rows to an open file.
 
     Feed already-integrated linear-power spectra (ascending frequency,
     ``bin_qty`` bins) via :meth:`write_row`; they are stored as dB.
+
+    With ``roll_daily=True`` (and a ``roll_prefix``), the writer follows
+    ezCol's multi-day convention: at the first row on a new UTC date it
+    closes the current file and opens ``<roll_prefix>YYMMDD_HH.txt`` in the
+    same directory with a fresh, identical header — one file per UTC day
+    instead of one ever-growing file. ``nrows`` counts the whole session;
+    ``paths`` lists every file written.
     """
 
     def __init__(self, path, *, lat_deg, lon_deg, amsl, site_name,
                  freq_min_mhz, freq_max_mhz, bin_qty, az_deg, el_deg,
-                 gain_text="", provenance="DSES_Spectrum_Analyzer"):
-        self.path = Path(path)
+                 gain_text="", provenance="DSES_Spectrum_Analyzer",
+                 roll_daily=False, roll_prefix=""):
         self.bin_qty = int(bin_qty)
         self.nrows = 0
+        self.paths = []
+        self._roll_daily = bool(roll_daily)
+        self._roll_prefix = roll_prefix
         # ezCon.py hard-gates on the first line starting with the literal
         # bytes "from ezCol" (that's why the group's GNU Radio predecessor
         # called itself "ezColG"). Guarantee compatibility regardless of the
         # provenance text supplied.
         if not provenance.startswith("ezCol"):
             provenance = "ezCol-compatible " + provenance
+        self._hdr = dict(
+            provenance=provenance, lat_deg=lat_deg, lon_deg=lon_deg,
+            amsl=amsl, site_name=site_name, freq_min_mhz=freq_min_mhz,
+            freq_max_mhz=freq_max_mhz, az_deg=az_deg, el_deg=el_deg,
+            gain_text=gain_text)
+        self._open(path)
+
+    def _open(self, path):
+        """Open `path` and write the ezRA header. The file covers the UTC
+        date of its FIRST row (adopted in write_row) until rolled."""
+        self.path = Path(path)
+        self._file_date = None
+        h = self._hdr
         self._fh = open(self.path, "w", newline="\n")
-        self._fh.write(f"from {provenance}\n")
-        self._fh.write(f"lat {lat_deg:g} long {lon_deg:g} "
-                       f"amsl {amsl:g} name {site_name}\n")
-        self._fh.write(f"freqMin {freq_min_mhz:g} freqMax {freq_max_mhz:g} "
+        self._fh.write(f"from {h['provenance']}\n")
+        self._fh.write(f"lat {h['lat_deg']:g} long {h['lon_deg']:g} "
+                       f"amsl {h['amsl']:g} name {h['site_name']}\n")
+        self._fh.write(f"freqMin {h['freq_min_mhz']:g} "
+                       f"freqMax {h['freq_max_mhz']:g} "
                        f"freqBinQty {self.bin_qty}\n")
-        self._fh.write(f"azDeg {az_deg:g} elDeg {el_deg:g}\n")
+        self._fh.write(f"azDeg {h['az_deg']:g} elDeg {h['el_deg']:g}\n")
         self._fh.write("# times are in UTC\n")
-        self._fh.write(f"# gain {gain_text or 'xx'}\n")
+        self._fh.write(f"# gain {h['gain_text'] or 'xx'}\n")
         self._fh.write("# frequency spectrums of RMS power in dB\n")
         self._fh.flush()
+        self.paths.append(str(self.path))
+
+    def _roll(self, utc):
+        """ezCol-style daily rollover: close the day's file, open the next
+        UTC day's (fresh header, same settings)."""
+        self._fh.flush()
+        self._fh.close()
+        self._open(ezra_unique_path(self.path.parent, self._roll_prefix, utc))
 
     def write_row(self, power_linear, utc=None):
         """Append one spectrum row. `power_linear` is an ascending-frequency
@@ -82,8 +130,14 @@ class EzraTxtWriter:
         p = np.asarray(power_linear, dtype=np.float64)
         if p.size != self.bin_qty:
             raise ValueError(f"expected {self.bin_qty} bins, got {p.size}")
-        db = 10.0 * np.log10(np.maximum(p, 1e-30))
         utc = utc or datetime.now(timezone.utc)
+        if self._roll_daily:
+            if self._file_date is None:          # file covers its 1st row's day
+                self._file_date = utc.date()
+            elif utc.date() != self._file_date:
+                self._roll(utc)
+                self._file_date = utc.date()
+        db = 10.0 * np.log10(np.maximum(p, 1e-30))
         stamp = utc.strftime("%Y-%m-%dT%H:%M:%S")
         self._fh.write(stamp + " " + " ".join(f"{v:.4f}" for v in db) + "\n")
         self.nrows += 1
@@ -94,7 +148,8 @@ class EzraTxtWriter:
             self._fh.close()
             self._fh = None
         return {"path": str(self.path), "nrows": self.nrows,
-                "bin_qty": self.bin_qty}
+                "bin_qty": self.bin_qty,
+                "paths": list(self.paths), "files": len(self.paths)}
 
     def __enter__(self):
         return self
@@ -199,7 +254,8 @@ if _HAVE_GR:
         def __init__(self, path, *, fft_bins, integ_frames, samp_rate,
                      center_freq_mhz, lat_deg, lon_deg, amsl, site_name,
                      az_deg, el_deg, gain_text="", keep_fraction=1.0,
-                     provenance="DSES_Spectrum_Analyzer"):
+                     provenance="DSES_Spectrum_Analyzer",
+                     roll_daily=False, roll_prefix=""):
             gr.sync_block.__init__(self, name="ezra_txt_sink",
                                    in_sig=[np.complex64], out_sig=None)
             self._integ = EzraIntegrator(
@@ -211,7 +267,8 @@ if _HAVE_GR:
                 path, lat_deg=lat_deg, lon_deg=lon_deg, amsl=amsl,
                 site_name=site_name, freq_min_mhz=fmin, freq_max_mhz=fmax,
                 bin_qty=self._integ.kept_bins, az_deg=az_deg, el_deg=el_deg,
-                gain_text=gain_text, provenance=provenance)
+                gain_text=gain_text, provenance=provenance,
+                roll_daily=roll_daily, roll_prefix=roll_prefix)
             self.dropped_samples = 0
             self._q = []
             self._q_samples = 0
