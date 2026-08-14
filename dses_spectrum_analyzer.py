@@ -143,7 +143,7 @@ import time
 
 # === App metadata ===
 APP_NAME        = "DSES Spectrum Analyzer"
-APP_VERSION     = "1.3.0"
+APP_VERSION     = "1.3.1"
 APP_AUTHOR      = "Richard M Hambly (K0GD)"
 APP_AUTHOR_EMAIL = "rick@cnssys.com"
 APP_COPYRIGHT   = "Copyright © 2026 Richard M Hambly (K0GD)"
@@ -3142,7 +3142,10 @@ the same validated code as the offline <code>iq_to_fil.py</code> converter.
 file feeds Ted Cline's free ezRA suite (ezCon&nbsp;&rarr;&nbsp;ezPlot/ezSky/ezGal)
 directly &mdash; hydrogen-line drift scans with the same radio that records
 pulsars. The filename follows the ezCol convention
-(<code>&lt;prefix&gt;YYMMDD_HH.txt</code>).</li>
+(<code>&lt;prefix&gt;YYMMDD_HH.txt</code>), and &mdash; also like ezCol &mdash;
+a multi-day recording rolls to a <b>new file at each UTC midnight</b> (one
+file per UTC day, each with a full header), so ezCon consumes a long campaign
+as its usual series of daily files.</li>
 <li><b>Channels</b> / <b>Integrate</b> (filterbank only): the FFT channel
 count and how many power frames are summed per output sample, so
 <code>tsamp&nbsp;=&nbsp;channels&nbsp;&times;&nbsp;integrate&nbsp;/&nbsp;sample&nbsp;rate</code>.
