@@ -813,6 +813,18 @@ def _print_to_adobe_pdf(word, doc, docx_path: Path, pdf_path: Path):
             word.ActivePrinter = previous_printer
         except Exception:
             pass
+    # PrintOut can return before the spooler finishes writing the file
+    # (observed on the install guide, 2026-08-19): poll until it exists and
+    # stops growing.
+    import time
+    last = -1
+    for _ in range(120):
+        if ps_file.is_file():
+            size = ps_file.stat().st_size
+            if size > 0 and size == last:
+                break
+            last = size
+        time.sleep(1.0)
     if not ps_file.is_file() or ps_file.stat().st_size == 0:
         raise RuntimeError(f"Word did not write the PostScript file {ps_file}")
 
