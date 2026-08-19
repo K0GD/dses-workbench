@@ -2764,7 +2764,11 @@ def resolve_device(saved_driver, saved_serial, parent=None):
             "outside it and you'll just see noise."
             "\n\nIf a radio IS plugged in, its USB link probably failed "
             "to enumerate — reseat the USB cable at the radio end (check "
-            "Device Manager for an 'Unknown USB Device'), then relaunch."
+            "Device Manager for an 'Unknown USB Device'). If that does "
+            "not clear it, fully power-cycle the radio: disconnect USB "
+            "AND any external DC supply for 15 seconds — a wedged USB "
+            "chip survives everything short of a true cold start. Then "
+            "relaunch."
             "\n\nCancel exits now instead of starting playback.",
             buttons=(QtWidgets.QMessageBox.Ok | QtWidgets.QMessageBox.Cancel))
         if answer == QtWidgets.QMessageBox.Cancel:
