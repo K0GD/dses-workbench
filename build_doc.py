@@ -29,8 +29,10 @@ Run from the project root with the project's conda env:
 from __future__ import annotations
 
 import html
+import os
 import re
 import sys
+import tempfile
 from datetime import date
 from pathlib import Path
 
@@ -121,6 +123,21 @@ DOC_VERSION  = "v1.1.6"
 DOC_AUTHOR   = "Richard M Hambly (K0GD)"
 DOC_ORG      = "DSES"
 
+# Typography. Aligned with C:\CNS-Systems\DOCUMENT_STANDARDS.md section 3
+# (Rick, 19-Aug-2026) so DSES documents match CNS Systems reports: Minion Pro
+# body, Myriad Pro headings/display, Source Code Pro for code. The DSES skin
+# (teal H1 banner, colors, sizes) is unchanged — only the faces moved.
+#
+# IMPORTANT: these are OpenType-PS (CFF) faces. Word's SaveAs-PDF silently
+# RASTERIZES them (verified 19-Aug-2026: Minion/Myriad runs came out as images
+# with no text layer, while TrueType Source Code Pro embedded fine), so the
+# Windows converter below prints through the Adobe PDF printer instead. If you
+# change these back to TrueType faces (Calibri/Cambria/Consolas), the plain
+# SaveAs path is adequate again.
+FONT_BODY = "Minion Pro"
+FONT_HEAD = "Myriad Pro"
+FONT_MONO = "Source Code Pro"
+
 # DSES house style (pulled from EVE-26 + Pulsar installation reference docs)
 TITLE_COLOR_RGB     = RGBColor(0x15, 0x60, 0x82)  # teal/blue
 H1_BG_HEX           = "156082"                    # same teal as banner fill
@@ -184,8 +201,8 @@ def add_runs(paragraph, text: str):
         if style.get('italic'):
             run.italic = True
         if style.get('code'):
-            run.font.name = 'Consolas'
-            run.font.size = Pt(10)
+            run.font.name = FONT_MONO
+            run.font.size = Pt(9.5)
 
 
 # ---------------------------------------------------------------------------
@@ -252,6 +269,7 @@ def configure_section(section):
     p1.text = ''
     r = p1.add_run(DOC_TITLE)
     r.bold = True
+    r.font.name = FONT_HEAD
     r.font.size = Pt(11)
     r.font.color.rgb = TITLE_COLOR_RGB
     # Optional logo, right-justified on the title line via a right tab stop
@@ -276,6 +294,7 @@ def configure_section(section):
     p2 = hdr.add_paragraph()
     r2 = p2.add_run(DOC_SUBTITLE)
     r2.italic = True
+    r2.font.name = FONT_HEAD
     r2.font.size = Pt(9)
     r2.font.color.rgb = SUBTITLE_COLOR_RGB
 
@@ -289,6 +308,7 @@ def configure_section(section):
     fp.add_run('\t')
     add_page_number_field(fp)
     for run in fp.runs:
+        run.font.name = FONT_HEAD
         run.font.size = Pt(9)
         run.font.color.rgb = SUBTITLE_COLOR_RGB
 
@@ -342,6 +362,7 @@ def add_table_of_contents(doc, headings):
         para.paragraph_format.left_indent = Pt(18 * (level - base))
         para.paragraph_format.space_after = Pt(2)
         run = para.add_run(title)
+        run.font.name = FONT_HEAD
         run.font.size = Pt(11)
         if level == base:
             run.font.bold = True
@@ -357,6 +378,7 @@ def add_cover_page(doc):
     title = doc.add_paragraph()
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
     tr = title.add_run(DOC_TITLE)
+    tr.font.name = FONT_HEAD
     tr.font.size = Pt(38)
     tr.font.color.rgb = TITLE_COLOR_RGB
     tr.bold = True
@@ -364,6 +386,7 @@ def add_cover_page(doc):
     subtitle = doc.add_paragraph()
     subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
     sr = subtitle.add_run(DOC_SUBTITLE)
+    sr.font.name = FONT_HEAD
     sr.font.size = Pt(24)
     sr.font.color.rgb = SUBTITLE_COLOR_RGB
     sr.italic = True
@@ -395,6 +418,7 @@ def add_cover_page(doc):
         p = doc.add_paragraph()
         p.alignment = WD_ALIGN_PARAGRAPH.CENTER
         r = p.add_run(text)
+        r.font.name = FONT_HEAD
         r.font.size = Pt(16)
         r.font.color.rgb = SUBTITLE_COLOR_RGB
     add_page_break(doc)
@@ -404,6 +428,7 @@ def apply_heading_styles(doc):
     """Tweak the built-in heading styles to match DSES (after the doc is
     created, since python-docx populates styles from the default template)."""
     h1 = doc.styles['Heading 1']
+    h1.font.name = FONT_HEAD
     h1.font.color.rgb = H1_TEXT_RGB
     h1.font.size = Pt(11)
     h1.font.bold = True
@@ -411,13 +436,41 @@ def apply_heading_styles(doc):
     h1.paragraph_format.space_before = Pt(12)
     h1.paragraph_format.space_after = Pt(6)
     # Heading-2 stays default (slate); Heading 3 → dark teal
+    h2 = doc.styles['Heading 2']
+    h2.font.name = FONT_HEAD
     h3 = doc.styles['Heading 3']
+    h3.font.name = FONT_HEAD
     h3.font.color.rgb = H3_COLOR_RGB
     h3.font.bold = True
 
     normal = doc.styles['Normal']
-    normal.font.name = 'Calibri'
+    normal.font.name = FONT_BODY
     normal.font.size = Pt(11)
+
+    # Also pin the DOCUMENT DEFAULTS (w:docDefaults), not just the Normal
+    # style: runless paragraphs (spacers, image anchors, table paragraph
+    # marks) fall back to Word's built-in default (Times New Roman / theme
+    # Calibri), which then leaks into the PDF's embedded-font list. Same
+    # rule as DOCUMENT_STANDARDS.md's generator note, ported to python-docx.
+    styles_el = doc.styles.element
+    dd = styles_el.find(qn('w:docDefaults'))
+    if dd is None:
+        dd = OxmlElement('w:docDefaults')
+        styles_el.insert(0, dd)
+    rprd = dd.find(qn('w:rPrDefault'))
+    if rprd is None:
+        rprd = OxmlElement('w:rPrDefault')
+        dd.insert(0, rprd)
+    rpr = rprd.find(qn('w:rPr'))
+    if rpr is None:
+        rpr = OxmlElement('w:rPr')
+        rprd.append(rpr)
+    rfonts = rpr.find(qn('w:rFonts'))
+    if rfonts is None:
+        rfonts = OxmlElement('w:rFonts')
+        rpr.insert(0, rfonts)
+    for attr in ('w:ascii', 'w:hAnsi', 'w:eastAsia', 'w:cs'):
+        rfonts.set(qn(attr), FONT_BODY)
 
 
 # ---------------------------------------------------------------------------
@@ -435,8 +488,8 @@ def add_code_block(doc, lines):
         p = cell.paragraphs[0] if first else cell.add_paragraph()
         first = False
         run = p.add_run(line)
-        run.font.name = 'Consolas'
-        run.font.size = Pt(9)
+        run.font.name = FONT_MONO
+        run.font.size = Pt(9.5)
 
 
 def add_table(doc, header_row, body_rows):
@@ -449,6 +502,7 @@ def add_table(doc, header_row, body_rows):
         add_runs(cell.paragraphs[0], cell_text)
         for run in cell.paragraphs[0].runs:
             run.bold = True
+            run.font.name = FONT_HEAD
     for i, row in enumerate(body_rows):
         for j in range(cols):
             cell_text = row[j] if j < len(row) else ''
@@ -564,9 +618,18 @@ def md_to_docx(src_path: Path, dst_path: Path):
         if re.match(r'^\s*[-*]\s+', line):
             while i < len(lines) and re.match(r'^\s*[-*]\s+', lines[i]):
                 content = re.sub(r'^\s*[-*]\s+', '', lines[i])
+                i += 1
+                # Coalesce hard-wrapped continuation lines (indented, not a
+                # new bullet / number / blank) into the SAME bullet — else
+                # they render as detached body paragraphs after the item.
+                while (i < len(lines) and lines[i].startswith('  ')
+                       and lines[i].strip() != ''
+                       and not re.match(r'^\s*[-*]\s+', lines[i])
+                       and not re.match(r'^\s*\d+\.\s+', lines[i])):
+                    content += ' ' + lines[i].strip()
+                    i += 1
                 p = doc.add_paragraph(style='List Bullet')
                 add_runs(p, content)
-                i += 1
             continue
 
         if re.match(r'^\s*\d+\.\s+', line):
@@ -678,6 +741,7 @@ def convert_docx_to_pdf(docx_path: Path, pdf_path: Path):
     the .docx and asking for a manual Save-As-PDF."""
     if sys.platform == "win32":
         return _convert_docx_to_pdf_word(docx_path, pdf_path)
+
     soffice = _find_soffice()
     if soffice:
         return _convert_docx_to_pdf_soffice(soffice, docx_path, pdf_path)
@@ -687,17 +751,107 @@ def convert_docx_to_pdf(docx_path: Path, pdf_path: Path):
         "libreoffice`) and re-run, or open the .docx and Save As PDF.")
 
 
+def _adobe_pdf_printer_available():
+    """True if the 'Adobe PDF' printer (Acrobat Distiller) is installed.
+
+    Note this is independent of Acrobat.exe itself: on the Windows dev box
+    Acrobat has been crashing since its 2026-08-02 update, but the printer
+    driver and Distiller are separate binaries and work fine (verified
+    19-Aug-2026)."""
+    try:
+        import win32print
+        names = {p[2] for p in win32print.EnumPrinters(
+            win32print.PRINTER_ENUM_LOCAL | win32print.PRINTER_ENUM_CONNECTIONS)}
+        return "Adobe PDF" in names
+    except Exception:
+        return False
+
+
+def _find_acrodist():
+    """Full path of Acrobat Distiller's acrodist.exe, or None."""
+    for c in (Path(r"C:/Program Files (x86)/Adobe/Acrobat DC/Acrobat/acrodist.exe"),
+              Path(r"C:/Program Files/Adobe/Acrobat DC/Acrobat/acrodist.exe")):
+        if c.is_file():
+            return c
+    return None
+
+
+def _print_to_adobe_pdf(word, doc, docx_path: Path, pdf_path: Path):
+    """Produce the PDF via Word -> PostScript file -> Distiller, directly.
+
+    Word's own exporter (SaveAs FileFormat=17) cannot embed OpenType-PS (CFF)
+    faces and silently rasterizes every run that uses one — with the house
+    fonts that means the whole document loses its text layer, so the PDF must
+    come from Adobe's pipeline instead (DOCUMENT_STANDARDS.md section 8).
+
+    We deliberately do NOT print through the "Adobe PDF" printer *port*: its
+    port monitor drops the PDF wherever its "last used folder" points, keeps
+    the file locked long afterwards, and when a print collides with such a
+    leftover it jams the queue with stacked modal error dialogs (19-Aug-2026
+    incident). Instead, Word prints PostScript to a scratch FILE we name
+    (PrintToFile), and acrodist.exe distills that file synchronously — fully
+    deterministic paths, no spooler, no dialogs."""
+    import subprocess
+    import shutil
+
+    acrodist = _find_acrodist()
+    if acrodist is None:
+        raise RuntimeError("acrodist.exe not found under Program Files — "
+                           "is Acrobat/Distiller installed?")
+
+    scratch_dir = Path(tempfile.mkdtemp(prefix="dses_distill_"))
+    ps_file = scratch_dir / (pdf_path.stem + ".ps")
+    out_pdf = scratch_dir / (pdf_path.stem + ".pdf")
+
+    previous_printer = word.ActivePrinter
+    try:
+        word.ActivePrinter = "Adobe PDF"
+        doc.PrintOut(Background=False, PrintToFile=True,
+                     OutputFileName=str(ps_file))
+    finally:
+        try:
+            word.ActivePrinter = previous_printer
+        except Exception:
+            pass
+    if not ps_file.is_file() or ps_file.stat().st_size == 0:
+        raise RuntimeError(f"Word did not write the PostScript file {ps_file}")
+
+    r = subprocess.run([str(acrodist), "/N", "/Q", str(ps_file)],
+                       capture_output=True, text=True, timeout=300)
+    if not out_pdf.is_file() or out_pdf.stat().st_size == 0:
+        log = ps_file.with_suffix(".log")
+        detail = log.read_text(errors="replace")[-2000:] if log.is_file() else r.stderr
+        raise RuntimeError(f"Distiller produced no PDF from {ps_file}: {detail}")
+
+    pdf_path.parent.mkdir(parents=True, exist_ok=True)
+    if pdf_path.exists():
+        pdf_path.unlink()
+    shutil.copy2(str(out_pdf), str(pdf_path))
+    shutil.rmtree(scratch_dir, ignore_errors=True)
+
+
 def _convert_docx_to_pdf_word(docx_path: Path, pdf_path: Path):
-    """Open the DOCX in Word, update every field (TOC + PAGE), then save
-    as PDF. Direct pywin32 instead of docx2pdf so we control the field-
-    update step — without it the TOC stays as the placeholder text.
-    Requires Microsoft Word on Windows.
+    """Open the DOCX in Word, update every field (TOC + PAGE), then write the
+    PDF. Direct pywin32 instead of docx2pdf so we control the field-update
+    step — without it the TOC stays as the placeholder text. Requires
+    Microsoft Word on Windows.
+
+    The PDF itself comes from the Adobe PDF printer when it is available,
+    because Word's own exporter rasterizes the OpenType-PS house faces (see
+    _print_to_adobe_pdf); otherwise it falls back to Word's exporter with a
+    warning.
 
     Note: kills any leftover background winword.exe before starting. If
     you have Word open with a document you care about, save first."""
     _kill_stale_invisible_word()
     import win32com.client
-    word = win32com.client.Dispatch('Word.Application')
+    # Early binding (makepy) so NAMED arguments to PrintOut actually bind —
+    # with plain dynamic Dispatch they were silently mis-delivered and the
+    # PrintToFile/OutputFileName combination did nothing (19-Aug-2026).
+    try:
+        word = win32com.client.gencache.EnsureDispatch('Word.Application')
+    except Exception:
+        word = win32com.client.Dispatch('Word.Application')
     word.Visible = False
     try:
         doc = word.Documents.Open(str(docx_path.resolve()))
@@ -715,11 +869,20 @@ def _convert_docx_to_pdf_word(docx_path: Path, pdf_path: Path):
                         doc.TablesOfContents(1).Update()
                 except Exception:
                     pass
-            # wdFormatPDF = 17
-            doc.SaveAs(str(pdf_path.resolve()), FileFormat=17)
-            # Save the .docx too so the populated TOC persists for future
-            # opens in Word (otherwise the TOC reverts to the placeholder).
+            # Save the .docx so the populated TOC persists for future opens
+            # in Word (otherwise the TOC reverts to the placeholder).
             doc.Save()
+            if _adobe_pdf_printer_available():
+                _print_to_adobe_pdf(word, doc, docx_path, pdf_path)
+            else:
+                print("WARNING: the 'Adobe PDF' printer was not found. Falling "
+                      "back to Word's own PDF export, which RASTERIZES "
+                      f"{FONT_BODY}/{FONT_HEAD} — the PDF will have no "
+                      "selectable text. Install Acrobat/Distiller, or set the "
+                      "FONT_* constants back to TrueType faces.",
+                      file=sys.stderr)
+                # wdFormatPDF = 17
+                doc.SaveAs(str(pdf_path.resolve()), FileFormat=17)
         finally:
             doc.Close(SaveChanges=False)
     finally:
