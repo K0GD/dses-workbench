@@ -679,6 +679,18 @@ menu bar!) + drift-scan box test (dock behavior on headless Openbox/xrdp
 
 ## Backlog / unscheduled
 
+- [ ] **LO offset for shift-less Soapy radios (HackRF, RTL-SDR) via host
+      rotator:** the 2026-08-19 LO-offset feature covers UHD (tune_request)
+      and Soapy drivers exposing a DSP shift stage (LimeSDR-class). HackRF /
+      RTL-SDR have no hardware shift stage, so they fall back to classic
+      tuning (DC artefact mid-band). A host-side fallback is possible: tune
+      hardware to center+offset, splice a rotator_cc (+offset) after the
+      source — the DC artefact then sits at −offset in the displayed band
+      (moved OFF the target but still in-band; full out-of-band removal
+      would need oversample+xlating-FIR). Needs a HackRF on the bench to
+      validate before shipping; design notes in the SoapyGenericSource
+      LO-offset comment block.
+
 - [ ] **B0950+08 re-observation plan (observing, not software):** processing
       gains on the 2026-07-11 recording are exhausted (see
       `…B0950+08…_prepfold-refined.pdf`, 2026-07-17): cleanup lands best-fit

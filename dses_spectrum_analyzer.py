@@ -196,6 +196,12 @@ DEFAULTS = {
         'coarse_hz':       0.0,
         'fine_hz':         0.0,
         'manual_hz':       100e6,
+        # LO offset (Hz): park the hardware LO away from the displayed
+        # center so the zero-IF DC artefact lands off-target (|offset| >
+        # samp_rate/2 pushes it out of the recorded band entirely). Added
+        # after the 2026-08 drift scan put the B210's DC bin 1.3 km/s from
+        # the HI rest frequency. 0 = classic behavior.
+        'lo_offset_hz':    0.0,
     },
     'rx': {
         'gain_db':         40.0,
@@ -3060,6 +3066,18 @@ the manual frequency).</li>
 <li><b>Fine Tune</b>: ±10 MHz offset, layered on top of Coarse Tune.</li>
 <li><b>Manual Frequency</b>: used when the <i>Manual</i> preset is selected.
 Accepts engineering notation, e.g. <code>1.42G</code> or <code>408M</code>.</li>
+<li><b>LO Offset</b>: parks the receiver's local oscillator this far from the
+displayed center; the receiver's digital downconverter shifts the band back, so
+the display and every recorded frequency are unchanged — but the receiver's own
+DC spike (present in any zero-IF SDR, and sitting exactly on the displayed
+center by default) moves off your target. Set it beyond half the sample rate to
+push the spike out of the recorded band entirely. Vital for narrow-line work:
+tuned to the hydrogen line with offset 0, the spike lands <i>inside the
+line</i>. The <i>Hydrogen line — drift scan</i> observation preset sets +1.5 MHz
+automatically. Avoid offsets at integer multiples of the sample rate — on the
+B210 those raise a spur in the band (bench-measured). Requires hardware support (B200/B210: yes; Soapy radios: only
+if the driver exposes a shift stage — HackRF and RTL-SDR do not, and the app
+falls back to classic tuning with a status-bar note).</li>
 </ul>
 
 <p>The Tuning group is disabled in Sweep mode (the center frequency is chosen
@@ -3888,11 +3906,26 @@ class RadioSource:
     # The port currently selected; set by subclasses after opening.
     current_antenna = ""
 
+    # Hardware LO offset (Hz) currently applied; 0 = LO on the displayed
+    # center (classic zero-IF behavior, DC artefact mid-band).
+    lo_offset = 0.0
+
     def set_samp_rate(self, hz: float) -> None:
         raise NotImplementedError
 
     def set_center_freq(self, hz: float) -> None:
         raise NotImplementedError
+
+    def lo_offset_supported(self) -> bool:
+        """True if this radio can park its LO away from the displayed center
+        (the DDC/BB shift stage brings the band back, so the display and all
+        recorded frequencies are unchanged — only the DC artefact moves)."""
+        return False
+
+    def set_lo_offset(self, hz: float) -> bool:
+        """Apply LO offset `hz` and re-tune. Returns True if the hardware
+        honored it; False leaves the radio in classic (offset 0) tuning."""
+        return hz == 0.0
 
     def set_gain(self, db: float) -> None:
         raise NotImplementedError
@@ -3953,6 +3986,7 @@ class UhdB200Source(RadioSource):
         # (subdev) switch, which resets per-frontend state.
         self._cur_freq = center_freq
         self._cur_gain = gain
+        self._lo_offset = 0.0
         self.block = uhd.usrp_source(
             ",".join((f'serial={serial}', '')),
             uhd.stream_args(
@@ -4031,7 +4065,7 @@ class UhdB200Source(RadioSource):
             # antenna_needs_restart). Per-frontend params reset on the
             # remap, so re-apply freq + gain.
             self.block.set_subdev_spec(spec, 0)
-            self.block.set_center_freq(self._cur_freq, 0)
+            self._tune()
             self.block.set_gain(self._cur_gain, 0)
             self._current_subdev = spec
         self.block.set_antenna(port, 0)
@@ -4045,10 +4079,54 @@ class UhdB200Source(RadioSource):
         # UHD snaps to the nearest achievable rate internally; read the result
         # back with get_actual_samp_rate().
         self.block.set_samp_rate(hz)
+        if self._lo_offset:
+            # The analog filter is centered on the LO, not on the displayed
+            # band — re-fit it to the new rate (see _apply_bandwidth).
+            self._apply_bandwidth()
+
+    def _apply_bandwidth(self) -> None:
+        """Fit the AD9361 analog filter to the offset geometry. The filter is
+        a lowpass at complex baseband centered on the LO; the wanted band
+        occupies [lo_off − rate/2, lo_off + rate/2] relative to the LO, so
+        the filter must open to 2·|lo_off| + rate when the LO is parked
+        off-center (capped at the 56 MHz device limit). With offset 0 this
+        is just the sample rate — the driver's default policy."""
+        try:
+            rate = float(self.block.get_samp_rate())
+        except Exception:
+            rate = 2e6
+        bw = min(56e6, 2.0 * abs(self._lo_offset) + rate)
+        try:
+            self.block.set_bandwidth(bw, 0)
+        except Exception as exc:
+            print(f"B210 set_bandwidth({bw:.0f}) failed: {exc}",
+                  file=sys.stderr)
+
+    def _tune(self) -> None:
+        """(Re)tune to the cached center with the current LO offset. With an
+        offset, uhd.tune_request parks the LO at center+offset and the DDC
+        shifts the band back — display and recorded frequencies unchanged,
+        the zero-IF DC artefact moves to `offset` from center (out of the
+        recorded band once |offset| > rate/2)."""
+        if self._lo_offset:
+            self.block.set_center_freq(
+                uhd.tune_request(self._cur_freq, self._lo_offset), 0)
+        else:
+            self.block.set_center_freq(self._cur_freq, 0)
+
+    def lo_offset_supported(self) -> bool:
+        return True
+
+    def set_lo_offset(self, hz: float) -> bool:
+        self._lo_offset = float(hz)
+        self.lo_offset = self._lo_offset
+        self._apply_bandwidth()
+        self._tune()
+        return True
 
     def set_center_freq(self, hz: float) -> None:
         self._cur_freq = hz
-        self.block.set_center_freq(hz, 0)
+        self._tune()
 
     def set_gain(self, db: float) -> None:
         self._cur_gain = db
@@ -4159,18 +4237,30 @@ SOAPY_DEFAULTS = {
 # geometries we have actually validated end-to-end (see ROADMAP and the
 # Haswell trip report) — on radios that can't reach a preset's rate the
 # normal clamp-and-snap path adapts it and the readback shows the truth.
+# lo_off: hardware LO offset (Hz). Nonzero parks the LO off the displayed
+# center so the zero-IF DC artefact lands off-target — out of the recorded
+# band once |lo_off| > rate/2. The HI preset carries +2 MHz because the
+# 2026-08 six-day drift scan measured the B210's DC bin 6.4 kHz (1.3 km/s)
+# from the HI rest frequency — inside the line. The pulsar/magnetar bundles
+# pin lo_off=0: those geometries are hardware-validated as-is, and their
+# wideband folds flatten the single DC channel anyway.
 OBSERVATION_PRESETS = [
     ("Pulsar — L-band", dict(
         mode='live', band=1422e6, rate=16e6, fmt='fil',
-        nchans=2044, integrate=1)),          # 127.7 µs; 28σ B0329+54 geometry
+        nchans=2044, integrate=1, lo_off=0.0)),  # 127.7 µs; 28σ B0329+54 geometry
     ("Pulsar — UHF", dict(
         mode='live', band=0, manual=420e6, rate=20e6, fmt='fil',
-        nchans=256, integrate=16)),          # 204.8 µs; Haswell 410–430 MHz
+        nchans=256, integrate=16, lo_off=0.0)),  # 204.8 µs; Haswell 410–430 MHz
     ("Magnetar / high-DM", dict(
         mode='live', band=1422e6, rate=16e6, fmt='fil',
-        nchans=4096, integrate=1)),          # narrow channels beat DM smear
+        nchans=4096, integrate=1, lo_off=0.0)),  # narrow channels beat DM smear
     ("Hydrogen line — drift scan", dict(
-        mode='live', band=0, manual=1420.406e6, rate=2e6, fmt='ezra')),
+        mode='live', band=0, manual=1420.406e6, rate=2e6, fmt='ezra',
+        lo_off=1.5e6)),  # 0.75x rate: DC artefact out of band. NOT 2.0 MHz —
+                         # bench-measured 2026-08-19: an offset equal to the
+                         # sample rate raises a reproducible +16 dB spur at
+                         # +346 kHz on the B210; 0.75x rate is spur-free.
+                         # Keep offsets away from integer multiples of rate.
     ("RFI survey — sweep", dict(mode='sweep')),
     ("Manual (expert)", None),
 ]
@@ -4340,8 +4430,83 @@ class SoapyGenericSource(RadioSource):
         except Exception:
             return 0.0
 
+    # --- LO offset via SoapySDR tune components -------------------------
+    # Radios whose Soapy driver exposes a DSP shift stage alongside the LO
+    # (LimeSDR: 'RF'+'BB'; others vary) can park the LO off the displayed
+    # center exactly like the B210: RF = center + offset, BB absorbs the
+    # difference. Drivers with only an 'RF' element (HackRF, RTL-SDR) have
+    # no hardware shift stage — set_lo_offset reports unsupported and the
+    # radio keeps classic tuning.
+
+    def _shift_element(self):
+        try:
+            els = list(self.block.list_frequencies(0))
+        except Exception:
+            return None
+        for name in els:
+            if name not in ('RF', 'CORR'):
+                return name          # the DSP/BB shift stage, if any
+        return None
+
+    def lo_offset_supported(self) -> bool:
+        return self._shift_element() is not None
+
+    def set_lo_offset(self, hz: float) -> bool:
+        el = self._shift_element()
+        if el is None:
+            self.lo_offset = 0.0
+            return hz == 0.0
+        cur = float(getattr(self, '_cur_freq', 0.0) or
+                    self.block.get_frequency(0))
+        self._cur_freq = cur
+        self._lo_offset = float(hz)
+        self.lo_offset = self._lo_offset
+        # Open the analog filter for the offset geometry where the driver
+        # allows it (same reasoning as the B210 path); best-effort.
+        try:
+            rate = float(self.block.get_sample_rate(0))
+            self.block.set_bandwidth(0, min(56e6, 2 * abs(hz) + rate))
+        except Exception:
+            pass
+        return self._tune_offset(el)
+
+    def _tune_offset(self, el) -> bool:
+        """Pin RF = center+offset, put the residual in the shift stage. The
+        shift element's sign convention differs between drivers, so verify
+        by readback and flip if needed; if neither sign lands the overall
+        frequency on the requested center, fall back to classic tuning."""
+        cur, off = self._cur_freq, self._lo_offset
+        if not off:
+            self.block.set_frequency(0, cur)
+            return True
+        for sign in (getattr(self, '_bb_sign', 1.0), -getattr(self, '_bb_sign', 1.0)):
+            try:
+                self.block.set_frequency(0, 'RF', cur + off)
+                self.block.set_frequency(0, el, sign * off)
+                if abs(float(self.block.get_frequency(0)) - cur) < 1.0:
+                    self._bb_sign = sign
+                    return True
+            except Exception as exc:
+                print(f"Soapy LO-offset tune failed ({self._driver}): {exc}",
+                      file=sys.stderr)
+                break
+        # Revert to classic tuning so the radio is never left mistuned.
+        try:
+            self.block.set_frequency(0, el, 0.0)
+        except Exception:
+            pass
+        self.block.set_frequency(0, cur)
+        self._lo_offset = 0.0
+        self.lo_offset = 0.0
+        return False
+
     def set_center_freq(self, hz: float) -> None:
-        self.block.set_frequency(0, hz)
+        self._cur_freq = float(hz)
+        el = self._shift_element() if getattr(self, '_lo_offset', 0.0) else None
+        if el is not None:
+            self._tune_offset(el)
+        else:
+            self.block.set_frequency(0, hz)
 
     def set_gain(self, db: float) -> None:
         lo, hi, _ = self.gain_range
@@ -5839,6 +6004,7 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
         self.freq_offset_0  = freq_offset_0  = s.get_float('tuning', 'coarse_hz')
         self.freq_offset    = freq_offset    = s.get_float('tuning', 'fine_hz')
         self.freq_manual    = freq_manual    = s.get_float('tuning', 'manual_hz')
+        self.lo_offset      = s.get_float('tuning', 'lo_offset_hz')
         self.samp_rate      = samp_rate      = s.get_float('rx', 'samp_rate_hz')
         self.gain           = gain           = s.get_float('rx', 'gain_db')
         saved_antenna       = s.get_str('rx', 'antenna')
@@ -5928,6 +6094,12 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
                 raise SystemExit(0)
             self._source = src
             self.uhd_usrp_source_0 = src.block
+            # Re-apply the saved LO offset (the constructor tunes classic).
+            # If this radio can't do it, fall back cleanly to offset 0.
+            if self.lo_offset and not src.set_lo_offset(self.lo_offset):
+                print(f"LO offset not supported by {src.display_label}; "
+                      "using classic tuning.", file=sys.stderr)
+                self.lo_offset = 0.0
             sr_options = list(src.samp_rate_options)
             gain_range_tuple = src.gain_range
             device_label_text = f"Device: {src.display_label}"
@@ -6430,6 +6602,22 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
                                              "Fine Tune (Hz)", "counter_slider",
                                              float, Qt.Horizontal)
         self._tuning_group_layout.addWidget(self._freq_offset_win)
+
+        # LO offset: parks the hardware LO off the displayed center so the
+        # zero-IF DC artefact lands off-target (out of band once |offset| >
+        # samp_rate/2). Display + recorded frequencies are unchanged.
+        self._lo_offset_range = Range(-30e6, 30e6, 100e3, self.lo_offset, 200)
+        self._lo_offset_win = RangeWidget(self._lo_offset_range, self.set_lo_offset,
+                                          "LO Offset (Hz)", "counter_slider",
+                                          float, Qt.Horizontal)
+        self._lo_offset_win.setToolTip(
+            "Parks the receiver's LO this far from the displayed center; the "
+            "DDC shifts the band back, so nothing else changes — but the "
+            "receiver's own DC spike moves off your target. Set beyond half "
+            "the sample rate to push it out of the recorded band entirely. "
+            "0 = classic behavior. (Needs hardware support: B200/B210 yes; "
+            "Soapy radios only if the driver has a shift stage.)")
+        self._tuning_group_layout.addWidget(self._lo_offset_win)
 
         self._freq_manual_tool_bar = QtWidgets.QToolBar(self)
         self._freq_manual_tool_bar.addWidget(QtWidgets.QLabel("Manual Frequency (Hz): "))
@@ -7344,6 +7532,8 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
             self.set_freq_offset_0(s.get_float('tuning', 'coarse_hz'))
             self.set_freq_offset(s.get_float('tuning', 'fine_hz'))
             self.set_freq_manual(s.get_float('tuning', 'manual_hz'))
+            self.set_lo_offset(s.get_float('tuning', 'lo_offset_hz'))
+            self._lo_offset_win.set_value(self.lo_offset)
         finally:
             self._applying_settings = False
         self._apply_widget_settings()
@@ -7679,6 +7869,33 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
         self.set_center_freq((self.freq_manual if self.freq_preset == 0 else self.freq_preset) + self.freq_offset + self.freq_offset_0)
         self._save_setting('tuning', 'fine_hz', float(freq_offset))
 
+    def get_lo_offset(self):
+        return self.lo_offset
+
+    def set_lo_offset(self, hz):
+        """Park the hardware LO `hz` away from the displayed center (the
+        DDC brings the band back, so display and recordings are unchanged —
+        only the zero-IF DC artefact moves). |hz| > samp_rate/2 pushes the
+        artefact out of the recorded band entirely. 0 = classic tuning."""
+        hz = float(hz)
+        applied = hz
+        if self._source is not None and not self._playback_mode:
+            if not self._source.set_lo_offset(hz):
+                applied = 0.0
+                if hz:
+                    sb = getattr(self, '_status_bar', None)
+                if sb is not None:
+                    sb.showMessage(
+                        f"LO offset not supported by "
+                        f"{self._source.display_label} — classic tuning kept",
+                        8000)
+        self.lo_offset = applied
+        self._save_setting('tuning', 'lo_offset_hz', applied)
+        lw = getattr(self, '_lo_offset_win', None)
+        if lw is not None and applied != hz:
+            lw.set_value(applied)
+        self._on_science_param_changed()
+
     def get_freq_manual(self):
         return self.freq_manual
 
@@ -7892,6 +8109,9 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
                 self._fil_nchans_spin.setValue(int(cfg['nchans']))
             if 'integrate' in cfg:
                 self._fil_integrate_spin.setValue(int(cfg['integrate']))
+            if 'lo_off' in cfg:
+                self.set_lo_offset(float(cfg['lo_off']))
+                self._lo_offset_win.set_value(self.lo_offset)
         finally:
             self._obs_applying = False
         self._update_consequences()
@@ -7944,8 +8164,17 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
             if gb_hr > 500:
                 warn = "very high disk rate"
         else:   # ezra drift scan
+            off = float(getattr(self, 'lo_offset', 0.0))
+            if abs(off) > rate / 2:
+                dc_txt = "DC artefact out of band"
+            elif off:
+                dc_txt = f"DC artefact {abs(off)/1e3:.0f} kHz off center"
+            else:
+                dc_txt = "DC artefact ON the tuned center"
+                warn = ("receiver DC artefact sits on the target — set an "
+                        "LO offset beyond half the sample rate")
             lbl.setText("integrated spectra, one row per ~10–15 s  ·  "
-                        "~1 MB/hr")
+                        f"~1 MB/hr  ·  {dc_txt}")
         lbl.setStyleSheet("color: #b45309;" if warn else "color: gray;")
         lbl.setToolTip(lbl.toolTip().split('\n\nWarning:')[0]
                        + (f"\n\nWarning: {warn}." if warn else ""))
@@ -8353,6 +8582,7 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
             'freq_manual': self.freq_manual,
             'freq_offset': self.freq_offset,
             'freq_offset_0': self.freq_offset_0,
+            'lo_offset': float(self.lo_offset),
             'samp_rate': float(self.samp_rate),
             'gain': float(self.gain),
             'antenna': self._source.current_antenna,
@@ -8366,6 +8596,11 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
             # saved setting stays consistent.
             self.set_freq_offset_0(0.0)
             self.set_freq_offset(0.0)
+            # Classic tuning for the test: the simulator's grading was
+            # validated with the DC spike at band center, and the TX->RX
+            # leakage path assumes the RX LO sits on the TX frequency.
+            self.set_lo_offset(0.0)
+            self._lo_offset_win.set_value(0.0)
             self.set_freq_manual(params["freq"])
             self.set_freq_preset(0)
             self.set_samp_rate(params["rate"])
@@ -8486,6 +8721,8 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
             self.set_freq_offset_0(st['freq_offset_0'])
             self.set_freq_offset(st['freq_offset'])
             self.set_freq_preset(st['freq_preset'])
+            self.set_lo_offset(st.get('lo_offset', 0.0))
+            self._lo_offset_win.set_value(self.lo_offset)
             self.set_samp_rate(st['samp_rate'])
             self.set_gain(st['gain'])
             self._gain_win.set_value(st['gain'])
