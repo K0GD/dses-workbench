@@ -2661,14 +2661,16 @@ def _make_int_spinbox(lo, hi, value, tooltip):
     return s
 
 
-def _front_messagebox(parent, icon, title, text):
+def _front_messagebox(parent, icon, title, text,
+                      buttons=None):
     """Modal message box that opens in front of everything — including another
     app's windows (e.g. the Terminal that launched us on macOS, where a
     plain raise_() isn't enough to clear another application). The stay-on-top
     flag floats it above the terminal; it's dismissed immediately so it
     doesn't linger on top."""
-    box = QtWidgets.QMessageBox(icon, title, text,
-                                QtWidgets.QMessageBox.Ok, parent)
+    if buttons is None:
+        buttons = QtWidgets.QMessageBox.Ok
+    box = QtWidgets.QMessageBox(icon, title, text, buttons, parent)
     box.setWindowModality(Qt.ApplicationModal)
     box.setWindowFlag(Qt.WindowStaysOnTopHint, True)
     box.show()
@@ -2749,14 +2751,24 @@ def resolve_device(saved_driver, saved_serial, parent=None):
                 f"'{SIGMF_SAMPLE_BASENAME}.sigmf-meta' alongside "
                 "dses_spectrum_analyzer.py to enable demo playback.")
             return None
-        _front_messagebox(
+        # OK continues into playback; Cancel exits right here — no waiting
+        # for the full app to come up just to close it (useful when the
+        # radio SHOULD have been found: reseat the USB and relaunch).
+        answer = _front_messagebox(
             parent, QtWidgets.QMessageBox.Information, "Playback mode",
             "No radio detected — starting in SigMF playback mode.\n\n"
             f"File: {Path(sample).name}.sigmf-data\n\n"
             "The sample loops continuously. Sample rate, gain, and recording "
             "are disabled (no hardware). Tuning is enabled and digitally "
             "shifts the spectrum within the recording's bandwidth — tune "
-            "outside it and you'll just see noise.")
+            "outside it and you'll just see noise."
+            "\n\nIf a radio IS plugged in, its USB link probably failed "
+            "to enumerate — reseat the USB cable at the radio end (check "
+            "Device Manager for an 'Unknown USB Device'), then relaunch."
+            "\n\nCancel exits now instead of starting playback.",
+            buttons=(QtWidgets.QMessageBox.Ok | QtWidgets.QMessageBox.Cancel))
+        if answer == QtWidgets.QMessageBox.Cancel:
+            return None
         return PLAYBACK_SENTINEL
 
     saved_driver = (saved_driver or '').strip()
