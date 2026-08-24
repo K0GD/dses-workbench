@@ -4118,17 +4118,58 @@ class UhdB200Source(RadioSource):
             print(f"B210 set_bandwidth({bw:.0f}) failed: {exc}",
                   file=sys.stderr)
 
-    def _tune(self) -> None:
+    def _tune(self) -> bool:
         """(Re)tune to the cached center with the current LO offset. With an
         offset, uhd.tune_request parks the LO at center+offset and the DDC
         shifts the band back — display and recorded frequencies unchanged,
         the zero-IF DC artefact moves to `offset` from center (out of the
-        recorded band once |offset| > rate/2)."""
-        if self._lo_offset:
-            self.block.set_center_freq(
-                uhd.tune_request(self._cur_freq, self._lo_offset), 0)
-        else:
+        recorded band once |offset| > rate/2).
+
+        VERIFIED, not trusted: some UHD builds honor the MANUAL rf policy
+        but never apply the AUTO dsp compensation (the Pi's radioconda
+        gr-uhd 3.10.12 did exactly this on 2026-08-19/24 — the band ended
+        up centered on the LO while the app believed it was on target, so
+        every recorded header was off by the LO offset). We check the tune
+        result's actual_dsp_freq and, if the compensation is missing, issue
+        an explicit MANUAL-dsp request, trying both sign conventions with
+        readback. Returns False if the offset could not be applied
+        faithfully — the caller then falls back to classic tuning."""
+        if not self._lo_offset:
             self.block.set_center_freq(self._cur_freq, 0)
+            return True
+        off = self._lo_offset
+        res = self.block.set_center_freq(
+            uhd.tune_request(self._cur_freq, off), 0)
+        try:
+            dsp = float(res.actual_dsp_freq)
+        except Exception:
+            dsp = None
+        if dsp is not None and abs(abs(dsp) - abs(off)) < 1.0:
+            return True          # compensation applied — band is on target
+        # Compensation missing: build the request with dsp MANUAL ourselves.
+        for sign in (-1.0, 1.0):
+            try:
+                req = uhd.tune_request()
+                req.rf_freq_policy = uhd.tune_request.POLICY_MANUAL
+                req.rf_freq = self._cur_freq + off
+                req.dsp_freq_policy = uhd.tune_request.POLICY_MANUAL
+                req.dsp_freq = sign * off
+                r2 = self.block.set_center_freq(req, 0)
+                if abs(abs(float(r2.actual_dsp_freq)) - abs(off)) < 1.0:
+                    print(f"B210 LO offset: UHD dsp AUTO compensation absent; "
+                          f"using MANUAL dsp {sign*off:+.0f} Hz", file=sys.stderr)
+                    return True
+            except Exception as exc:
+                print(f"B210 manual-dsp tune failed: {exc}", file=sys.stderr)
+                break
+        # Could not make the offset honest — classic tuning, offset off.
+        print("B210 LO offset could not be applied faithfully on this UHD; "
+              "falling back to classic tuning.", file=sys.stderr)
+        self._lo_offset = 0.0
+        self.lo_offset = 0.0
+        self._apply_bandwidth()
+        self.block.set_center_freq(self._cur_freq, 0)
+        return False
 
     def lo_offset_supported(self) -> bool:
         return True
@@ -4137,8 +4178,7 @@ class UhdB200Source(RadioSource):
         self._lo_offset = float(hz)
         self.lo_offset = self._lo_offset
         self._apply_bandwidth()
-        self._tune()
-        return True
+        return self._tune()
 
     def set_center_freq(self, hz: float) -> None:
         self._cur_freq = hz
@@ -8110,6 +8150,15 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
                 return                  # sweep has its own range settings
             self._mode_live_btn.setChecked(True)
             if 'band' in cfg:
+                # A preset must produce EXACTLY its advertised center. Stale
+                # Coarse/Fine Tune from earlier manual work would silently
+                # shift it (live-diagnosed 2026-08-24: the Pi's old campaign
+                # left -1.6 MHz here, so the HI preset landed at 1418.8 and
+                # every ezRA header in segment 2 is mislabeled).
+                self.set_freq_offset_0(0.0)
+                self.set_freq_offset(0.0)
+                self._freq_offset_0_win.set_value(0.0)
+                self._freq_offset_win.set_value(0.0)
                 if cfg['band'] == 0:
                     self.set_freq_manual(float(cfg['manual']))
                     self.set_freq_preset(0)

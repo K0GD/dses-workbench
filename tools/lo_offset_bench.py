@@ -119,7 +119,12 @@ def main():
     checks = [
         ("DC spike present at offset 0", c0 > 1.0),
         ("center clean at offset 1.5 MHz", c2 < 1.0),
-        ("no new spur at offset 1.5 MHz", grow[k] < 1.5),
+        # Threshold 2.5 dB: the max single-bin difference between two
+        # 200-average snapshots across ~3200 bins runs 1.3-1.6 dB of pure
+        # statistics (measured: the "worst" bin lands somewhere new every
+        # run). The deterministic artefact this guards against (offset at a
+        # rate multiple) measured +16 dB — an order of magnitude of margin.
+        ("no new spur at offset 1.5 MHz", grow[k] < 2.5),
         ("RF unchanged (offset 0)", abs(rf0 - FREQ) < 1.0),
         ("RF unchanged (offset 1.5M)", abs(rf2 - FREQ) < 1.0),
     ]
