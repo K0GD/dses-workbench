@@ -679,6 +679,27 @@ menu bar!) + drift-scan box test (dock behavior on headless Openbox/xrdp
 
 ## Backlog / unscheduled
 
+- [ ] **RENAME THE APPLICATION (Rick, 2026-08-24): "Spectrum Analyzer" no
+      longer describes it** — it plans pulsar observations, records three
+      science formats, folds pulsars through PRESTO, runs multi-day HI
+      drift-scan campaigns, self-tests with a pulsar simulator, and
+      auto-updates. Naming decision is Rick's/DSES's. Migration plan when
+      the name is chosen: change the DISPLAY identity first (APP_NAME,
+      window titles, Help, docs, website) in one release; keep internal
+      names stable that release (dses_spectrum_analyzer.py, settings.ini
+      name, gpstime path sw_distribution/b210_sa/, zip prefix) so the
+      in-app updater chain on ALL installs survives; migrate file/zip/URL
+      names one release later with the updater taught both paths.
+- [ ] **Two short task-focused PDF guides (Rick, 2026-08-24), end-to-end:**
+      (1) PULSARS: plan with the visibility planner -> choose preset ->
+      record .fil -> verify integrity -> fold (catalog + manual P/DM) ->
+      read the fold PDF; (2) DRIFT SCAN: HI preset (incl. LO offset) ->
+      ezRA recording + UTC rollover -> multi-day campaign practice ->
+      ezCon/ezPlot/ezSky chain -> what good data look like (sharp spur,
+      DC status). House style via build_doc.py; write AFTER the rename so
+      they carry the new identity; fold in the hard-won lessons from the
+      Aug 2026 campaigns (header checks, spur sharpness as a health test).
+
 - [ ] **LO offset for shift-less Soapy radios (HackRF, RTL-SDR) via host
       rotator:** the 2026-08-19 LO-offset feature covers UHD (tune_request)
       and Soapy drivers exposing a DSP shift stage (LimeSDR-class). HackRF /
