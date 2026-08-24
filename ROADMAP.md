@@ -691,7 +691,12 @@ menu bar!) + drift-scan box test (dock behavior on headless Openbox/xrdp
       name, gpstime path sw_distribution/b210_sa/, zip prefix) so the
       in-app updater chain on ALL installs survives; migrate file/zip/URL
       names one release later with the updater taught both paths.
-- [ ] **Two short task-focused PDF guides (Rick, 2026-08-24), end-to-end:**
+- [ ] **ONE task-focused PDF: "DSES Radio Astronomy Workbench - Observer's
+      Guide" (Rick 2026-08-24; one-doc structure agreed 2026-08-24).**
+      Part 0 = common setup (2-3 pp, written once); Parts 1 and 2 below,
+      each SELF-CONTAINED so a member can print Part 0 + their activity
+      only; future Part 3 = pointing-calibration campaign once proven.
+      Original two-activity scope:
       (1) PULSARS: plan with the visibility planner -> choose preset ->
       record .fil -> verify integrity -> fold (catalog + manual P/DM) ->
       read the fold PDF; (2) DRIFT SCAN: HI preset (incl. LO offset) ->
