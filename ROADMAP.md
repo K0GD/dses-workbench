@@ -679,8 +679,9 @@ menu bar!) + drift-scan box test (dock behavior on headless Openbox/xrdp
 
 ## Backlog / unscheduled
 
-- [ ] **RENAME THE APPLICATION (Rick, 2026-08-24): "Spectrum Analyzer" no
-      longer describes it** — it plans pulsar observations, records three
+- [ ] **RENAME THE APPLICATION to "DSES Radio Astronomy Workbench"
+      (DECIDED by Rick 2026-08-24; implementation deferred - no time now).**
+      "Spectrum Analyzer" no longer describes it — it plans pulsar observations, records three
       science formats, folds pulsars through PRESTO, runs multi-day HI
       drift-scan campaigns, self-tests with a pulsar simulator, and
       auto-updates. Naming decision is Rick's/DSES's. Migration plan when
@@ -697,7 +698,7 @@ menu bar!) + drift-scan box test (dock behavior on headless Openbox/xrdp
       ezRA recording + UTC rollover -> multi-day campaign practice ->
       ezCon/ezPlot/ezSky chain -> what good data look like (sharp spur,
       DC status). House style via build_doc.py; write AFTER the rename so
-      they carry the new identity; fold in the hard-won lessons from the
+      they carry the "DSES Radio Astronomy Workbench" identity; fold in the hard-won lessons from the
       Aug 2026 campaigns (header checks, spur sharpness as a health test).
 
 - [ ] **LO offset for shift-less Soapy radios (HackRF, RTL-SDR) via host
