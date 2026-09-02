@@ -533,7 +533,8 @@ def parse_table_block(lines, start):
 # Main parser
 # ---------------------------------------------------------------------------
 
-def md_to_docx(src_path: Path, dst_path: Path):
+def md_to_docx(src_path: Path, dst_path: Path, cover: bool = True,
+               toc: bool = True):
     text = src_path.read_text(encoding='utf-8')
     text = smartify_quotes(text)
     lines = text.split('\n')
@@ -541,8 +542,10 @@ def md_to_docx(src_path: Path, dst_path: Path):
     doc = Document()
     configure_section(doc.sections[0])
     apply_heading_styles(doc)
-    add_cover_page(doc)
-    add_table_of_contents(doc, collect_headings(lines))
+    if cover:
+        add_cover_page(doc)
+    if toc:
+        add_table_of_contents(doc, collect_headings(lines))
 
     # Style a Heading-1 paragraph so it gets the teal banner. We do this by
     # post-processing each Heading-1 paragraph after add_heading() rather
@@ -926,6 +929,11 @@ def main():
     ap.add_argument('--header-logo', default=None,
                     help="PNG shown right-justified in the page header "
                          "(pages 2+; the cover is unaffected). Default: none.")
+    ap.add_argument('--no-cover', action='store_true',
+                    help="Skip the cover page (short memos / one-page "
+                         "instruction sheets).")
+    ap.add_argument('--no-toc', action='store_true',
+                    help="Skip the table of contents.")
     ap.add_argument('--force', action='store_true',
                     help="Overwrite the --docx target even if git reports it "
                          "modified (i.e., discard hand-made Word edits).")
@@ -975,7 +983,7 @@ def main():
                   "overwrite anyway.", file=sys.stderr)
             sys.exit(3)
 
-    md_to_docx(src, docx_out)
+    md_to_docx(src, docx_out, cover=not args.no_cover, toc=not args.no_toc)
     try:
         convert_docx_to_pdf(docx_out, pdf_out)
     except Exception as exc:
