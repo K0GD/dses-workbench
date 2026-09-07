@@ -1,6 +1,6 @@
 # DSES Spectrum Analyzer — Installation Guide
 
-**Version 1.3.3**
+**Version 1.3.4**
 Author: Richard M Hambly (K0GD) — rick@cnssys.com
 License: GPL-3.0-or-later
 
@@ -148,14 +148,14 @@ Accept the prompt; conda downloads and installs the three packages. If the launc
 
 Download the application from the distribution site. You can either use the direct links below, or browse the folder <https://gpstime.com/sw_distribution/b210_sa/> and pick the newest `dses-spectrum-analyzer-*.zip`:
 
-- **Application (zip):** <https://gpstime.com/sw_distribution/b210_sa/dses-spectrum-analyzer-1.3.3.zip>
+- **Application (zip):** <https://gpstime.com/sw_distribution/b210_sa/dses-spectrum-analyzer-1.3.4.zip>
 - **This guide (PDF):** <https://gpstime.com/sw_distribution/b210_sa/DSES_RFI_Spectrum_Analyzer_Installation.pdf>
 
 The zip is roughly 60 MB — it includes a short sample recording so the program can run in playback mode when no radio is attached. (Replace `1.1.6` in the link with a newer version number if a later release has been published.)
 
 ### 3.1 Windows 11
 
-1. Extract the zip anywhere you have write permission. A common choice is `Documents\DSES-Spectrum-Analyzer`. The extracted folder will be `dses-spectrum-analyzer-1.3.3\` and will contain `dses_spectrum_analyzer.py`, `launcher.bat`, `launcher.ps1`, `install-shortcut.ps1`, `LICENSE`, the `icons\` folder, and this guide.
+1. Extract the zip anywhere you have write permission. A common choice is `Documents\DSES-Spectrum-Analyzer`. The extracted folder will be `dses-spectrum-analyzer-1.3.4\` and will contain `dses_spectrum_analyzer.py`, `launcher.bat`, `launcher.ps1`, `install-shortcut.ps1`, `LICENSE`, the `icons\` folder, and this guide.
 2. Double-click **`launcher.bat`** to start the application.
 3. The first time you run it, the launcher searches for Radioconda in this order: the `RADIOCONDA_ROOT` environment variable, any currently-activated conda env, `%LOCALAPPDATA%\radioconda`, `C:\ProgramData\radioconda`, `%USERPROFILE%\radioconda`, a cached config file, then `conda info --base` if `conda` is on PATH. If none of these find a working install, you'll get a prompt asking for the path; type it in and the launcher remembers it for next time.
 4. (Optional) Create a desktop shortcut (with the app's pulsar icon) by running **`install-shortcut.ps1`**. The reliable way — which works regardless of your PowerShell execution policy — is to open PowerShell in the extracted folder and run:
@@ -174,12 +174,12 @@ After the first run, the app's window opens with the spectrum and waterfall plot
 
    ``bash
    mkdir -p ~/Applications && cd ~/Applications
-   unzip ~/Downloads/dses-spectrum-analyzer-1.3.3.zip
-   cd dses-spectrum-analyzer-1.3.3
+   unzip ~/Downloads/dses-spectrum-analyzer-1.3.4.zip
+   cd dses-spectrum-analyzer-1.3.4
    chmod +x launcher.sh
    ``
 
-   The extracted `dses-spectrum-analyzer-1.3.3/` folder contains `dses_spectrum_analyzer.py`, `launcher.sh`, `dses-spectrum-analyzer.desktop`, `LICENSE`, the `icons/` folder, and this guide. (Avoid system locations like `/opt` unless you extract with `sudo` — keeping it in your home directory avoids permission issues.)
+   The extracted `dses-spectrum-analyzer-1.3.4/` folder contains `dses_spectrum_analyzer.py`, `launcher.sh`, `dses-spectrum-analyzer.desktop`, `LICENSE`, the `icons/` folder, and this guide. (Avoid system locations like `/opt` unless you extract with `sudo` — keeping it in your home directory avoids permission issues.)
 
 2. Launch:
 
@@ -204,8 +204,8 @@ The steps are the same as Linux. Extract it into your personal **`~/Applications
 
 ``bash
 mkdir -p ~/Applications && cd ~/Applications
-unzip ~/Downloads/dses-spectrum-analyzer-1.3.3.zip
-cd dses-spectrum-analyzer-1.3.3
+unzip ~/Downloads/dses-spectrum-analyzer-1.3.4.zip
+cd dses-spectrum-analyzer-1.3.4
 chmod +x launcher.sh
 ./launcher.sh
 ``
@@ -225,7 +225,7 @@ On Apple Silicon, **make sure** you installed the `arm64` build of Radioconda. M
 If the Finder warns about an unidentified developer when running `launcher.sh`, clear the quarantine attribute on the unzipped folder:
 
 ``bash
-xattr -dr com.apple.quarantine dses-spectrum-analyzer-1.3.3
+xattr -dr com.apple.quarantine dses-spectrum-analyzer-1.3.4
 ``
 
 
@@ -353,7 +353,7 @@ Radioconda does **not** need reinstalling for an app update.
 If you'd rather apply it yourself, each release is a self-contained zip:
 
 1. **Close** the running app.
-2. **Extract** the new zip alongside the old one — a new folder named with the version (e.g. `dses-spectrum-analyzer-1.3.3`) — or overwrite the old folder's files.
+2. **Extract** the new zip alongside the old one — a new folder named with the version (e.g. `dses-spectrum-analyzer-1.3.4`) — or overwrite the old folder's files.
 3. **Run** `launcher.bat` (Windows) or `launcher.sh` (macOS/Linux) from the **new** folder.
 
 ### What is preserved across versions
@@ -449,7 +449,7 @@ The GR flow graph is running but no samples are arriving. Usual causes:
 ### macOS: "developer cannot be verified"
 
 ``bash
-xattr -dr com.apple.quarantine /path/to/dses-spectrum-analyzer-1.3.3
+xattr -dr com.apple.quarantine /path/to/dses-spectrum-analyzer-1.3.4
 ``
 
 For the optional Desktop **`.app`** icon (built by `install-shortcut.command`), the same warning can appear the first time you double-click it — right-click the app → **Open** once, or approve it in **System Settings → Privacy & Security → Open Anyway**. You only need to do this once per machine.
@@ -565,6 +565,12 @@ Answers "what can I record right now?" from the ATNF catalog: every pulsar above
 - **Include below mask**: also lists sources that are not up yet, and the **Next window** column says when each rises above the mask and how long the window lasts. (A source can be circumpolar — never setting — and still spend hours below a usable elevation.)
 
 - **Include magnetars**: magnetars are marked ★ and are never removed by a flux filter, because the catalog usually carries no flux for them.
+
+- **Flux at tuned freq**: estimates each source's flux *at the frequency you are tuned to* by power-law interpolation between the catalog's S400 and S1400 (using the source's own spectral index when both exist, a typical −1.6 otherwise) — labeled `est@…` so you know it is an estimate. Unchecked, the nearest catalog band is quoted verbatim.
+
+- **Min rec**: the radiometer minimum recording length for an 8-σ folded detection at the current sample rate, from the site SEFD (`[site] sefd_jy`, measured on Cygnus A) and the catalog W50 pulse width (5% duty assumed when the catalog has none). **Rows highlighted green are viable now** — up, with Min rec fitting inside Time left. It is an aid, not a gate: one SEFD serves every band (low-band numbers read optimistic) and RFI, scintillation, and pointing loss add on top.
+
+- **Copy for reports**: Ctrl+C copies the selected rows (with a header line) as tab-separated text that pastes cleanly into email, Excel, or Word; right-click offers Copy cell / Copy rows / Copy whole table.
 
 - **What do I need?**: solves the dispersion arithmetic backwards for the selected source — which of the dish's bands (and how much bandwidth) would make its *DM measurable*, and what to set in the self-test simulator. Dispersion delay goes as 1/frequency², so a small DM at L-band is simply unresolvable: the fold still detects the pulsar, but its DM search slides toward zero and means nothing. The answer says so plainly rather than leaving you to discover it after the drive.
 
