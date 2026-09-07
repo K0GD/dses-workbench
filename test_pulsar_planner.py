@@ -25,13 +25,13 @@ def check(cond, label, detail=""):
 
 SAMPLE = """<pre>
 ------------------------------------------------------------------------
-#     PSRJ          PSRB          RAJ         DECJ                P0          DM      S400     S1400  PSR
-                                  (hms)       (dms)              (s)  (cm^-3 pc)     (mJy)     (mJy)  TYPE
+#     PSRJ          PSRB          RAJ         DECJ                P0          DM      S400     S1400       W50  PSR
+                                  (hms)       (dms)              (s)  (cm^-3 pc)     (mJy)     (mJy)      (ms)  TYPE
 ------------------------------------------------------------------------
-1     J0332+5434    B0329+54      03:32:59.3  +54:34:43.3   0.714520       26.76    1500.0     203.0  *
-2     J0953+0755    B0950+08      09:53:09.3  +07:55:35.7   0.253065        2.97     400.0     100.0  *
-3     J1745-2900    *             17:45:40.1  -29:00:29.8   3.763733     1778.00         *         *  AXP[efk+13]
-4     J9999-9999    *             99:99:99.9  -99:99:99.9   1.000000        1.00         *         *  *
+1     J0332+5434    B0329+54      03:32:59.3  +54:34:43.3   0.714520       26.76    1500.0     203.0       6.6  *
+2     J0953+0755    B0950+08      09:53:09.3  +07:55:35.7   0.253065        2.97     400.0     100.0       9.5  *
+3     J1745-2900    *             17:45:40.1  -29:00:29.8   3.763733     1778.00         *         *         *  AXP[efk+13]
+4     J9999-9999    *             99:99:99.9  -99:99:99.9   1.000000        1.00         *         *         *  *
 </pre>"""
 
 
@@ -189,6 +189,38 @@ def test_live_fetch():
         print(f"  SKIP  network unavailable ({type(exc).__name__})")
 
 
+def test_duration_and_flux():
+    """min_duration_s + flux_at_freq (2026-09-07, post-Haswell requests)."""
+    print("\n7. minimum duration + flux-at-frequency")
+    rows = pp.Catalog._parse(SAMPLE)
+    b0329 = next(r for r in rows if r["bname"] == "B0329+54")
+    check(b0329["w50_ms"] == 6.6, "W50 parsed from the catalog",
+          f"w50={b0329['w50_ms']}")
+    # Radiometer inversion, checked by hand: (8*4000/0.203)^2
+    # * (duty/(1-duty)) / 2e6 with duty = 0.0066/0.71452.
+    t = pp.min_duration_s(203.0, 0.714520, 4000.0, 2e6, w50_ms=6.6)
+    check(t is not None and 100 < t < 130, "B0329 min duration ~2 min",
+          f"t={t:.0f}s")
+    t5 = pp.min_duration_s(203.0, 0.714520, 4000.0, 2e6)
+    check(t5 > t, "5% duty fallback is more conservative than W50")
+    check(pp.min_duration_s(None, 1.0, 4000.0, 2e6) is None,
+          "no flux -> no estimate (None, not 0)")
+    check(pp.min_duration_s(100.0, None, 4000.0, 2e6) is None,
+          "no period -> no estimate")
+    # Flux interpolation reproduces its own anchors and interpolates.
+    v400, _ = pp.flux_at_freq(b0329, 400e6)
+    v1400, _ = pp.flux_at_freq(b0329, 1400e6)
+    check(abs(v400 - 1500.0) < 1 and abs(v1400 - 203.0) < 1,
+          "power law reproduces both catalog anchors",
+          f"{v400:.0f}/{v1400:.0f}")
+    vmid, lab = pp.flux_at_freq(b0329, 680.5e6)
+    check(203.0 < vmid < 1500.0 and lab.startswith("est@"),
+          "mid-band estimate between anchors, labeled est@",
+          f"{vmid:.0f} ({lab})")
+    check(pp.flux_at_freq({"s400": None, "s1400": None}, 1.4e9)[0] is None,
+          "no anchors -> no flux")
+
+
 if __name__ == "__main__":
     print("PULSAR PLANNER TESTS")
     test_parse()
@@ -196,6 +228,7 @@ if __name__ == "__main__":
     test_planning()
     test_next_window()
     test_cache()
+    test_duration_and_flux()
     test_live_fetch()
     print()
     if FAILURES:

@@ -269,8 +269,15 @@ DEFAULTS = {
         'amsl':     4400.0,
         'name':     'DSES',
         # Minimum elevation the dish can usefully observe at; the visibility
-        # planner treats anything below this as "not up".
-        'el_mask_deg': 20.0,
+        # planner treats anything below this as "not up". 2° per the field
+        # crew (Rick, 2026-09-07): the 60-ft tracks nearly to the horizon.
+        'el_mask_deg': 2.0,
+        # On-axis system equivalent flux density (Jy) for the planner's
+        # minimum-recording-duration estimate. Default = the 60-ft measured
+        # on Cygnus A at 1420 MHz (Sept 2026 calibration move). The single
+        # number is used at every band, so low-band estimates read
+        # optimistic (sky temperature rises steeply below ~1 GHz).
+        'sefd_jy': 4000.0,
     },
     'spectrum': {
         'fft_size':        1024,
@@ -443,6 +450,18 @@ class Settings:
         # key so it doesn't linger in the file.
         if self._cp.has_section('window') and self._cp.has_option('window', 'geometry_b64'):
             self._cp.remove_option('window', 'geometry_b64')
+        # v1.3.3 → next: the planner's default elevation mask dropped from
+        # 20° to 2° (the 60-ft usefully observes nearly to the horizon —
+        # field request, 2026-09-07). A saved value of exactly the old
+        # default is almost certainly the shipped default, not a choice:
+        # drop it so the new default fills in. Any other value is kept.
+        if (self._cp.has_section('site')
+                and self._cp.has_option('site', 'el_mask_deg')):
+            try:
+                if float(self._cp.get('site', 'el_mask_deg')) == 20.0:
+                    self._cp.remove_option('site', 'el_mask_deg')
+            except ValueError:
+                pass
 
     def _fill_missing_with_defaults(self):
         for section, kvs in DEFAULTS.items():
@@ -2982,6 +3001,24 @@ long the window lasts. (A source can be circumpolar — never setting — and
 still spend hours below a usable elevation.)</li>
 <li><b>Include magnetars</b>: magnetars are marked ★ and are never removed
 by a flux filter, because the catalog usually carries no flux for them.</li>
+<li><b>Flux at tuned freq</b>: estimates each source's flux <i>at the
+frequency you are tuned to</i> by power-law interpolation between the
+catalog's S400 and S1400 (using the source's own spectral index when both
+exist, a typical −1.6 otherwise) — labeled <code>est@…</code> so you know
+it is an estimate. Unchecked, the nearest catalog band is quoted
+verbatim.</li>
+<li><b>Min rec</b>: the radiometer minimum recording length for an 8-σ
+folded detection at the current sample rate, from the site SEFD
+(<code>[site] sefd_jy</code>, measured on Cygnus&nbsp;A) and the catalog
+W50 pulse width (5% duty assumed when the catalog has none). <b>Rows
+highlighted green are viable now</b> — up, with Min&nbsp;rec fitting
+inside Time&nbsp;left. It is an aid, not a gate: one SEFD serves every
+band (low-band numbers read optimistic) and RFI, scintillation, and
+pointing loss add on top.</li>
+<li><b>Copy for reports</b>: Ctrl+C copies the selected rows (with a
+header line) as tab-separated text that pastes cleanly into email, Excel,
+or Word; right-click offers Copy cell / Copy rows / Copy whole
+table.</li>
 <li><b>What do I need?</b>: solves the dispersion arithmetic backwards for
 the selected source — which of the dish's bands (and how much bandwidth)
 would make its <i>DM measurable</i>, and what to set in the self-test
@@ -4657,14 +4694,15 @@ class PulsarPlannerDialog(QtWidgets.QDialog):
     an approximate position out of the pulsar's name.
     """
 
-    def __init__(self, rows, site, center_hz, parent=None):
+    def __init__(self, rows, site, center_hz, parent=None, rate_hz=2e6):
         super().__init__(parent)
         self.setWindowTitle("Pulsars in view")
-        self.resize(900, 520)
+        self.resize(980, 520)
         self.selected = None
         self._rows = rows
         self._site = site
         self._center_hz = center_hz
+        self._rate_hz = float(rate_hz or 2e6)
 
         v = QtWidgets.QVBoxLayout(self)
         top = QtWidgets.QHBoxLayout()
@@ -4673,7 +4711,7 @@ class PulsarPlannerDialog(QtWidgets.QDialog):
         self._mask.setRange(0.0, 89.0)
         self._mask.setDecimals(1)
         self._mask.setSuffix(" °")
-        self._mask.setValue(site.get("mask_deg", 20.0))
+        self._mask.setValue(site.get("mask_deg", 2.0))
         self._mask.valueChanged.connect(self._refresh)
         top.addWidget(self._mask)
         top.addSpacing(12)
@@ -4690,6 +4728,16 @@ class PulsarPlannerDialog(QtWidgets.QDialog):
             "observing window opens and how long it lasts.")
         self._show_below.toggled.connect(self._refresh)
         top.addWidget(self._show_below)
+        self._flux_at_f = QtWidgets.QCheckBox("Flux at tuned freq")
+        self._flux_at_f.setChecked(True)
+        self._flux_at_f.setToolTip(
+            "Estimate each source's flux AT the tuned frequency by power-law\n"
+            "interpolation between the catalog's S400 and S1400 (a source's\n"
+            "own spectral index when both exist, a typical −1.6 otherwise),\n"
+            "and base “Min rec” on that. Unchecked: quote the nearest catalog\n"
+            "band verbatim (S400 below ~900 MHz, S1400 above).")
+        self._flux_at_f.toggled.connect(self._apply_filter)
+        top.addWidget(self._flux_at_f)
         top.addStretch(1)
         self._summary = QtWidgets.QLabel("")
         top.addWidget(self._summary)
@@ -4710,22 +4758,37 @@ class PulsarPlannerDialog(QtWidgets.QDialog):
         srch.addWidget(self._search, 1)
         v.addLayout(srch)
 
-        self._table = QtWidgets.QTableWidget(0, 9, self)
+        self._table = QtWidgets.QTableWidget(0, 10, self)
         self._table.setHorizontalHeaderLabels(
             ["Pulsar", "B name", "Alt °", "Az °", "P0 (s)", "DM",
-             "Flux (mJy)", "Time left", "Next window"])
+             "Flux (mJy)", "Min rec", "Time left", "Next window"])
+        self._table.horizontalHeaderItem(7).setToolTip(
+            "Radiometer minimum recording length for an 8-sigma folded\n"
+            "detection at the current sample rate, using the site SEFD\n"
+            "([site] sefd_jy — measured on Cygnus A at 1420 MHz) and the\n"
+            "catalog W50 pulse width (5% duty assumed when absent). An aid,\n"
+            "not a gate: one SEFD serves every band, so low-band numbers\n"
+            "read optimistic, and RFI / scintillation / pointing loss add\n"
+            "on top.")
         self._table.setSelectionBehavior(QtWidgets.QTableWidget.SelectRows)
-        self._table.setSelectionMode(QtWidgets.QTableWidget.SingleSelection)
+        self._table.setSelectionMode(
+            QtWidgets.QTableWidget.ExtendedSelection)
         self._table.setEditTriggers(QtWidgets.QTableWidget.NoEditTriggers)
         self._table.setSortingEnabled(True)
         self._table.doubleClicked.connect(self._accept_row)
         self._table.horizontalHeader().setStretchLastSection(True)
+        self._table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self._table.customContextMenuRequested.connect(self._table_menu)
+        QtGui.QShortcut(QtGui.QKeySequence.Copy, self._table,
+                        activated=self._copy_rows,
+                        context=Qt.WidgetWithChildrenShortcut)
         v.addWidget(self._table, 1)
 
         note = QtWidgets.QLabel(
-            "Sorted by flux in the tuned band. “Time left” is how long the "
-            "source stays above the mask — check it against your recording "
-            "duration.")
+            "Sorted by flux in the tuned band. Green rows are viable now: "
+            "up, and “Min rec” (the 8-σ radiometer estimate at the current "
+            "sample rate) fits inside “Time left”. Ctrl+C or right-click "
+            "copies rows/cells as text for reports.")
         note.setStyleSheet("color: gray;")
         note.setWordWrap(True)
         v.addWidget(note)
@@ -4854,13 +4917,26 @@ class PulsarPlannerDialog(QtWidgets.QDialog):
                 return False
         return True
 
+    @staticmethod
+    def _fmt_duration(sec):
+        if sec < 90:
+            return f"{sec:.0f} s"
+        if sec < 5400:
+            return f"{sec / 60:.0f} min"
+        return f"{sec / 3600:.1f} h"
+
     def _apply_filter(self):
+        import pulsar_planner
         q = self._search.text().strip()
         vis = ([r for r in self._all if self._matches(r, q)] if q
                else list(self._all))
         self._visible = vis
         self._table.setSortingEnabled(False)
         self._table.setRowCount(len(vis))
+        viable_bg = QtGui.QBrush(QtGui.QColor("#d9f2d9"))   # soft green
+        viable_fg = QtGui.QBrush(QtGui.QColor("#0a3d0a"))
+        n_viable = 0
+        sefd = self._site.get("sefd_jy") or 4000.0
         for i, r in enumerate(vis):
             def item(text, sort_value=None):
                 if sort_value is None:
@@ -4869,8 +4945,14 @@ class PulsarPlannerDialog(QtWidgets.QDialog):
             hrs = r["hours_left"]
             left = ("circumpolar" if hrs >= 23.99
                     else f"{int(hrs)}h {int((hrs % 1) * 60):02d}m")
-            flux = ("—" if r["flux_mjy"] is None
-                    else f"{r['flux_mjy']:.1f} ({r['flux_label']})")
+            # Flux: either the nearest catalog band verbatim, or the
+            # power-law estimate at the tuned frequency (checkbox).
+            if self._flux_at_f.isChecked():
+                fmjy, flabel = pulsar_planner.flux_at_freq(
+                    r, self._center_hz)
+            else:
+                fmjy, flabel = r["flux_mjy"], r["flux_label"]
+            flux = "—" if fmjy is None else f"{fmjy:.1f} ({flabel})"
             if r.get("below_mask"):
                 left = "— below mask —"
                 rise = r.get("rise_in_h")
@@ -4881,6 +4963,16 @@ class PulsarPlannerDialog(QtWidgets.QDialog):
                 nxt_sort = 1e6 if rise is None else rise
             else:
                 nxt, nxt_sort = "up now", -1.0
+            # Minimum recording duration (8-sigma folded, radiometer) at the
+            # current sample rate — compared against time-above-mask to call
+            # a target viable. The header tooltip states the assumptions.
+            tmin = pulsar_planner.min_duration_s(
+                fmjy, r["p0_s"], sefd, self._rate_hz,
+                w50_ms=r.get("w50_ms"))
+            viable = (tmin is not None and not r.get("below_mask")
+                      and tmin <= hrs * 3600.0)
+            if viable:
+                n_viable += 1
             cells = [
                 item(r["name"] + ("  ★" if r["magnetar"] else "")),
                 item("" if r["bname"] == "*" else r["bname"]),
@@ -4889,12 +4981,17 @@ class PulsarPlannerDialog(QtWidgets.QDialog):
                 item("—" if r["p0_s"] is None else f"{r['p0_s']:.6f}",
                      r["p0_s"] or 0.0),
                 item("—" if r["dm"] is None else f"{r['dm']:.2f}", r["dm"] or 0.0),
-                item(flux, r["flux_mjy"] if r["flux_mjy"] is not None else -1.0),
+                item(flux, fmjy if fmjy is not None else -1.0),
+                item("—" if tmin is None else self._fmt_duration(tmin),
+                     tmin if tmin is not None else 1e12),
                 item(left, hrs) if not r.get("below_mask")
                 else QtWidgets.QTableWidgetItem(left),
                 item(nxt, nxt_sort),
             ]
             for c, it in enumerate(cells):
+                if viable:
+                    it.setBackground(viable_bg)
+                    it.setForeground(viable_fg)
                 self._table.setItem(i, c, it)
         # Sort by flux, brightest first — the order an observer wants. Qt
         # sorts on the display string unless a numeric UserRole is set, so
@@ -4906,6 +5003,8 @@ class PulsarPlannerDialog(QtWidgets.QDialog):
         n_mag = sum(1 for r in vis if r["magnetar"])
         n_up = sum(1 for r in vis if not r.get("below_mask"))
         parts = [f"{n_up} above {self._mask.value():.0f}°"]
+        if n_viable:
+            parts.append(f"{n_viable} viable now")
         if len(vis) != n_up:
             parts.append(f"{len(vis) - n_up} below")
         if n_mag:
@@ -4913,6 +5012,48 @@ class PulsarPlannerDialog(QtWidgets.QDialog):
         if self._search.text().strip():
             parts.append(f"filtered from {len(self._all)}")
         self._summary.setText("  ·  ".join(parts))
+
+    # -- clipboard ---------------------------------------------------------
+
+    def _headers(self):
+        return [self._table.horizontalHeaderItem(c).text()
+                for c in range(self._table.columnCount())]
+
+    def _copy_rows(self):
+        """Ctrl+C / context menu: selected rows as tab-separated text with a
+        header line — pastes cleanly into email, Excel, or a report table."""
+        rows = sorted({ix.row() for ix in self._table.selectedIndexes()})
+        if not rows:
+            return
+        lines = ["\t".join(self._headers())]
+        for rr in rows:
+            lines.append("\t".join(
+                (self._table.item(rr, c).text() if self._table.item(rr, c)
+                 else "") for c in range(self._table.columnCount())))
+        QtWidgets.QApplication.clipboard().setText("\n".join(lines))
+
+    def _table_menu(self, pos):
+        it = self._table.itemAt(pos)
+        menu = QtWidgets.QMenu(self._table)
+        if it is not None:
+            act_cell = menu.addAction(f"Copy cell  ({it.text()})")
+            act_cell.triggered.connect(
+                lambda: QtWidgets.QApplication.clipboard().setText(it.text()))
+        n_sel = len({ix.row() for ix in self._table.selectedIndexes()})
+        act_rows = menu.addAction(
+            f"Copy row{'s' if n_sel > 1 else ''} ({max(n_sel, 1)})")
+        act_rows.triggered.connect(self._copy_rows)
+        act_all = menu.addAction("Copy whole table")
+        act_all.triggered.connect(self._copy_all)
+        menu.exec(self._table.viewport().mapToGlobal(pos))
+
+    def _copy_all(self):
+        lines = ["\t".join(self._headers())]
+        for rr in range(self._table.rowCount()):
+            lines.append("\t".join(
+                (self._table.item(rr, c).text() if self._table.item(rr, c)
+                 else "") for c in range(self._table.columnCount())))
+        QtWidgets.QApplication.clipboard().setText("\n".join(lines))
 
     def _accept_row(self, *_):
         r = self._selected_row()
@@ -5176,7 +5317,8 @@ class B210SelfTestDialog(QtWidgets.QDialog):
         if cat is None:
             return
         dlg = PulsarPlannerDialog(cat.rows, self._mw._site_dict(),
-                                  self._mw.center_freq, self)
+                                  self._mw.center_freq, self,
+                                  rate_hz=getattr(self._mw, "samp_rate", 2e6))
         dlg._show_below.setChecked(True)
         if dlg.exec() == QtWidgets.QDialog.Accepted and dlg.selected:
             r = dlg.selected
@@ -7277,6 +7419,7 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
                 "lon_deg": s.get_float('site', 'lon_deg'),
                 "amsl": s.get_float('site', 'amsl'),
                 "mask_deg": s.get_float('site', 'el_mask_deg'),
+                "sefd_jy": s.get_float('site', 'sefd_jy'),
                 "name": s.get_str('site', 'name')}
 
     def _ensure_psr_catalog(self, force_refresh=False):
@@ -7315,7 +7458,8 @@ class dses_spectrum_analyzer(gr.top_block, QtWidgets.QMainWindow):
             return
 
         dlg = PulsarPlannerDialog(cat.rows, self._site_dict(),
-                                  self.center_freq, self)
+                                  self.center_freq, self,
+                                  rate_hz=getattr(self, "samp_rate", 2e6))
         if dlg.exec() == QtWidgets.QDialog.Accepted and dlg.selected:
             r = dlg.selected
             name = r["bname"] if r["bname"] != "*" else r["name"]

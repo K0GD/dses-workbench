@@ -679,6 +679,20 @@ menu bar!) + drift-scan box test (dock behavior on headless Openbox/xrdp
 
 ## Backlog / unscheduled
 
+- [ ] **Constant-statistics display while recording** (from Ray's
+      2026-09-06 report, diagnosed 09-07): with recording active the
+      display tick budget drops 0.4→0.12 and on a loaded host the Welch
+      block count collapses toward 1; in dB-averaging mode the trace then
+      reads up to −2.51 dB low (log-of-exponential-mean bias) and much
+      noisier — level "recovers" when recording stops. Data is untouched.
+      Fix: accumulate blocks ACROSS ticks to a target N while recording
+      (slower update instead of a biased trace), or correct the small-N
+      bias + show a "display averaging reduced" status note.
+- [ ] **Mid-integration row timestamps for ezRA drift-scan files** (from
+      the Sept campaign analysis): rows are stamped at integration END, so
+      transit fits read τ/2 late (13 s at 25 s rows, 32 s at 64 s). Stamp
+      at mid-integration instead; note the convention change in the file
+      header comment so analyses can tell which convention wrote a file.
 - [ ] **RENAME THE APPLICATION to "DSES Radio Astronomy Workbench"
       (DECIDED by Rick 2026-08-24; implementation deferred - no time now).**
       "Spectrum Analyzer" no longer describes it — it plans pulsar observations, records three

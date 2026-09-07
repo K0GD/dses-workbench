@@ -46,7 +46,7 @@ from pathlib import Path
 ATNF_URL = (
     "https://www.atnf.csiro.au/research/pulsar/psrcat/proc_form.php"
     "?version=LATEST&JName=JName&BName=BName&RaJ=RaJ&DecJ=DecJ&P0=P0&DM=DM"
-    "&S400=S400&S1400=S1400&Type=Type&startUserDefined=true"
+    "&S400=S400&S1400=S1400&W50=W50&Type=Type&startUserDefined=true"
     "&c1_val=&c2_val=&c3_val=&c4_val=&sort_attr=jname&sort_order=asc"
     "&condition=&ephemeris=short&coords_unit=raj%2Fdecj&radius="
     "&coords_1=&coords_2=&style=Short+without+errors&no_value=*"
@@ -55,6 +55,10 @@ ATNF_URL = (
 
 CACHE_NAME = "atnf_psrcat_cache.json"
 CACHE_MAX_AGE_DAYS = 90          # catalog changes slowly; refresh seasonally
+CACHE_FMT = 2                    # 2 = rows carry w50_ms (2026-09); a cache
+                                 # without it is refetched when online, but
+                                 # still works offline (w50 degrades to the
+                                 # 5% duty-cycle assumption).
 
 
 
@@ -194,7 +198,7 @@ class Catalog:
     """ATNF psrcat rows with a local cache.
 
     `rows` is a list of dicts: name, bname, ra_deg, dec_deg, raj/decj
-    (SIGPROC packed), p0_s, dm, s400, s1400, type.
+    (SIGPROC packed), p0_s, dm, s400, s1400, w50_ms, type.
     """
 
     def __init__(self, cache_dir=None):
@@ -212,24 +216,29 @@ class Catalog:
             age_days = (time.time() - blob.get("fetched", 0)) / 86400.0
             self.rows = blob.get("rows", [])
             self.source = "cache"
+            self._cache_fmt = blob.get("fmt", 1)
             return bool(self.rows), age_days
         except Exception:
+            self._cache_fmt = 0
             return False, 0.0
 
     def _save_cache(self):
         try:
             self.cache_path.parent.mkdir(parents=True, exist_ok=True)
             with open(self.cache_path, "w", encoding="utf-8") as f:
-                json.dump({"fetched": time.time(), "rows": self.rows}, f)
+                json.dump({"fetched": time.time(), "fmt": CACHE_FMT,
+                           "rows": self.rows}, f)
         except OSError:
             pass                    # cache is an optimization, never fatal
 
     # -- fetch ------------------------------------------------------------
     def load(self, force_refresh=False, timeout=30):
         """Cache first (so the field works offline), network only when the
-        cache is missing, stale, or a refresh is demanded."""
+        cache is missing, stale, outdated in format, or a refresh is
+        demanded. A pre-W50 cache still serves offline."""
         ok, age = self._load_cache()
-        if ok and not force_refresh and age < CACHE_MAX_AGE_DAYS:
+        if (ok and not force_refresh and age < CACHE_MAX_AGE_DAYS
+                and self._cache_fmt >= CACHE_FMT):
             return True
         try:
             rows = self._fetch()
@@ -254,7 +263,7 @@ class Catalog:
         """Parse the psrcat table.
 
         Columns (Short without errors):
-            #  PSRJ  PSRB  RAJ  DECJ  P0  DM  S400  S1400  PSRTYPE
+            #  PSRJ  PSRB  RAJ  DECJ  P0  DM  S400  S1400  W50  PSRTYPE
         Values are whitespace-separated with '*' for missing. TYPE may carry
         a bracketed reference ("HE[wcp+18]") which is stripped.
         """
@@ -263,10 +272,11 @@ class Catalog:
         rows = []
         for line in body.splitlines():
             toks = line.split()
-            if len(toks) < 9 or not toks[0].isdigit():
+            if len(toks) < 10 or not toks[0].isdigit():
                 continue                      # header, rule, or blank
-            _, jname, bname, raj_s, decj_s, p0, dm, s400, s1400 = toks[:9]
-            ptype = toks[9] if len(toks) > 9 else "*"
+            (_, jname, bname, raj_s, decj_s, p0, dm, s400, s1400,
+             w50) = toks[:10]
+            ptype = toks[10] if len(toks) > 10 else "*"
             ra = _sex_to_deg(raj_s, True)
             dec = _sex_to_deg(decj_s, False)
             if ra is None or dec is None:
@@ -286,6 +296,7 @@ class Catalog:
                 "decj": _sigproc_packed(decj_s, False),
                 "p0_s": num(p0), "dm": num(dm),
                 "s400": num(s400), "s1400": num(s1400),
+                "w50_ms": num(w50),
                 "type": re.sub(r"\[[^\]]*\]", "", ptype),
             })
         return rows
@@ -314,7 +325,54 @@ def is_magnetar(row):
     return "AXP" in t or "SGR" in t
 
 
-def visible_now(rows, lat_deg, lon_deg, mask_deg=20.0, unix_ts=None,
+def flux_at_freq(row, center_hz):
+    """Power-law flux estimate AT the tuned frequency, from the catalog's
+    S400/S1400 anchors.
+
+    Both anchors present → the source's own spectral index; one anchor →
+    a typical pulsar index of −1.6. Returns (mJy, label) or (None, "—").
+    An estimate, plainly labeled as one: real pulsar spectra turn over
+    below a few hundred MHz and scintillate everywhere.
+    """
+    s400, s1400 = row.get("s400"), row.get("s1400")
+    f_mhz = (center_hz or 1.4e9) / 1e6
+    if s400 and s1400 and s400 > 0 and s1400 > 0:
+        alpha = math.log(s1400 / s400) / math.log(1400.0 / 400.0)
+        val = s1400 * (f_mhz / 1400.0) ** alpha
+    elif s1400 and s1400 > 0:
+        val = s1400 * (f_mhz / 1400.0) ** -1.6
+    elif s400 and s400 > 0:
+        val = s400 * (f_mhz / 400.0) ** -1.6
+    else:
+        return None, "—"
+    return val, f"est@{f_mhz:.0f}"
+
+
+def min_duration_s(flux_mjy, p0_s, sefd_jy, bw_hz,
+                   n_sigma=8.0, duty=0.05, n_pol=1, w50_ms=None):
+    """Radiometer minimum integration (seconds) for an `n_sigma` folded
+    detection of a pulsar with period-averaged flux `flux_mjy`.
+
+    Folded S/N = (S/SEFD) · sqrt(n_pol·BW·T) · sqrt((P−W)/W), inverted
+    for T. W comes from the catalog W50 when available; otherwise `duty`·P
+    (5% is a typical slow-pulsar duty cycle). P is required either way so
+    sources with no catalog period honestly return None instead of a
+    number. This is an aid, not a gate: a single SEFD serves every band,
+    and the real sky adds RFI, scintillation, and pointing loss on top.
+    """
+    if not flux_mjy or flux_mjy <= 0 or not p0_s or p0_s <= 0:
+        return None
+    if not sefd_jy or sefd_jy <= 0 or not bw_hz or bw_hz <= 0:
+        return None
+    if w50_ms and 0.0 < w50_ms / 1000.0 < p0_s:
+        duty = (w50_ms / 1000.0) / p0_s
+    duty = min(max(duty, 1e-4), 0.9)
+    s_jy = flux_mjy / 1000.0
+    return ((n_sigma * sefd_jy / s_jy) ** 2
+            * (duty / (1.0 - duty)) / (n_pol * bw_hz))
+
+
+def visible_now(rows, lat_deg, lon_deg, mask_deg=2.0, unix_ts=None,
                 center_hz=1.4e9, min_flux_mjy=None, include_magnetars=True,
                 height_m=0.0, include_below=False):
     """Rows currently above `mask_deg`, annotated and sorted by flux
