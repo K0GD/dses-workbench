@@ -348,6 +348,72 @@ def flux_at_freq(row, center_hz):
     return val, f"est@{f_mhz:.0f}"
 
 
+# The dish's tuning-preset bands (MHz) — the frequencies an observer can
+# actually pick from the Tuning panel. Used by best_band_mhz().
+DISH_BANDS_MHZ = (408.0, 680.5, 1299.5, 1422.0, 1666.0, 2304.0)
+
+
+def _sky_sefd_scale(f_mhz, t_sys_1420_k=190.0, t_sky_1420_k=5.0):
+    """SEFD(f)/SEFD(1420) from a simple sky-temperature model: the
+    receiver+spillover part of Tsys is flat, the galactic sky goes as
+    f^-2.6 (~5 K at 1420 toward high latitudes). 190 K total at 1420
+    matches the measured 4,000 Jy SEFD for the 60-ft's ~50% efficiency.
+    Approximate by design — real feeds differ per band."""
+    t_fixed = t_sys_1420_k - t_sky_1420_k
+    t_sky = t_sky_1420_k * (f_mhz / 1420.0) ** -2.6
+    return (t_fixed + t_sky) / t_sys_1420_k
+
+
+def _scatter_ms(dm, f_mhz):
+    """Empirical interstellar scattering time (ms) — Bhat et al. 2004:
+    log10 tau(1 GHz) = -6.46 + 0.154·log DM + 1.07·(log DM)², scaling as
+    f^-3.86. Scatter in the relation is huge (±1 dex), but it captures
+    the physics that matters for band choice: high-DM sources smear into
+    invisibility at low frequency."""
+    if not dm or dm <= 0:
+        return 0.0
+    ld = math.log10(dm)
+    tau_1ghz = 10.0 ** (-6.46 + 0.154 * ld + 1.07 * ld * ld)
+    return tau_1ghz * (f_mhz / 1000.0) ** -3.86
+
+
+def best_band_mhz(row, sefd_jy_1420, bw_hz, bands=DISH_BANDS_MHZ,
+                  nchan=256):
+    """The dish band (MHz) where this source detects FASTEST, and the
+    estimated minimum duration there: min over the tuning presets of the
+    radiometer time-to-8-sigma using (a) flux scaled to each band, (b)
+    SEFD scaled by sky temperature, and (c) an effective pulse width of
+    sqrt(W50² + per-channel DM smearing² + scattering²) — so a
+    steep-spectrum low-DM source is sent low, and a high-DM source is
+    kept high where scattering hasn't destroyed its pulse.
+    Returns (f_mhz, t_s) or (None, None)."""
+    p0 = row.get("p0_s")
+    if not p0 or p0 <= 0:
+        return None, None
+    w50 = row.get("w50_ms")
+    w_ms = w50 if (w50 and w50 > 0) else 0.05 * p0 * 1000.0
+    dm = row.get("dm") or 0.0
+    ch_mhz = (bw_hz / max(nchan, 1)) / 1e6
+    best_f, best_t = None, None
+    for f in bands:
+        s_mjy, _ = flux_at_freq(row, f * 1e6)
+        if s_mjy is None:
+            continue
+        t_chan = 8.3e6 * dm * ch_mhz / f ** 3          # ms, DM smearing
+        w_eff = math.sqrt(w_ms ** 2 + t_chan ** 2
+                          + _scatter_ms(dm, f) ** 2)
+        # A pulse broadened to (or past) the period is effectively
+        # undetectable; clamp just below P so min_duration_s's width
+        # guard doesn't silently fall back to the 5% assumption and
+        # make the WORST band look cheap.
+        w_eff = min(w_eff, 0.95 * p0 * 1000.0)
+        t = min_duration_s(s_mjy, p0, sefd_jy_1420 * _sky_sefd_scale(f),
+                           bw_hz, w50_ms=w_eff)
+        if t is not None and (best_t is None or t < best_t):
+            best_f, best_t = f, t
+    return best_f, best_t
+
+
 def min_duration_s(flux_mjy, p0_s, sefd_jy, bw_hz,
                    n_sigma=8.0, duty=0.05, n_pol=1, w50_ms=None):
     """Radiometer minimum integration (seconds) for an `n_sigma` folded

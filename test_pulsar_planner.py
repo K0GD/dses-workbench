@@ -219,6 +219,17 @@ def test_duration_and_flux():
           f"{vmid:.0f} ({lab})")
     check(pp.flux_at_freq({"s400": None, "s1400": None}, 1.4e9)[0] is None,
           "no anchors -> no flux")
+    # Best band: B0329 (steep spectrum, DM 27) should go LOW; the same
+    # source with DM 500 should be pushed HIGH by scattering.
+    bf, bt = pp.best_band_mhz(b0329, 4000.0, 2e6)
+    check(bf is not None and bf <= 680.5, "low-DM steep source sent low",
+          f"best {bf} MHz, {bt:.0f}s")
+    hidm = dict(b0329, dm=500.0)
+    bf2, _ = pp.best_band_mhz(hidm, 4000.0, 2e6)
+    check(bf2 is not None and bf2 > 680.5,
+          "DM-500 clone pushed high by scattering", f"best {bf2} MHz")
+    check(pp.best_band_mhz({"p0_s": None, "dm": 1.0}, 4000.0, 2e6)
+          == (None, None), "no period -> no best band")
 
 
 if __name__ == "__main__":

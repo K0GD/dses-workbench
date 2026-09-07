@@ -570,6 +570,8 @@ Answers "what can I record right now?" from the ATNF catalog: every pulsar above
 
 - **Min rec**: the radiometer minimum recording length for an 8-σ folded detection at the current sample rate, from the site SEFD (`[site] sefd_jy`, measured on Cygnus A) and the catalog W50 pulse width (5% duty assumed when the catalog has none). **Rows highlighted green are viable now** — up, with Min rec fitting inside Time left. It is an aid, not a gate: one SEFD serves every band (low-band numbers read optimistic) and RFI, scintillation, and pointing loss add on top.
 
+- **Best f**: the dish band (of the Tuning presets) where this source detects fastest — flux scaled to each band, SEFD scaled by sky temperature, and pulse broadening from channel DM smearing plus empirical interstellar scattering. Steep-spectrum low-DM sources are sent low; high-DM sources are kept high, where scattering has not destroyed the pulse. Approximate physics — the band to *try first*, not a guarantee.
+
 - **Copy for reports**: Ctrl+C copies the selected rows (with a header line) as tab-separated text that pastes cleanly into email, Excel, or Word; right-click offers Copy cell / Copy rows / Copy whole table.
 
 - **What do I need?**: solves the dispersion arithmetic backwards for the selected source — which of the dish's bands (and how much bandwidth) would make its *DM measurable*, and what to set in the self-test simulator. Dispersion delay goes as 1/frequency², so a small DM at L-band is simply unresolvable: the fold still detects the pulsar, but its DM search slides toward zero and means nothing. The answer says so plainly rather than leaving you to discover it after the drive.

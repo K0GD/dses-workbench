@@ -3015,6 +3015,13 @@ highlighted green are viable now</b> — up, with Min&nbsp;rec fitting
 inside Time&nbsp;left. It is an aid, not a gate: one SEFD serves every
 band (low-band numbers read optimistic) and RFI, scintillation, and
 pointing loss add on top.</li>
+<li><b>Best f</b>: the dish band (of the Tuning presets) where this source
+detects fastest — flux scaled to each band, SEFD scaled by sky
+temperature, and pulse broadening from channel DM smearing plus empirical
+interstellar scattering. Steep-spectrum low-DM sources are sent low;
+high-DM sources are kept high, where scattering has not destroyed the
+pulse. Approximate physics — the band to <i>try first</i>, not a
+guarantee.</li>
 <li><b>Copy for reports</b>: Ctrl+C copies the selected rows (with a
 header line) as tab-separated text that pastes cleanly into email, Excel,
 or Word; right-click offers Copy cell / Copy rows / Copy whole
@@ -4758,10 +4765,20 @@ class PulsarPlannerDialog(QtWidgets.QDialog):
         srch.addWidget(self._search, 1)
         v.addLayout(srch)
 
-        self._table = QtWidgets.QTableWidget(0, 10, self)
+        self._table = QtWidgets.QTableWidget(0, 11, self)
         self._table.setHorizontalHeaderLabels(
             ["Pulsar", "B name", "Alt °", "Az °", "P0 (s)", "DM",
-             "Flux (mJy)", "Min rec", "Time left", "Next window"])
+             "Flux (mJy)", "Min rec", "Best f", "Time left", "Next window"])
+        self._table.horizontalHeaderItem(8).setToolTip(
+            "The dish band (from the Tuning presets) where this source\n"
+            "detects FASTEST: minimum estimated time-to-8-sigma over 408,\n"
+            "680.5, 1299.5, 1422, 1666 and 2304 MHz, using flux scaled to\n"
+            "each band, SEFD scaled by sky temperature (galactic synchrotron\n"
+            "brightens the sky at low frequency), and pulse broadening from\n"
+            "channel DM smearing + empirical interstellar scattering (which\n"
+            "smears high-DM sources into invisibility at low bands). The\n"
+            "tooltip physics is approximate — treat it as which band to TRY\n"
+            "first, not a guarantee.")
         self._table.horizontalHeaderItem(7).setToolTip(
             "Radiometer minimum recording length for an 8-sigma folded\n"
             "detection at the current sample rate, using the site SEFD\n"
@@ -4969,6 +4986,7 @@ class PulsarPlannerDialog(QtWidgets.QDialog):
             tmin = pulsar_planner.min_duration_s(
                 fmjy, r["p0_s"], sefd, self._rate_hz,
                 w50_ms=r.get("w50_ms"))
+            bf, _bt = pulsar_planner.best_band_mhz(r, sefd, self._rate_hz)
             viable = (tmin is not None and not r.get("below_mask")
                       and tmin <= hrs * 3600.0)
             if viable:
@@ -4984,6 +5002,8 @@ class PulsarPlannerDialog(QtWidgets.QDialog):
                 item(flux, fmjy if fmjy is not None else -1.0),
                 item("—" if tmin is None else self._fmt_duration(tmin),
                      tmin if tmin is not None else 1e12),
+                item("—" if bf is None else f"{bf:g}",
+                     bf if bf is not None else 1e12),
                 item(left, hrs) if not r.get("below_mask")
                 else QtWidgets.QTableWidgetItem(left),
                 item(nxt, nxt_sort),
