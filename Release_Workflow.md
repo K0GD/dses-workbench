@@ -174,7 +174,18 @@ curl -sI https://gpstime.com/sw_distribution/dses-workbench/DSES_Radio_Astronomy
 
 Edit `manifest.json` on the server with the new `latest_version`, `download_url`, and `release_notes`, then copy it over the legacy `b210_sa/manifest.json` pointer as well (§3, §5.2). Format and behavior in §5 below.
 
-### 4.8 Done
+### 4.8 Tag the release commit
+
+Once the live verification passes, tag the commit the zip was built from (the one carrying the new `APP_VERSION`, not a later STATE/notes commit) and push the tag, so every published version is recoverable from git by name:
+
+```bash
+git tag -a v<version> <release-commit> -m "DSES Radio Astronomy Workbench <version> - <one-line summary> (published <date>, zip sha256 <first 8 hex>...)"
+git push origin v<version>
+```
+
+Convention started at v1.4.0 (2026-09-08); releases before that have no tags. Use the annotated form (`-a`) so the tag records who cut it and when.
+
+### 4.9 Done
 
 Existing users running the previous release (with auto-update enabled and a working manifest URL configured) see the notification on next launch — within 24 hours of relaunch, since the program throttles checks to one per 24 hours.
 
