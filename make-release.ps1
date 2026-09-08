@@ -1,21 +1,22 @@
-# make-release.ps1 - build a distributable zip of the DSES Spectrum Analyzer.
+# make-release.ps1 - build a distributable zip of the DSES Radio Astronomy Workbench.
 #
-# Reads APP_VERSION from dses_spectrum_analyzer.py, copies the runtime files
-# into dist\dses-spectrum-analyzer-<version>\, zips the folder, prints the
+# Reads APP_VERSION from dses_workbench.py, copies the runtime files
+# into dist\dses-workbench-<version>\, zips the folder, prints the
 # path to the resulting archive.
 #
 # Run from the project root:    .\make-release.ps1
 #
 # Files included in the bundle:
-#   dses_spectrum_analyzer.py     - the application
+#   dses_workbench.py             - the application
+#   dses_spectrum_analyzer.py     - launch shim under the pre-1.4.0 module name
 #   LICENSE                       - GPL-3.0
 #   launcher.bat / .ps1           - Windows launcher
 #   launcher.sh                   - Linux / macOS launcher
 #   install-shortcut.ps1          - Windows desktop-shortcut installer
-#   dses-spectrum-analyzer.desktop - Linux desktop file (template)
-#   icons\dses_sa.ico / dses_sa.png - icons
+#   dses-workbench.desktop - Linux desktop file (template)
+#   icons\dses_workbench.{ico,png,icns} - icons
 #   environment.yml               - reference for env reproducibility
-#   DSES_RFI_..._Installation.pdf - install / update guide (if built)
+#   DSES_Radio_Astronomy_Workbench_Installation.pdf - install / update guide (if built)
 #
 # Excluded: .conda\, .git\, .vscode\, __pycache__, CLAUDE.md,
 #           icons\generate-icon.py, make-release.*, settings files.
@@ -26,9 +27,9 @@ $root = $PSScriptRoot
 Push-Location $root
 try {
     # --- Pull version from the source file ---
-    $main = Join-Path $root 'dses_spectrum_analyzer.py'
+    $main = Join-Path $root 'dses_workbench.py'
     if (-not (Test-Path $main)) {
-        throw "dses_spectrum_analyzer.py not found in $root"
+        throw "dses_workbench.py not found in $root"
     }
     $verMatch = Select-String -Path $main -Pattern '^APP_VERSION\s*=\s*"([^"]+)"' | Select-Object -First 1
     if (-not $verMatch) {
@@ -38,7 +39,7 @@ try {
     Write-Host "Building release for version $version"
 
     # --- Lay out the staging dir ---
-    $bundle = "dses-spectrum-analyzer-$version"
+    $bundle = "dses-workbench-$version"
     $dist   = Join-Path $root 'dist'
     $stage  = Join-Path $dist $bundle
     $zip    = Join-Path $dist "$bundle.zip"
@@ -50,7 +51,8 @@ try {
 
     # --- Copy runtime files ---
     $files = @(
-        'dses_spectrum_analyzer.py',
+        'dses_workbench.py',
+        'dses_spectrum_analyzer.py',   # launch shim under the pre-1.4.0 name
         'sigproc_fil.py',
         'pulsar_planner.py',
         'pulsar_sim.py',
@@ -65,7 +67,7 @@ try {
         'launcher.sh',
         'install-shortcut.ps1',
         'install-shortcut.command',
-        'dses-spectrum-analyzer.desktop',
+        'dses-workbench.desktop',
         'environment.yml'
     )
     foreach ($f in $files) {
@@ -75,7 +77,7 @@ try {
             Write-Warning "Missing (skipped): $f"
         }
     }
-    foreach ($f in @('icons\dses_sa.ico', 'icons\dses_sa.png', 'icons\dses_sa.icns')) {
+    foreach ($f in @('icons\dses_workbench.ico', 'icons\dses_workbench.png', 'icons\dses_workbench.icns')) {
         if (Test-Path $f) { Copy-Item $f -Destination (Join-Path $stage 'icons') }
         else { Write-Warning "Missing (skipped): $f" }
     }
@@ -89,7 +91,7 @@ try {
     }
     # Install guide PDF (the DSES-styled PDF is the deliverable; the .docx
     # is a developer-side intermediate and stays out of the bundle).
-    foreach ($doc in @('DSES_RFI_Spectrum_Analyzer_Installation.pdf')) {
+    foreach ($doc in @('DSES_Radio_Astronomy_Workbench_Installation.pdf')) {
         if (Test-Path $doc) { Copy-Item $doc -Destination $stage }
         else { Write-Warning "Missing (skipped): $doc - run build_doc.py first" }
     }

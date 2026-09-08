@@ -4,7 +4,7 @@ ezra_txt.py -- DSES ezRA drift-scan data writer.
 
 Writes integrated frequency-spectrum rows in the ezRA ``.txt`` data-file
 format consumed by Ted Cline's ezRA suite (ezCon -> ezPlot/ezSky/ezGal;
-https://github.com/tedcline/ezRA), so the Spectrum Analyzer can act as the
+https://github.com/tedcline/ezRA), so the Workbench can act as the
 drift-scan data collector for radios ezCol does not drive (the 60-ft dish's
 Ettus B210 via UHD).
 
@@ -77,7 +77,7 @@ class EzraTxtWriter:
 
     def __init__(self, path, *, lat_deg, lon_deg, amsl, site_name,
                  freq_min_mhz, freq_max_mhz, bin_qty, az_deg, el_deg,
-                 gain_text="", provenance="DSES_Spectrum_Analyzer",
+                 gain_text="", provenance="DSES_Workbench",
                  roll_daily=False, roll_prefix=""):
         self.bin_qty = int(bin_qty)
         self.nrows = 0
@@ -254,7 +254,7 @@ if _HAVE_GR:
         def __init__(self, path, *, fft_bins, integ_frames, samp_rate,
                      center_freq_mhz, lat_deg, lon_deg, amsl, site_name,
                      az_deg, el_deg, gain_text="", keep_fraction=1.0,
-                     provenance="DSES_Spectrum_Analyzer",
+                     provenance="DSES_Workbench",
                      roll_daily=False, roll_prefix=""):
             gr.sync_block.__init__(self, name="ezra_txt_sink",
                                    in_sig=[np.complex64], out_sig=None)

@@ -7,7 +7,7 @@ logic. It is imported identically by:
 
   * ``iq_to_fil.py``        -- the offline ``.cf32`` -> ``.fil`` converter
                                (and, later, PulsarLab's ``engine/convert.py``);
-  * the RFI spectrum analyzer -- which records ``.fil`` *live* alongside its
+  * the DSES Radio Astronomy Workbench -- which records ``.fil`` *live* alongside its
                                existing raw-I/Q (SigMF) recording;
   * ``engine/capture.py``   -- the future real-dish capture front-end.
 

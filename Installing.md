@@ -1,16 +1,18 @@
-# DSES Spectrum Analyzer — Installation Guide
+# DSES Radio Astronomy Workbench — Installation Guide
 
-**Version 1.3.4**
+**Version 1.4.0**
 Author: Richard M Hambly (K0GD) — rick@cnssys.com
 License: GPL-3.0-or-later
 
 This document covers:
 
-- How to install the DSES Spectrum Analyzer on Windows 11, Linux, and macOS (Intel and Apple Silicon).
+- How to install the DSES Radio Astronomy Workbench on Windows 11, Linux, and macOS (Intel and Apple Silicon).
 - How to update to a new version.
 - Common troubleshooting and a reference for advanced settings.
 
 The application itself is one Python file plus a few launchers and an icon. The heavy machinery — GNU Radio, UHD, SoapySDR, PySide6, NumPy, SciPy — is supplied by **Radioconda**, which you install separately as a one-time prerequisite.
+
+**Renamed in 1.4.0.** Through version 1.3.4 this program was the *DSES Spectrum Analyzer*. That name stopped describing it once it grew pulsar observation planning, science-format recording, PRESTO folding, multi-day HI drift-scan campaigns, and a built-in pulsar simulator, so from 1.4.0 it is the **DSES Radio Astronomy Workbench** (the Workbench for short). Existing installs update in place exactly as before — see *Coming from 1.3.4 or earlier* in the update section for the few visible differences.
 
 **Supported radios.** The program is designed around the Ettus USRP B210 but also drives any SoapySDR-compatible receiver: SDRPlay RSP1A / RSP1B / RSPduo / RSPdx (with one extra setup step — see §3A), RTL-SDR, HackRF, Airspy / Airspy HF+, BladeRF, LimeSDR, and PlutoSDR. The sample-rate combo and gain slider adapt automatically to whichever device you pick at startup.
 
@@ -127,7 +129,7 @@ Radioconda publishes builds for both Mac architectures — pick the one matching
    xattr -dr com.apple.quarantine ~/radioconda
    ``
 
-### 2.4 Add the packages the analyzer needs (all platforms)
+### 2.4 Add the packages the Workbench needs (all platforms)
 
 Stock Radioconda bundles GNU Radio, UHD, and SoapySDR, but **not** the GUI and plotting packages this app uses (`pyside6`, `pyqtgraph`, `scipy`). Install them once into Radioconda — this is a one-time step; future app updates don't repeat it.
 
@@ -144,18 +146,18 @@ conda install -c conda-forge pyside6 pyqtgraph scipy
 Accept the prompt; conda downloads and installs the three packages. If the launcher later reports "Missing required packages," this is the step that was skipped.
 
 
-## 3. Installing the DSES Spectrum Analyzer
+## 3. Installing the DSES Radio Astronomy Workbench
 
-Download the application from the distribution site. You can either use the direct links below, or browse the folder <https://gpstime.com/sw_distribution/b210_sa/> and pick the newest `dses-spectrum-analyzer-*.zip`:
+Download the application from the distribution site. You can either use the direct links below, or browse the folder <https://gpstime.com/sw_distribution/dses-workbench/> and pick the newest `dses-workbench-*.zip`:
 
-- **Application (zip):** <https://gpstime.com/sw_distribution/b210_sa/dses-spectrum-analyzer-1.3.4.zip>
-- **This guide (PDF):** <https://gpstime.com/sw_distribution/b210_sa/DSES_RFI_Spectrum_Analyzer_Installation.pdf>
+- **Application (zip):** <https://gpstime.com/sw_distribution/dses-workbench/dses-workbench-1.4.0.zip>
+- **This guide (PDF):** <https://gpstime.com/sw_distribution/dses-workbench/DSES_Radio_Astronomy_Workbench_Installation.pdf>
 
-The zip is roughly 60 MB — it includes a short sample recording so the program can run in playback mode when no radio is attached. (Replace `1.1.6` in the link with a newer version number if a later release has been published.)
+The zip is roughly 60 MB — it includes a short sample recording so the program can run in playback mode when no radio is attached. (Replace `1.4.0` in the link with a newer version number if a later release has been published.)
 
 ### 3.1 Windows 11
 
-1. Extract the zip anywhere you have write permission. A common choice is `Documents\DSES-Spectrum-Analyzer`. The extracted folder will be `dses-spectrum-analyzer-1.3.4\` and will contain `dses_spectrum_analyzer.py`, `launcher.bat`, `launcher.ps1`, `install-shortcut.ps1`, `LICENSE`, the `icons\` folder, and this guide.
+1. Extract the zip anywhere you have write permission. A common choice is `Documents\DSES-Workbench`. The extracted folder will be `dses-workbench-1.4.0\` and will contain `dses_workbench.py`, `launcher.bat`, `launcher.ps1`, `install-shortcut.ps1`, `LICENSE`, the `icons\` folder, and this guide.
 2. Double-click **`launcher.bat`** to start the application.
 3. The first time you run it, the launcher searches for Radioconda in this order: the `RADIOCONDA_ROOT` environment variable, any currently-activated conda env, `%LOCALAPPDATA%\radioconda`, `C:\ProgramData\radioconda`, `%USERPROFILE%\radioconda`, a cached config file, then `conda info --base` if `conda` is on PATH. If none of these find a working install, you'll get a prompt asking for the path; type it in and the launcher remembers it for next time.
 4. (Optional) Create a desktop shortcut (with the app's pulsar icon) by running **`install-shortcut.ps1`**. The reliable way — which works regardless of your PowerShell execution policy — is to open PowerShell in the extracted folder and run:
@@ -164,7 +166,7 @@ The zip is roughly 60 MB — it includes a short sample recording so the program
    powershell -NoProfile -ExecutionPolicy Bypass -File .\install-shortcut.ps1
    ``
 
-   It prints `Created: …\DSES Spectrum Analyzer.lnk`. (Right-clicking the script → "Run with PowerShell" also works *if* your machine's execution policy allows local scripts; if nothing appears, the policy blocked it — use the command above instead.) The shortcut is named **DSES Spectrum Analyzer** and launches the app via `launcher.ps1`.
+   It prints `Created: …\DSES Radio Astronomy Workbench.lnk`. (Right-clicking the script → "Run with PowerShell" also works *if* your machine's execution policy allows local scripts; if nothing appears, the policy blocked it — use the command above instead.) The shortcut is named **DSES Radio Astronomy Workbench** and launches the app via `launcher.ps1`.
 
 After the first run, the app's window opens with the spectrum and waterfall plots. Tuning, sample-rate, gain, and recording controls are in the sidebar on the right.
 
@@ -174,12 +176,12 @@ After the first run, the app's window opens with the spectrum and waterfall plot
 
    ``bash
    mkdir -p ~/Applications && cd ~/Applications
-   unzip ~/Downloads/dses-spectrum-analyzer-1.3.4.zip
-   cd dses-spectrum-analyzer-1.3.4
+   unzip ~/Downloads/dses-workbench-1.4.0.zip
+   cd dses-workbench-1.4.0
    chmod +x launcher.sh
    ``
 
-   The extracted `dses-spectrum-analyzer-1.3.4/` folder contains `dses_spectrum_analyzer.py`, `launcher.sh`, `dses-spectrum-analyzer.desktop`, `LICENSE`, the `icons/` folder, and this guide. (Avoid system locations like `/opt` unless you extract with `sudo` — keeping it in your home directory avoids permission issues.)
+   The extracted `dses-workbench-1.4.0/` folder contains `dses_workbench.py`, `launcher.sh`, `dses-workbench.desktop`, `LICENSE`, the `icons/` folder, and this guide. (Avoid system locations like `/opt` unless you extract with `sudo` — keeping it in your home directory avoids permission issues.)
 
 2. Launch:
 
@@ -191,8 +193,8 @@ After the first run, the app's window opens with the spectrum and waterfall plot
 
    ``bash
    INSTALL_DIR="$(pwd)"
-   sed "s|__INSTALL_DIR__|$INSTALL_DIR|g" dses-spectrum-analyzer.desktop \
-       > ~/.local/share/applications/dses-spectrum-analyzer.desktop
+   sed "s|__INSTALL_DIR__|$INSTALL_DIR|g" dses-workbench.desktop \
+       > ~/.local/share/applications/dses-workbench.desktop
    update-desktop-database ~/.local/share/applications/ 2>/dev/null || true
    ``
 
@@ -204,28 +206,28 @@ The steps are the same as Linux. Extract it into your personal **`~/Applications
 
 ``bash
 mkdir -p ~/Applications && cd ~/Applications
-unzip ~/Downloads/dses-spectrum-analyzer-1.3.4.zip
-cd dses-spectrum-analyzer-1.3.4
+unzip ~/Downloads/dses-workbench-1.4.0.zip
+cd dses-workbench-1.4.0
 chmod +x launcher.sh
 ./launcher.sh
 ``
 
 Keeping it under your home directory (rather than the system `/Applications`) avoids permission prompts and Gatekeeper friction.
 
-**(Optional) Create a Desktop icon.** Run **`install-shortcut.command`** to build a double-clickable **DSES Spectrum Analyzer.app** on your Desktop, using the app's pulsar icon. Launching it starts the analyzer with no Terminal window. In Finder, right-click `install-shortcut.command` → **Open** (the first run may need Gatekeeper approval — see below), or from a terminal:
+**(Optional) Create a Desktop icon.** Run **`install-shortcut.command`** to build a double-clickable **DSES Radio Astronomy Workbench.app** on your Desktop, using the app's pulsar icon. Launching it starts the Workbench with no Terminal window. In Finder, right-click `install-shortcut.command` → **Open** (the first run may need Gatekeeper approval — see below), or from a terminal:
 
 ``bash
 bash install-shortcut.command
 ``
 
-It prints `Created: …/Desktop/DSES Spectrum Analyzer.app`. Re-run it any time you move the extracted folder (the app remembers the location it was built from). The first time you double-click the new `.app`, macOS may warn about an app from an unidentified developer — right-click it → **Open** once, or approve it under **System Settings → Privacy & Security → Open Anyway**. Startup logs go to `~/Library/Logs/DSES_Spectrum_Analyzer.log` if you ever need to troubleshoot a launch.
+It prints `Created: …/Desktop/DSES Radio Astronomy Workbench.app`. Re-run it any time you move the extracted folder (the app remembers the location it was built from). The first time you double-click the new `.app`, macOS may warn about an app from an unidentified developer — right-click it → **Open** once, or approve it under **System Settings → Privacy & Security → Open Anyway**. Startup logs go to `~/Library/Logs/DSES_Workbench.log` if you ever need to troubleshoot a launch.
 
 On Apple Silicon, **make sure** you installed the `arm64` build of Radioconda. Mixing an `x86_64` Radioconda with a native `arm64` Python or Qt will produce confusing errors at startup. There is no Rosetta-only step required if both halves match the CPU.
 
 If the Finder warns about an unidentified developer when running `launcher.sh`, clear the quarantine attribute on the unzipped folder:
 
 ``bash
-xattr -dr com.apple.quarantine dses-spectrum-analyzer-1.3.4
+xattr -dr com.apple.quarantine dses-workbench-1.4.0
 ``
 
 
@@ -291,14 +293,14 @@ SoapySDRUtil --info
 - Re-check that the SDRplay API from §3A.1 installed correctly.
 - On Windows, confirm the DLL landed in `modules0.8\` and the `SDRplayAPIService` is running (`Get-Service SDRplayAPIService`).
 
-When you launch the spectrum analyzer with an RSP attached, it appears in the device picker as e.g. `RSP1B — 240513BE60  [sdrplay]`.
+When you launch the Workbench with an RSP attached, it appears in the device picker as e.g. `RSP1B — 240513BE60  [sdrplay]`.
 
 
 ## 4. First-run checklist
 
 Regardless of OS, before declaring the install good:
 
-- The window title bar reads `DSES Spectrum Analyzer — v1.1.6 — <radio model> — <serial>` (e.g. `… — USRP B210 — 3273A91` or `… — RSP1B — 240513BE60`). The version number must match the bundle you installed; the radio portion confirms which device is being used.
+- The window title bar reads `DSES Radio Astronomy Workbench — v1.1.6 — <radio model> — <serial>` (e.g. `… — USRP B210 — 3273A91` or `… — RSP1B — 240513BE60`). The version number must match the bundle you installed; the radio portion confirms which device is being used.
 - Pull up **Help → User Guide** from the menu bar. The guide should open.
 - Pull up **Help → About**. The author, version, license, and the path to the settings file should be readable.
 - The spectrum plot should show live data (not a flat line at −140 dB). If it's flat, the radio isn't streaming — see Troubleshooting §6.
@@ -344,16 +346,18 @@ You can also trigger a check at any time via **Help → Check for Updates…**. 
 Click **Install Update…** in the update dialog. The app downloads the new bundle, **verifies its published checksum** before changing anything, and asks how to install it:
 
 - **Update this installation** (default) — replaces the current version in place. The files it overwrites are backed up first, so a failed update rolls back instead of leaving a broken install. When it finishes, it offers to **restart** into the new version.
-- **Install a new copy** — installs into a folder you choose and **keeps** the current version. Leave **Add a desktop shortcut** ticked and it creates a *separate* icon labelled with the new version (e.g. *DSES Spectrum Analyzer 1.1.6*), so both versions stay launchable.
+- **Install a new copy** — installs into a folder you choose and **keeps** the current version. Leave **Add a desktop shortcut** ticked and it creates a *separate* icon labelled with the new version (e.g. *DSES Radio Astronomy Workbench 1.1.6*), so both versions stay launchable.
 
 Radioconda does **not** need reinstalling for an app update.
+
+**Coming from 1.3.4 or earlier (the rename release).** The 1.4.0 update installs over your existing folder like any other. What changes: the program file is now `dses_workbench.py` (the old `dses_spectrum_analyzer.py` is left behind as a tiny stand-in that just starts the new file, so anything still pointing at it keeps working); the release folder on the download server moved from `b210_sa` to `dses-workbench`, and the update URL stored in your settings file is moved there automatically on first launch; and your existing desktop shortcut, macOS `.app`, or Linux menu entry keeps working because it runs the launcher, but it still carries the old name — re-run `install-shortcut.ps1` / `install-shortcut.command` (or the Linux `.desktop` step in §3.2) to get a *DSES Radio Astronomy Workbench* icon, then delete the old one. Your settings, recordings folder, and cached Radioconda path are untouched.
 
 ### Performing the update — manually
 
 If you'd rather apply it yourself, each release is a self-contained zip:
 
 1. **Close** the running app.
-2. **Extract** the new zip alongside the old one — a new folder named with the version (e.g. `dses-spectrum-analyzer-1.3.4`) — or overwrite the old folder's files.
+2. **Extract** the new zip alongside the old one — a new folder named with the version (e.g. `dses-workbench-1.4.0`) — or overwrite the old folder's files.
 3. **Run** `launcher.bat` (Windows) or `launcher.sh` (macOS/Linux) from the **new** folder.
 
 ### What is preserved across versions
@@ -449,7 +453,7 @@ The GR flow graph is running but no samples are arriving. Usual causes:
 ### macOS: "developer cannot be verified"
 
 ``bash
-xattr -dr com.apple.quarantine /path/to/dses-spectrum-analyzer-1.3.4
+xattr -dr com.apple.quarantine /path/to/dses-workbench-1.4.0
 ``
 
 For the optional Desktop **`.app`** icon (built by `install-shortcut.command`), the same warning can appear the first time you double-click it — right-click the app → **Open** once, or approve it in **System Settings → Privacy & Security → Open Anyway**. You only need to do this once per machine.
@@ -461,7 +465,7 @@ When launched from a terminal on macOS, the app prints a few benign lines that a
 - `objc[...]: Class QT_ROOT_LEVEL_POOL... is implemented in both ...libQt6Core... and ...libQt5Core...` — Radioconda ships both Qt5 (for GNU Radio's own GUI blocks) and Qt6/PySide6 (what this app uses); both libraries are present in the process. The app forces the PySide6 backend, so this is cosmetic.
 - `[ERROR] SoapySDR::loadModule(...) dlopen() failed` — SoapySDR probing a path that isn't a module. Harmless; the B210 is driven through UHD, not SoapySDR.
 
-The app launches and runs normally despite these. (When started from the Desktop `.app`, they go to `~/Library/Logs/DSES_Spectrum_Analyzer.log` instead of the screen.)
+The app launches and runs normally despite these. (When started from the Desktop `.app`, they go to `~/Library/Logs/DSES_Workbench.log` instead of the screen.)
 
 ### Settings won't persist
 
@@ -510,7 +514,7 @@ To pin a specific device permanently without using the picker, edit `settings.in
 
 The distribution bundle includes a short SigMF recording so that users without any SDR attached can still launch the program, see live spectrum, and try the controls.
 
-- Filenames: **`sample.sigmf-data`** (raw IQ) and **`sample.sigmf-meta`** (JSON metadata). Both live next to `dses_spectrum_analyzer.py` in your install folder.
+- Filenames: **`sample.sigmf-data`** (raw IQ) and **`sample.sigmf-meta`** (JSON metadata). Both live next to `dses_workbench.py` in your install folder.
 - The file is read in a continuous loop, paced to match the original capture's sample rate.
 - The window title shows **[Playback]**, the Device button shows the file name, and the Recording-status label reads `Playback (looping): sample.sigmf-data`.
 - **Sample Rate**, **RX Gain**, and **Recording** controls are **disabled** — they have no meaning for a recorded file. Sample rate comes from the file's metadata.
@@ -524,7 +528,7 @@ The distribution bundle includes a short SigMF recording so that users without a
 
 > This appendix is a copy of the program's built-in **Help → User Guide**. If the two ever differ, the in-app Help is authoritative for the version you're actually running (it ships inside the application).
 
-This is a live spectrum analyzer and waterfall display for the Ettus USRP B210 and other software-defined radios (SDRPlay RSP1A/RSP1B/RSPduo/RSPdx, RTL-SDR, HackRF, Airspy, BladeRF, LimeSDR, PlutoSDR via SoapySDR), designed for pulsar RFI investigation but useful for general-purpose spectrum monitoring.
+The DSES Radio Astronomy Workbench (through version 1.3.4 the *DSES Spectrum Analyzer*) is one program for the club's SDR-based observing: a live spectrum analyzer and waterfall for the Ettus USRP B210 and other software-defined radios (SDRPlay RSP1A/RSP1B/RSPduo/RSPdx, RTL-SDR, HackRF, Airspy, BladeRF, LimeSDR, PlutoSDR via SoapySDR); a pulsar visibility planner; recording to SIGPROC filterbank, SigMF, and ezRA drift-scan formats; PRESTO folding and quick-look analysis; multi-day HI drift-scan campaigns; and a B210 self test that doubles as a pulsar simulator. It began as an RFI survey tool and still serves for general spectrum monitoring.
 
 ### Starting up — device selection
 
@@ -706,7 +710,7 @@ To revert everything to factory defaults, use **Restore Defaults** in the About 
 
 If the developer has configured a manifest URL, the program checks for a newer release in the background at launch (no more than once every 24 hours). When a newer version is found, a non-modal dialog opens with the release notes and a button that opens the download page in your browser — you can ignore it and keep using the app, or click **Skip this version** to not be reminded about that particular version again.
 
-The check is read-only and never auto-downloads or auto-installs. To trigger a check manually, use **Help → Check for Updates…**. To disable auto-checks, set `auto_check = false` under `[updates]` in the settings file. If the manifest URL has not been configured yet, the auto-check is silently skipped.
+The check is read-only and never auto-downloads or auto-installs. To trigger a check manually, use **Help → Check for Updates…**. To disable auto-checks, set `auto_check = false` under `[updates]` in the settings file. If the manifest URL has not been configured yet, the auto-check is silently skipped. Installs upgraded from 1.3.4 or earlier keep working: their stored manifest URL (the old `b210_sa` release folder) is moved to the new `dses-workbench` folder automatically on first launch, and the old folder keeps a pointer to the current release.
 
 ### Tips for pulsar work
 

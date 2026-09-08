@@ -1,5 +1,5 @@
-"""Generate dses_sa.ico (multi-resolution Windows icon) and a dses_sa.png
-preview for the DSES Spectrum Analyzer.
+"""Generate dses_workbench.ico (multi-resolution Windows icon) and a dses_workbench.png
+preview for the DSES Radio Astronomy Workbench.
 
 Design: pulsar lighthouse beam (cyan bowtie cones along NW-SE diagonal) with
 a bright white core glowing yellow, over a deep-space navy background, with
@@ -115,8 +115,8 @@ def main():
 
     img = make_icon()
 
-    png_path = here / "dses_sa.png"
-    ico_path = here / "dses_sa.ico"
+    png_path = here / "dses_workbench.png"
+    ico_path = here / "dses_workbench.ico"
 
     img.save(png_path, format="PNG")
     img.save(

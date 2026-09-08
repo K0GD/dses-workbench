@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# make-release.sh — build a distributable zip of the DSES Spectrum Analyzer.
+# make-release.sh — build a distributable zip of the DSES Radio Astronomy Workbench.
 #
-# Reads APP_VERSION from dses_spectrum_analyzer.py, copies the runtime files
-# into dist/dses-spectrum-analyzer-<version>/, zips the folder, prints the
+# Reads APP_VERSION from dses_workbench.py, copies the runtime files
+# into dist/dses-workbench-<version>/, zips the folder, prints the
 # path to the resulting archive.
 #
 # Run from the project root:    ./make-release.sh
@@ -13,19 +13,19 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-if [ ! -f dses_spectrum_analyzer.py ]; then
-    echo "dses_spectrum_analyzer.py not found in $(pwd)" >&2
+if [ ! -f dses_workbench.py ]; then
+    echo "dses_workbench.py not found in $(pwd)" >&2
     exit 1
 fi
 
-version="$(grep -oE '^APP_VERSION[[:space:]]*=[[:space:]]*"[^"]+"' dses_spectrum_analyzer.py \
+version="$(grep -oE '^APP_VERSION[[:space:]]*=[[:space:]]*"[^"]+"' dses_workbench.py \
             | head -n1 | sed -E 's/.*"([^"]+)".*/\1/')"
 if [ -z "$version" ]; then
-    echo "Could not find APP_VERSION in dses_spectrum_analyzer.py" >&2
+    echo "Could not find APP_VERSION in dses_workbench.py" >&2
     exit 1
 fi
 
-bundle="dses-spectrum-analyzer-$version"
+bundle="dses-workbench-$version"
 dist="dist"
 stage="$dist/$bundle"
 archive="$dist/$bundle.zip"
@@ -46,6 +46,7 @@ copy_if_present() {
 
 # Runtime files
 for f in \
+    dses_workbench.py \
     dses_spectrum_analyzer.py \
     sigproc_fil.py \
     pulsar_planner.py \
@@ -61,13 +62,13 @@ for f in \
     launcher.sh \
     install-shortcut.ps1 \
     install-shortcut.command \
-    dses-spectrum-analyzer.desktop \
+    dses-workbench.desktop \
     environment.yml ; do
     copy_if_present "$f" "$stage/"
 done
-copy_if_present icons/dses_sa.ico "$stage/icons/"
-copy_if_present icons/dses_sa.png "$stage/icons/"
-copy_if_present icons/dses_sa.icns "$stage/icons/"
+copy_if_present icons/dses_workbench.ico "$stage/icons/"
+copy_if_present icons/dses_workbench.png "$stage/icons/"
+copy_if_present icons/dses_workbench.icns "$stage/icons/"
 
 # Pre-built SoapySDRPlay3 module for Windows (SDRplay support). Not on
 # conda-forge, so we ship it; install guide §1A says where to copy it.
@@ -77,7 +78,7 @@ copy_if_present vendor/windows/README.txt "$stage/sdrplay/"
 
 # Install guide PDF (the DSES-styled PDF is the deliverable; the .docx
 # is a developer-side intermediate and stays out of the bundle).
-copy_if_present DSES_RFI_Spectrum_Analyzer_Installation.pdf "$stage/"
+copy_if_present DSES_Radio_Astronomy_Workbench_Installation.pdf "$stage/"
 
 # Default SigMF playback sample (large, ~500+ MB) — lets users without any
 # SDR attached launch the program and see live spectrum from a recorded file.

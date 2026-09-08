@@ -1,4 +1,4 @@
-# DSES Spectrum Analyzer — Roadmap
+# DSES Radio Astronomy Workbench — Roadmap
 
 Feature ideas and planned work, by target version. This file is the shared
 cross-machine record (Mac + Windows) — keep it committed and pushed.
@@ -100,7 +100,7 @@ flagging for Soapy sources.
       1422 MHz center only the 1420.5 MHz line follows the generator
       on/off; 1418 and 1425.6 MHz are internal B210 spurs.
       Ray Uberecken (AA0L) reports (verbal)
-      that in a different application the Spectrum Analyzer receives weak
+      that in a different application the Workbench receives weak
       signals WORSE than other software on the SAME hardware.
       **PRIME SUSPECT FOUND (code inspection 2026-07-17):** the display FFT
       processes only the latest `fft_size` samples per timer tick
@@ -267,7 +267,7 @@ flagging for Soapy sources.
 - [ ] **System-1 antenna-steering integration (preload pulsar target)** —
       *status: WAITING ON the System-1 team* (they own the antenna-steering
       software + hardware). Rick has asked them (2026-07) for an API so the
-      spectrum analyzer can push the selected pulsar's data (name, RA/Dec,
+      Workbench can push the selected pulsar's data (name, RA/Dec,
       ideally the catalog ephemeris) into their steering software — the
       operator picks a target once in the SA and the dish knows where to
       point, saving time and flattening the site-operator learning curve.
@@ -371,7 +371,7 @@ flagging for Soapy sources.
       Original notes: incorporate
       the role of **ezCol** (the data-collection module of Ted Cline's free
       open-source **ezRA** — Easy Radio Astronomy — suite,
-      https://github.com/tedcline/ezRA) so the Spectrum Analyzer can serve
+      https://github.com/tedcline/ezRA) so the Workbench can serve
       as the drift-scan data collector: record integrated frequency spectra
       in the **ezRA `.txt` data-file format**, feeding the rest of the suite
       (ezCon → .ezb condensed files → ezPlot/ezSky/ezGal/ezGLon analysis &
@@ -693,18 +693,19 @@ menu bar!) + drift-scan box test (dock behavior on headless Openbox/xrdp
       transit fits read τ/2 late (13 s at 25 s rows, 32 s at 64 s). Stamp
       at mid-integration instead; note the convention change in the file
       header comment so analyses can tell which convention wrote a file.
-- [ ] **RENAME THE APPLICATION to "DSES Radio Astronomy Workbench"
-      (DECIDED by Rick 2026-08-24; implementation deferred - no time now).**
-      "Spectrum Analyzer" no longer describes it — it plans pulsar observations, records three
-      science formats, folds pulsars through PRESTO, runs multi-day HI
-      drift-scan campaigns, self-tests with a pulsar simulator, and
-      auto-updates. Naming decision is Rick's/DSES's. Migration plan when
-      the name is chosen: change the DISPLAY identity first (APP_NAME,
-      window titles, Help, docs, website) in one release; keep internal
-      names stable that release (dses_spectrum_analyzer.py, settings.ini
-      name, gpstime path sw_distribution/b210_sa/, zip prefix) so the
-      in-app updater chain on ALL installs survives; migrate file/zip/URL
-      names one release later with the updater taught both paths.
+- [x] **RENAMED to "DSES Radio Astronomy Workbench" — DONE 2026-09-08
+      (Rick's decision 2026-08-24; name + slug `dses-workbench` confirmed
+      2026-09-08). Ships as 1.4.0.** Display identity, module
+      (`dses_workbench.py`, old name kept as a launch shim), zip prefix,
+      .desktop, icons, docs, AND the gpstime folder
+      (`sw_distribution/dses-workbench/`, Rick: "b210_sa" named one radio)
+      all moved in ONE release rather than the two-step plan above — safe
+      because the updater follows the manifest's download_url and accepts
+      any zip top folder, so the old `b210_sa/manifest.json` stays online
+      as a pointer and 1.4.0 migrates the stored URL out of settings.ini.
+      Deliberately NOT renamed: the `DSES_Analyzer` config-dir name and
+      `DSES_SA_Recordings` (user data continuity). Still to do outside
+      the repo: website/page wording, the Observer's Guide title.
 - [ ] **ONE task-focused PDF: "DSES Radio Astronomy Workbench - Observer's
       Guide" (Rick 2026-08-24; one-doc structure agreed 2026-08-24).**
       Part 0 = common setup (2-3 pp, written once); Parts 1 and 2 below,

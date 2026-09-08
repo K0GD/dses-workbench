@@ -1,4 +1,4 @@
-"""updater.py -- in-app upgrade helper for the DSES Spectrum Analyzer.
+"""updater.py -- in-app upgrade helper for the DSES Radio Astronomy Workbench.
 
 OS-neutral core: download a release zip, verify its SHA-256 against the
 published `.sha256`, extract it, and install it either OVER the current install
@@ -21,7 +21,7 @@ import zipfile
 from pathlib import Path
 
 _CHUNK = 1 << 16
-_USER_AGENT = "DSES-Spectrum-Analyzer-Updater"
+_USER_AGENT = "DSES-Workbench-Updater"
 
 
 # OpenSSL's X509_V_ERR_CERT_HAS_EXPIRED. The stdlib ssl module doesn't export
@@ -146,7 +146,7 @@ def sha256_url_for(download_url):
 
 def extract_release(zip_path, dest_dir):
     """Safely extract `zip_path` into `dest_dir`; return the single top-level
-    folder inside it (the `dses-spectrum-analyzer-<version>/` the bundle uses).
+    folder inside it (the `dses-workbench-<version>/` the bundle uses).
 
     Normalizes Windows-style backslash separators to '/': PowerShell's
     Compress-Archive writes non-spec zip entries using '\\', which

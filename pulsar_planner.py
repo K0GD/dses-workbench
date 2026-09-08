@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-pulsar_planner.py -- "what's up now?" for the DSES Spectrum Analyzer.
+pulsar_planner.py -- "what's up now?" for the DSES Radio Astronomy Workbench.
 
 Answers the question the observing team actually asks at the dish: which
 pulsars are above our horizon right now, how long do I have before this one
@@ -253,7 +253,7 @@ class Catalog:
 
     def _fetch(self, timeout=30):
         req = urllib.request.Request(
-            ATNF_URL, headers={"User-Agent": "DSES-Spectrum-Analyzer/1.2"})
+            ATNF_URL, headers={"User-Agent": "DSES-Workbench/1.2"})
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             text = resp.read().decode("utf-8", errors="replace")
         return self._parse(text)

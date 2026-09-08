@@ -1,9 +1,9 @@
 # environment.yml
-# Project-local conda env for the Spectrum_Analyzer_PY project (USRP B210).
+# Project-local conda env for the DSES Radio Astronomy Workbench (DSES_Workbench repo).
 # Create with: conda env create --prefix ./.conda -f environment.yml
 # Update with: conda env update --prefix ./.conda -f environment.yml --prune
 
-name: spectrum-analyzer-py   # ignored when using --prefix; kept for documentation
+name: dses-workbench   # ignored when using --prefix; kept for documentation
 
 channels:
   - conda-forge
@@ -13,7 +13,7 @@ dependencies:
 
   # --- GNU Radio core ---
   # Metapackage pulls in qtgui, uhd, blocks, filter, fft, analog, digital,
-  # audio, channels, zeromq, etc. — everything you need for a spectrum analyzer.
+  # audio, channels, zeromq, etc. — everything the Workbench needs.
   - gnuradio
 
   # --- USRP / UHD ---
@@ -41,7 +41,7 @@ dependencies:
   - pip            # so pip-only packages can be installed into THIS env
   - ipython        # nicer REPL for interactive testing
 
-  # --- Docs build (DSES_RFI_Spectrum_Analyzer_Installation.{docx,pdf}) ---
+  # --- Docs build (DSES_Radio_Astronomy_Workbench_Installation.{docx,pdf}) ---
   # Dev-only — not needed at runtime. python-docx generates the styled
   # DOCX from Installing.md; docx2pdf drives Microsoft Word via pywin32 to
   # render the PDF and update the TOC field. Windows-only.

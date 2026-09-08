@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# launcher.sh - locate a Radioconda/conda env with UHD and launch the spectrum analyzer.
+# launcher.sh - locate a Radioconda/conda env with UHD and launch the DSES Radio Astronomy Workbench.
 # Used directly on Linux; on macOS, launcher.command is a thin wrapper that exec's this.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-MAIN_SCRIPT="$SCRIPT_DIR/dses_spectrum_analyzer.py"
+MAIN_SCRIPT="$SCRIPT_DIR/dses_workbench.py"
 
 case "$(uname)" in
     Darwin)

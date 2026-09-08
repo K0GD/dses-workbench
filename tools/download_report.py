@@ -1,8 +1,10 @@
-"""Daily download report for the published Spectrum Analyzer.
+"""Daily download report for the published DSES Radio Astronomy Workbench.
 
 Pulls the gpstime Apache access log over SSH and summarizes who fetched
 the app in the last N hours: zip GETs are fresh installs or updates,
-manifest GETs carry the updater's User-Agent (DSES-Spectrum-Analyzer/x.y.z)
+manifest GETs carry the updater's User-Agent (DSES-Workbench/x.y.z, or
+DSES-Spectrum-Analyzer/x.y.z from pre-1.4.0 installs; both release
+folders are scanned because 1.3.4-and-earlier installs still poll b210_sa/)
 and so reveal which versions are checking in.
 
 Exit contract for the daily scheduled task: prints "DOWNLOADS: <n>" as
@@ -26,7 +28,7 @@ SSH = ["ssh", "-i", r"C:\Users\rick\.ssh\id_ed25519_gpstime",
 # week's log plus the most recent rotation, so a run just after the
 # weekly logrotate still sees yesterday.
 REMOTE = ("sudo -n sh -c 'cat $(ls -t /var/log/httpd/requests_log* "
-          "| head -2 | sort -r) | grep sw_distribution/b210_sa' || true")
+          "| head -2 | sort -r) | grep -E \"sw_distribution/(dses-workbench|b210_sa)\"' || true")
 
 LOG_RE = re.compile(
     r'^(\S+) \S+ \S+ \[([^\]]+)\] "(\S+) (\S+)[^"]*" (\d{3}) (\S+)'
@@ -59,7 +61,7 @@ def parse(hours):
         if path.endswith(".zip"):
             zips.append((t, ip, path.rsplit("/", 1)[-1], ua))
         elif path.endswith("manifest.json"):
-            mv = re.search(r"DSES[ -]Spectrum[ -]Analyzer/([\d.]+)", ua)
+            mv = re.search(r"DSES[ -](?:Workbench|Spectrum[ -]Analyzer)/([\d.]+)", ua)
             checks[(ip, mv.group(1) if mv else ua[:40])] += 1
     return zips, checks
 
@@ -70,7 +72,7 @@ def main():
     args = ap.parse_args()
     zips, checks = parse(args.hours)
     print(f"DOWNLOADS: {len(zips)}")
-    print(f"DSES Spectrum Analyzer distribution activity, last "
+    print(f"DSES Radio Astronomy Workbench distribution activity, last "
           f"{args.hours:g} h (to {datetime.now():%Y-%m-%d %H:%M} local)")
     print()
     if zips:

@@ -1,10 +1,10 @@
-# DSES Spectrum Analyzer — Release Workflow
+# DSES Radio Astronomy Workbench — Release Workflow
 
 **Version 1.0.0**
 Author: Richard M Hambly (K0GD) — rick@cnssys.com
 Audience: developer only — not shipped to recipients.
 
-This document is for the developer (you) cutting and publishing new releases. It complements `DSES_RFI_Spectrum_Analyzer_Installation.pdf`, which is the user-facing install guide. Topics covered here:
+This document is for the developer (you) cutting and publishing new releases. It complements `DSES_Radio_Astronomy_Workbench_Installation.pdf`, which is the user-facing install guide. Topics covered here:
 
 - How the project is laid out and what the build tools need.
 - The end-to-end routine for shipping a new release.
@@ -42,12 +42,13 @@ conda env update --prefix ./.conda -f environment.yml --prune
 
 | Path | Purpose |
 |---|---|
-| `dses_spectrum_analyzer.py` | The application. Single hand-polished Python file. `APP_VERSION` near the top is the source of truth for the release version. |
+| `dses_workbench.py` | The application. Single hand-polished Python file. `APP_VERSION` near the top is the source of truth for the release version. (Was `dses_spectrum_analyzer.py` through 1.3.4.) |
+| `dses_spectrum_analyzer.py` | Launch shim under the pre-1.4.0 module name — just runs `dses_workbench.py`. Ships so an in-place update overwrites the stale old application file. |
 | `launcher.bat` / `.ps1` | Windows entry point + launcher logic (finds Radioconda). |
 | `launcher.sh` | Linux / macOS launcher. |
 | `install-shortcut.ps1` | Windows desktop / Start-menu shortcut installer. |
-| `dses-spectrum-analyzer.desktop` | Linux desktop entry template. |
-| `icons/b210.{ico,png}` | Windows / Linux icons. |
+| `dses-workbench.desktop` | Linux desktop entry template. |
+| `icons/dses_workbench.{ico,png,icns}` | Windows / Linux / macOS icons. |
 | `icons/generate-icon.py` | Source for the icon. Re-run only if you change the design. |
 | `sample.sigmf-data` + `sample.sigmf-meta` | Bundled playback sample. Loaded by the app when no B210 is attached. |
 | `LICENSE` | GPL-3.0 full text + project copyright. |
@@ -55,7 +56,7 @@ conda env update --prefix ./.conda -f environment.yml --prune
 | `Installing.md` | Source for the user-facing install guide. |
 | `Release_Workflow.md` | This document. |
 | `build_doc.py` | Builds the styled `.pdf` from a Markdown source (rendering a throwaway temp DOCX on the way). CLI-parameterized (`--title`, `--subtitle`, `--pdf`; `--docx` keeps the intermediate). |
-| `make-release.ps1` / `.sh` | Stages the runtime files into `dist/dses-spectrum-analyzer-<version>/` and zips them. |
+| `make-release.ps1` / `.sh` | Stages the runtime files into `dist/dses-workbench-<version>/` and zips them. |
 | `CLAUDE.md` | Project ground rules for Claude Code sessions. Not shipped. |
 
 Not part of the release bundle: `.conda/`, `.git/`, `.vscode/`, `dist/`, `CLAUDE.md`, `Installing.md`, `Release_Workflow.md`, `build_doc.py`, `make-release.{ps1,sh}`, `icons/generate-icon.py`.
@@ -66,19 +67,21 @@ Not part of the release bundle: `.conda/`, `.git/`, `.vscode/`, `dist/`, `CLAUDE
 All distribution goes through:
 
 ```text
-URL:        https://gpstime.com/sw_distribution/b210_sa/
-Filesystem: /var/www/html/sw_distribution/b210_sa/   (on gpstime.com)
+URL:        https://gpstime.com/sw_distribution/dses-workbench/
+Filesystem: /var/www/html/sw_distribution/dses-workbench/   (on gpstime.com)
 ```
 
-Upload releases straight into that filesystem directory (Apache/nginx docroot is `/var/www/html`). A common mistake is to scp into your home directory (e.g. `~/spectrum_analyzer_dist`) — files there are NOT web-served and the URL 404s. Always `mv` them into `/var/www/html/sw_distribution/b210_sa/` and `chmod 644`.
+Upload releases straight into that filesystem directory (Apache/nginx docroot is `/var/www/html`). A common mistake is to scp into your home directory (e.g. `~/dses_workbench_dist`) — files there are NOT web-served and the URL 404s. Always `mv` them into `/var/www/html/sw_distribution/dses-workbench/` and `chmod 644`.
 
 That single directory holds:
 
 - `manifest.json` — the version manifest the running app polls.
-- `dses-spectrum-analyzer-<version>.zip` — one zip per published release. Keep at least the current + previous version online.
-- `dses-spectrum-analyzer-<version>.sha256` — optional SHA-256 next to each zip so recipients can verify their download.
-- `DSES_RFI_Spectrum_Analyzer_Installation.pdf` — latest install guide, separate from the zips, for users who want to read before downloading the bundle. (Also bundled inside each zip; the standalone copy is the "read first" link — see §4.6.)
+- `dses-workbench-<version>.zip` — one zip per published release. Keep at least the current + previous version online.
+- `dses-workbench-<version>.sha256` — optional SHA-256 next to each zip so recipients can verify their download.
+- `DSES_Radio_Astronomy_Workbench_Installation.pdf` — latest install guide, separate from the zips, for users who want to read before downloading the bundle. (Also bundled inside each zip; the standalone copy is the "read first" link — see §4.6.)
 - `.htaccess` — enables directory listing for this folder (`Options +Indexes` + `FancyIndexing`, with `IndexIgnore .htaccess`). Without it Apache returns 403 on the bare directory. Leave it in place; it's why users can browse the folder as well as use direct file links.
+
+**Legacy folder `sw_distribution/b210_sa/` — keep it, and keep its manifest pointing at the current release.** Every release through 1.3.4 lived there under the `dses-spectrum-analyzer-<version>.zip` name, and every install of those versions has `…/b210_sa/manifest.json` persisted in its `settings.ini`. The updater follows whatever `download_url` a manifest names and accepts any top-level folder name in the zip, so an old install migrates cleanly as long as the old manifest advertises the new zip. Therefore each release writes TWO manifests with identical content (§5.2): the real one in `dses-workbench/` and the pointer in `b210_sa/`. Once an install has run 1.4.0 or later, its stored URL is migrated to the new folder by the app itself. The old zips can stay where they are; nothing needs to be copied or renamed.
 
 There is no per-OS variant — one zip works on Windows, Linux (any current distro), macOS Intel, and macOS Apple Silicon. The OS-specific launchers ride along inside the bundle.
 
@@ -89,7 +92,7 @@ When you're ready to ship a new version:
 
 ### 4.1 Bump the version
 
-Edit `APP_VERSION` near the top of `dses_spectrum_analyzer.py`. Use semantic versioning: `MAJOR.MINOR.PATCH`. Bug fixes only → bump PATCH; new features → bump MINOR; breaking changes → bump MAJOR.
+Edit `APP_VERSION` near the top of `dses_workbench.py`. Use semantic versioning: `MAJOR.MINOR.PATCH`. Bug fixes only → bump PATCH; new features → bump MINOR; breaking changes → bump MAJOR.
 
 ### 4.2 Commit the source changes
 
@@ -97,15 +100,15 @@ Note the version in the commit message.
 
 ### 4.3 Rebuild the user-facing install guide
 
-**Sync the operating guide first.** Installing.md §9 (Appendix C — Operating Guide) is a hand-maintained copy of the in-app Help text (`HELP_TEXT_HTML` in `dses_spectrum_analyzer.py`). If you changed any control or Help wording this release, update §9 to match before rebuilding the PDF. The in-app Help is authoritative; §9 just mirrors it for the printable guide.
+**Sync the operating guide first.** Installing.md §9 (Appendix C — Operating Guide) is a hand-maintained copy of the in-app Help text (`HELP_TEXT_HTML` in `dses_workbench.py`). If you changed any control or Help wording this release, update §9 to match before rebuilding the PDF. The in-app Help is authoritative; §9 just mirrors it for the printable guide.
 
-**Bump the §3 download link.** Installing.md §3 has a direct, version-stamped download URL (`…/dses-spectrum-analyzer-<version>.zip`). Update that version to the release you're publishing before rebuilding the PDF. (The folder is also browsable — see §3 of this document — so a slightly stale link isn't fatal, but keep it current.)
+**Bump the §3 download link.** Installing.md §3 has a direct, version-stamped download URL (`…/dses-workbench-<version>.zip`). Update that version to the release you're publishing before rebuilding the PDF. (The folder is also browsable — see §3 of this document — so a slightly stale link isn't fatal, but keep it current.)
 
 ```text
 ./.conda/bin/python build_doc.py
 ```
 
-That reads `Installing.md` and produces `DSES_RFI_Spectrum_Analyzer_Installation.pdf` (the deliverable). The styled DOCX it renders on the way is written to a temp file and removed automatically; pass `--docx <path>` if you want to keep it for a spot-check.
+That reads `Installing.md` and produces `DSES_Radio_Astronomy_Workbench_Installation.pdf` (the deliverable). The styled DOCX it renders on the way is written to a temp file and removed automatically; pass `--docx <path>` if you want to keep it for a spot-check.
 
 Skip this step if you didn't change install-relevant behavior, but err on the side of rebuilding so the version stamps inside the PDF stay current.
 
@@ -113,7 +116,7 @@ Skip this step if you didn't change install-relevant behavior, but err on the si
 
 ```text
 ./.conda/bin/python build_doc.py Release_Workflow.md \
-    --pdf DSES_RFI_Spectrum_Analyzer_Release_Workflow.pdf \
+    --pdf DSES_Radio_Astronomy_Workbench_Release_Workflow.pdf \
     --subtitle "Release Workflow"
 ```
 
@@ -126,19 +129,19 @@ Windows:  .\make-release.ps1
 Unix:     ./make-release.sh
 ```
 
-The script reads `APP_VERSION`, creates `dist\dses-spectrum-analyzer-<version>\` with the runtime files, and zips it to `dist\dses-spectrum-analyzer-<version>.zip`. The staging directory is kept so you can inspect the contents before publishing.
+The script reads `APP_VERSION`, creates `dist\dses-workbench-<version>\` with the runtime files, and zips it to `dist\dses-workbench-<version>.zip`. The staging directory is kept so you can inspect the contents before publishing.
 
 ### 4.6 Upload to the server
 
-Upload **into the directory** `/var/www/html/sw_distribution/b210_sa/` on gpstime.com. Two files go up each release:
+Upload **into the directory** `/var/www/html/sw_distribution/dses-workbench/` on gpstime.com. Two files go up each release:
 
-- `dses-spectrum-analyzer-<version>.zip` — the bundle.
-- `DSES_RFI_Spectrum_Analyzer_Installation.pdf` — standalone install guide (bundled in the zip too, but the standalone copy is the "read before you download the 200+ MB bundle" link). Overwrite it every release so the public guide stays in sync.
+- `dses-workbench-<version>.zip` — the bundle.
+- `DSES_Radio_Astronomy_Workbench_Installation.pdf` — standalone install guide (bundled in the zip too, but the standalone copy is the "read before you download the 200+ MB bundle" link). Overwrite it every release so the public guide stays in sync.
 
 **Method A — FileZilla (SFTP), the usual method.**
 
 1. Connect to gpstime.com over **SFTP** (protocol "SFTP - SSH File Transfer Protocol", port 22), using your SSH login.
-2. Navigate the *remote* pane to `/var/www/html/sw_distribution/b210_sa/`. If you land in your home directory and can't see `/var/www`, type the path into FileZilla's "Remote site:" box and press Enter.
+2. Navigate the *remote* pane to `/var/www/html/sw_distribution/dses-workbench/`. If you land in your home directory and can't see `/var/www`, type the path into FileZilla's "Remote site:" box and press Enter.
 3. Drag the zip and the PDF over.
 4. **Set permissions to 644** so the web server can read them: right-click each uploaded file → **File permissions…** → set the numeric value to `644` (or tick read for owner/group/public, write for owner only). Without this the file may exist but the URL returns 403.
 
@@ -149,27 +152,27 @@ Upload **into the directory** `/var/www/html/sw_distribution/b210_sa/` on gpstim
 Run it as a **single line** (scp takes multiple source files before the destination). Do NOT break it across lines with `^` — that's a CMD continuation char and fails in PowerShell (which uses a backtick); the safe choice is one line:
 
 ```text
-scp dist\dses-spectrum-analyzer-<version>.zip DSES_RFI_Spectrum_Analyzer_Installation.pdf rick@gpstime.com:/var/www/html/sw_distribution/b210_sa/
+scp dist\dses-workbench-<version>.zip DSES_Radio_Astronomy_Workbench_Installation.pdf rick@gpstime.com:/var/www/html/sw_distribution/dses-workbench/
 ```
 
 The SSH username is `rick` (so `rick@gpstime.com`), not an email. Common scp gotchas: the path after the colon is absolute (leading `/`); on Windows, run scp from PowerShell (OpenSSH client) or Git Bash, not the conda prompt.
 
-**Ownership note:** `/var/www/html/sw_distribution/b210_sa/` and its contents are owned by `rick:rick`, so `rick` can overwrite the zip/PDF/manifest directly on each release — no `sudo` needed. If you ever see *"dest open … Permission denied"* on an overwrite, a file in there reverted to root ownership (e.g. something dropped in via `sudo`); fix it once with `sudo chown -R rick:rick /var/www/html/sw_distribution/b210_sa/`.
+**Ownership note:** `/var/www/html/sw_distribution/dses-workbench/` and its contents are owned by `rick:rick`, so `rick` can overwrite the zip/PDF/manifest directly on each release — no `sudo` needed. If you ever see *"dest open … Permission denied"* on an overwrite, a file in there reverted to root ownership (e.g. something dropped in via `sudo`); fix it once with `sudo chown -R rick:rick /var/www/html/sw_distribution/dses-workbench/`.
 
 **After uploading (either method)**, generate the checksum and verify the URLs. Easiest from an SSH session:
 
 ```bash
-cd /var/www/html/sw_distribution/b210_sa/
-sha256sum dses-spectrum-analyzer-<version>.zip > dses-spectrum-analyzer-<version>.sha256
-chmod 644 dses-spectrum-analyzer-<version>.{zip,sha256} DSES_RFI_Spectrum_Analyzer_Installation.pdf
-curl -sI https://gpstime.com/sw_distribution/b210_sa/dses-spectrum-analyzer-<version>.zip | head -1
-curl -sI https://gpstime.com/sw_distribution/b210_sa/DSES_RFI_Spectrum_Analyzer_Installation.pdf | head -1
+cd /var/www/html/sw_distribution/dses-workbench/
+sha256sum dses-workbench-<version>.zip > dses-workbench-<version>.sha256
+chmod 644 dses-workbench-<version>.{zip,sha256} DSES_Radio_Astronomy_Workbench_Installation.pdf
+curl -sI https://gpstime.com/sw_distribution/dses-workbench/dses-workbench-<version>.zip | head -1
+curl -sI https://gpstime.com/sw_distribution/dses-workbench/DSES_Radio_Astronomy_Workbench_Installation.pdf | head -1
 # expect "HTTP/2 200" or "HTTP/1.1 200 OK"
 ```
 
 ### 4.7 Update the manifest
 
-Edit `manifest.json` on the server with the new `latest_version`, `download_url`, and `release_notes`. Format and behavior in §5 below.
+Edit `manifest.json` on the server with the new `latest_version`, `download_url`, and `release_notes`, then copy it over the legacy `b210_sa/manifest.json` pointer as well (§3, §5.2). Format and behavior in §5 below.
 
 ### 4.8 Done
 
@@ -181,7 +184,7 @@ Existing users running the previous release (with auto-update enabled and a work
 The program polls a single JSON file (the "manifest") to learn about new releases. The URL is baked into the default settings as:
 
 ```text
-https://gpstime.com/sw_distribution/b210_sa/manifest.json
+https://gpstime.com/sw_distribution/dses-workbench/manifest.json
 ```
 
 End users can override it in their own `settings.ini` (`manifest_url =` under `[updates]`), e.g. to point at a staging copy for testing before publishing to all users.
@@ -193,7 +196,7 @@ JSON object with these fields:
 ```json
 {
   "latest_version":  "1.0.1",
-  "download_url":    "https://gpstime.com/sw_distribution/b210_sa/dses-spectrum-analyzer-1.0.1.zip",
+  "download_url":    "https://gpstime.com/sw_distribution/dses-workbench/dses-workbench-1.0.1.zip",
   "release_notes":   "Added auto-update check.\nFixed recording freeze at 25 MHz.\n"
 }
 ```
@@ -207,17 +210,27 @@ JSON object with these fields:
 From your SSH session, after uploading the new zip:
 
 ```bash
-cat > /var/www/html/sw_distribution/b210_sa/manifest.json << 'EOF'
+cat > /var/www/html/sw_distribution/dses-workbench/manifest.json << 'EOF'
 {
   "latest_version": "1.0.1",
-  "download_url": "https://gpstime.com/sw_distribution/b210_sa/dses-spectrum-analyzer-1.0.1.zip",
+  "download_url": "https://gpstime.com/sw_distribution/dses-workbench/dses-workbench-1.0.1.zip",
   "release_notes": "Added X.\nFixed Y.\n"
 }
 EOF
-chmod 644 /var/www/html/sw_distribution/b210_sa/manifest.json
+chmod 644 /var/www/html/sw_distribution/dses-workbench/manifest.json
 ```
 
 The single-quoted `<< 'EOF'` is important so the shell doesn't expand `$`/backslashes inside the JSON.
+
+**Then copy the same manifest into the legacy folder** so installs that still poll the pre-1.4.0 URL find the release (see §3):
+
+```bash
+cp /var/www/html/sw_distribution/dses-workbench/manifest.json /var/www/html/sw_distribution/b210_sa/manifest.json
+chmod 644 /var/www/html/sw_distribution/b210_sa/manifest.json
+curl -sS https://gpstime.com/sw_distribution/b210_sa/manifest.json | head -3   # must show the new download_url
+```
+
+Do not skip this: an old install that reads a stale `b210_sa` manifest simply never learns about the update.
 
 ### 5.3 Behavior notes
 
@@ -241,7 +254,7 @@ The single-quoted `<< 'EOF'` is important so the shell doesn't expand `$`/backsl
 Before announcing a release, sanity-check the manifest with the same-version test — running app at v1.0.0, manifest also says v1.0.0:
 
 ```bash
-curl -sS https://gpstime.com/sw_distribution/b210_sa/manifest.json
+curl -sS https://gpstime.com/sw_distribution/dses-workbench/manifest.json
 # expected: the JSON you uploaded
 ```
 
@@ -256,7 +269,7 @@ Temporarily edit `manifest.json` on the server to advertise a higher version tha
 ### 6.3 Verify the download URL
 
 ```bash
-curl -sI https://gpstime.com/sw_distribution/b210_sa/dses-spectrum-analyzer-<version>.zip | head -1
+curl -sI https://gpstime.com/sw_distribution/dses-workbench/dses-workbench-<version>.zip | head -1
 ```
 
 Should be `HTTP/... 200`. If not, the **Open Download Page** button in the dialog will 404 in users' browsers.
@@ -269,8 +282,9 @@ Should be `HTTP/... 200`. If not, the **Open Download Page** button in the dialo
 `make-release.ps1` (Windows) and `make-release.sh` (Unix) produce identical bundles. Contents:
 
 ```text
-dses-spectrum-analyzer-<version>/
-├── dses_spectrum_analyzer.py
+dses-workbench-<version>/
+├── dses_workbench.py
+├── dses_spectrum_analyzer.py    ← launch shim under the pre-1.4.0 name
 ├── sigproc_fil.py               ← shared .fil core (app + iq_to_fil)
 ├── ezra_txt.py                  ← ezRA drift-scan writer
 ├── fold_analysis.py             ← auto post-processing pipeline
@@ -283,17 +297,17 @@ dses-spectrum-analyzer-<version>/
 ├── launcher.sh
 ├── install-shortcut.ps1
 ├── install-shortcut.command
-├── dses-spectrum-analyzer.desktop
-├── icons/dses_sa.ico
-├── icons/dses_sa.png
-├── icons/dses_sa.icns
+├── dses-workbench.desktop
+├── icons/dses_workbench.ico
+├── icons/dses_workbench.png
+├── icons/dses_workbench.icns
 ├── presto/presto_bridge.py      ← WSL/native PRESTO bridge (Analyze/Quick look)
 ├── presto/build_presto*.sh      ← PRESTO install recipes (WSL + macOS)
 ├── presto/extend_ut1.sh, README.md, par/
 ├── sdrplay/sdrPlaySupport.dll   ← pre-built SoapySDRPlay3 module (Windows)
 ├── sdrplay/README.txt           ← what it is + ABI it was built against
 ├── environment.yml
-├── DSES_RFI_Spectrum_Analyzer_Installation.pdf
+├── DSES_Radio_Astronomy_Workbench_Installation.pdf
 ├── sample.sigmf-data
 └── sample.sigmf-meta
 ```
@@ -326,8 +340,8 @@ head -c 160000000 sample_full.sigmf-data > sample.sigmf-data   # 2.0 s
 To replace it with a different recording entirely:
 
 1. In live mode, hit **Record** and let it run for a few seconds.
-2. Stop recording. The new file lands in `~/Documents/DSES_SA_Recordings/DSES_Spectrum_Analyzer_<timestamp>.sigmf-{data,meta}`.
-3. Rename to `sample.sigmf-data` and `sample.sigmf-meta` and drop next to `dses_spectrum_analyzer.py` in your project root, replacing the existing pair.
+2. Stop recording. The new file lands in `~/Documents/DSES_SA_Recordings/DSES_Workbench_<timestamp>.sigmf-{data,meta}`.
+3. Rename to `sample.sigmf-data` and `sample.sigmf-meta` and drop next to `dses_workbench.py` in your project root, replacing the existing pair.
 4. The next `make-release` picks up the new sample.
 
 ### 7.3 Documentation toolchain
@@ -348,7 +362,7 @@ The build script (`build_doc.py`) accepts CLI options so the same code produces 
     [--title "Cover Title"] [--subtitle "Cover Subtitle"]
 ```
 
-Defaults match the install-guide build, so a bare `build_doc.py` invocation builds `Installing.md` → `DSES_RFI_Spectrum_Analyzer_Installation.pdf` with `Installation Guide` as subtitle. The intermediate DOCX is a temp file, removed after the PDF is written (pass `--docx` to keep it).
+Defaults match the install-guide build, so a bare `build_doc.py` invocation builds `Installing.md` → `DSES_Radio_Astronomy_Workbench_Installation.pdf` with `Installation Guide` as subtitle. The intermediate DOCX is a temp file, removed after the PDF is written (pass `--docx` to keep it).
 
 ### 7.4 Multi-radio architecture
 
@@ -357,9 +371,9 @@ The application drives any of:
 - **UHD B200-family**: B200, B210. Via `uhd.usrp_source`, wrapped in `UhdB200Source`.
 - **SoapySDR-supported devices**: SDRPlay (RSP1A / RSP1B / RSPduo / RSPdx), RTL-SDR, HackRF, Airspy, Airspy HF+, BladeRF, LimeSDR, PlutoSDR. Via `gnuradio.soapy.source`, wrapped in `SoapyGenericSource`.
 
-**Windows DLL loading (the startup block at the top of `dses_spectrum_analyzer.py`).** When launched via `python.exe` rather than an activated conda shell, SoapySDR's support modules can't find their vendor DLLs and every one fails with "LoadLibrary() failed". The startup block fixes this on Windows by (1) adding `<sys.prefix>\Library\bin` (and the SDRplay API dir) to the DLL search path so `rtlsdr.dll`, `hackrf.dll`, etc. resolve, and (2) pre-loading Radioconda's own `libusb-1.0.dll` by full path. The libusb pre-load matters because Windows searches `C:\Windows\System32` before PATH, and machines with Zadig / other SDR tools often have an older `System32\libusb-1.0.dll` that lacks symbols the rtlsdr/hackrf/airspy/bladerf modules need — without the pre-load those modules fail with "the specified procedure could not be found" even though `Library\bin` is on PATH. Pre-loading the correct copy first makes every later `LoadLibrary("libusb-1.0.dll")` reuse it (Windows matches loaded modules by base name).
+**Windows DLL loading (the startup block at the top of `dses_workbench.py`).** When launched via `python.exe` rather than an activated conda shell, SoapySDR's support modules can't find their vendor DLLs and every one fails with "LoadLibrary() failed". The startup block fixes this on Windows by (1) adding `<sys.prefix>\Library\bin` (and the SDRplay API dir) to the DLL search path so `rtlsdr.dll`, `hackrf.dll`, etc. resolve, and (2) pre-loading Radioconda's own `libusb-1.0.dll` by full path. The libusb pre-load matters because Windows searches `C:\Windows\System32` before PATH, and machines with Zadig / other SDR tools often have an older `System32\libusb-1.0.dll` that lacks symbols the rtlsdr/hackrf/airspy/bladerf modules need — without the pre-load those modules fail with "the specified procedure could not be found" even though `Library\bin` is on PATH. Pre-loading the correct copy first makes every later `LoadLibrary("libusb-1.0.dll")` reuse it (Windows matches loaded modules by base name).
 
-The split-out classes live next to each other in `dses_spectrum_analyzer.py`:
+The split-out classes live next to each other in `dses_workbench.py`:
 
 ```text
 RadioSource           — abstract: gr block + set_samp_rate / set_center_freq / set_gain
@@ -415,7 +429,7 @@ Start-Service SDRplayAPIService
 
 Verify with `SoapySDRUtil --find` — the RSP should appear with `driver=sdrplay`.
 
-**Why the SDRplay API DLL needs special handling:** `sdrPlaySupport.dll` depends on `sdrplay_api.dll` (installed by the SDRplay API installer at `C:\Program Files\SDRplay\API\x64\`). That directory is **not** on the system PATH after the installer runs, so SoapySDR can't load the support module out-of-the-box. The app calls `os.add_dll_directory(...)` at startup to register that location with the Python DLL loader — see the top of `dses_spectrum_analyzer.py`. End users do not need to munge PATH themselves.
+**Why the SDRplay API DLL needs special handling:** `sdrPlaySupport.dll` depends on `sdrplay_api.dll` (installed by the SDRplay API installer at `C:\Program Files\SDRplay\API\x64\`). That directory is **not** on the system PATH after the installer runs, so SoapySDR can't load the support module out-of-the-box. The app calls `os.add_dll_directory(...)` at startup to register that location with the Python DLL loader — see the top of `dses_workbench.py`. End users do not need to munge PATH themselves.
 
 **Linux/macOS:** Most distributions ship SoapySDRPlay3 in their package manager (`soapysdr-module-sdrplay` on Debian/Ubuntu, Homebrew tap `pothosware/homebrew-pothos`). The install guide's §3A documents that path; only Windows requires the build-from-source recipe above.
 

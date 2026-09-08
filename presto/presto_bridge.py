@@ -1,5 +1,5 @@
 """presto_bridge.py — call PRESTO / TEMPO / TEMPO2 (installed in WSL Ubuntu)
-from Windows Python, e.g. the DSES Spectrum Analyzer's radioconda interpreter.
+from Windows Python, e.g. the DSES Radio Astronomy Workbench's radioconda interpreter.
 
 The Linux side is set up by build_presto.sh, which writes ~/.presto_env
 (activating the PRESTO venv and exporting PRESTO/TEMPO/TEMPO2). This module

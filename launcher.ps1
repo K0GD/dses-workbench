@@ -1,9 +1,9 @@
-# launcher.ps1 - locate a Radioconda/conda env with UHD and launch the spectrum analyzer.
+# launcher.ps1 - locate a Radioconda/conda env with UHD and launch the DSES Radio Astronomy Workbench.
 # Invoked by launcher.bat with: powershell -NoProfile -ExecutionPolicy Bypass -File launcher.ps1
 $ErrorActionPreference = 'Stop'
 
 $ScriptDir  = $PSScriptRoot
-$MainScript = Join-Path $ScriptDir 'dses_spectrum_analyzer.py'
+$MainScript = Join-Path $ScriptDir 'dses_workbench.py'
 $ConfigDir  = Join-Path $env:APPDATA 'DSES_Analyzer'
 $ConfigFile = Join-Path $ConfigDir 'radioconda_root.txt'
 

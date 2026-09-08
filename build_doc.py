@@ -1,7 +1,7 @@
 """Build a DSES-styled PDF from a Markdown source (e.g. Installing.md).
 
 The deliverable is the PDF:
-    DSES_RFI_Spectrum_Analyzer_Installation.pdf
+    DSES_Radio_Astronomy_Workbench_Installation.pdf
 
 Internally the document is rendered to a temporary .docx (python-docx, styled
 to match the DSES house template — margins, title color, Heading 1
@@ -116,8 +116,8 @@ def _smartify_line(line: str, dq_state: dict) -> str:
 # Defaults for the install guide; CLI options can override. Used as module-
 # level constants because the cover-page / header builders read them.
 SRC = Path("Installing.md")
-DST_PDF  = Path("DSES_RFI_Spectrum_Analyzer_Installation.pdf")
-DOC_TITLE    = "DSES Spectrum Analyzer"
+DST_PDF  = Path("DSES_Radio_Astronomy_Workbench_Installation.pdf")
+DOC_TITLE    = "DSES Radio Astronomy Workbench"
 DOC_SUBTITLE = "Installation Guide"
 DOC_VERSION  = "v1.1.6"
 DOC_AUTHOR   = "Richard M Hambly (K0GD)"
@@ -395,7 +395,7 @@ def add_cover_page(doc):
         doc.add_paragraph()
 
     # If the project ships a PNG icon, drop it on the cover as a small mark.
-    icon_path = Path('icons/dses_sa.png')
+    icon_path = Path('icons/dses_workbench.png')
     if icon_path.exists():
         p = doc.add_paragraph()
         p.alignment = WD_ALIGN_PARAGRAPH.CENTER

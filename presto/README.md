@@ -1,9 +1,9 @@
-# PRESTO / TEMPO / TEMPO2 for the DSES Spectrum Analyzer (Windows)
+# PRESTO / TEMPO / TEMPO2 for the DSES Radio Astronomy Workbench (Windows)
 
 PRESTO (Scott Ransom's pulsar toolkit), TEMPO, and TEMPO2 are **Linux/Unix-only**
 — there is no native Windows build and no Windows conda package. This folder lets
 a Windows machine run them in a Linux userland (WSL2 Ubuntu, or a VMware/native
-Ubuntu VM) and lets the Spectrum Analyzer invoke them on its `.fil` recordings.
+Ubuntu VM) and lets the Workbench invoke them on its `.fil` recordings.
 
 ## Files
 
@@ -26,7 +26,7 @@ Ubuntu VM) and lets the Spectrum Analyzer invoke them on its `.fil` recordings.
 
 1. **(admin)** Enable WSL: `wsl --install`, then reboot. (Or install Ubuntu in
    VMware Workstation.)
-2. **In Ubuntu:** `bash /mnt/c/Users/rick/Documents/DSES/Science/Spectrum_Analyzer_PY/presto/build_presto.sh`
+2. **In Ubuntu:** `bash /mnt/c/Users/rick/Documents/DSES/Science/DSES_Workbench/presto/build_presto.sh`
    (~10–20 min).
 3. **From Windows:** `python presto\presto_bridge.py "<path>\obs.fil"` → prints
    the SIGPROC header. No args → an environment report.

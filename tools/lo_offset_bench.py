@@ -42,7 +42,7 @@ _ensure_uhd_images()
 
 from gnuradio import gr, blocks, uhd          # noqa: E402
 
-import dses_spectrum_analyzer as sa           # noqa: E402
+import dses_workbench as sa           # noqa: E402
 
 RATE = 2e6
 FREQ = 1420.406e6

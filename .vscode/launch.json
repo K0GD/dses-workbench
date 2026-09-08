@@ -2,10 +2,10 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Run dses_spectrum_analyzer.py",
+      "name": "Run dses_workbench.py",
       "type": "debugpy",
       "request": "launch",
-      "program": "${workspaceFolder}/dses_spectrum_analyzer.py",
+      "program": "${workspaceFolder}/dses_workbench.py",
       "console": "integratedTerminal",
       "justMyCode": true,
       "cwd": "${workspaceFolder}"

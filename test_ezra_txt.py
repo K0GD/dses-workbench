@@ -24,7 +24,7 @@ tmp = tempfile.mktemp(suffix=".txt")
 w = EzraTxtWriter(tmp, lat_deg=38.3808, lon_deg=-103.156, amsl=4400.0,
                   site_name="DSES", freq_min_mhz=1414.4, freq_max_mhz=1422.4,
                   bin_qty=256, az_deg=180, el_deg=45, gain_text="40",
-                  provenance="DSES_Spectrum_Analyzer test")
+                  provenance="DSES_Workbench test")
 w.write_row(np.full(256, 1e-10),
             utc=datetime(2026, 8, 2, 12, 0, 0, tzinfo=timezone.utc))
 w.close()
@@ -58,7 +58,7 @@ w = EzraTxtWriter(ezra_unique_path(rdir, "DSES", start),
                   lat_deg=38.3808, lon_deg=-103.156, amsl=4400.0,
                   site_name="DSES", freq_min_mhz=1414.4, freq_max_mhz=1422.4,
                   bin_qty=64, az_deg=0, el_deg=87, gain_text="40",
-                  provenance="DSES_Spectrum_Analyzer test",
+                  provenance="DSES_Workbench test",
                   roll_daily=True, roll_prefix="DSES")
 row = np.full(64, 1e-10)
 for ts in (start,                                              # day 1

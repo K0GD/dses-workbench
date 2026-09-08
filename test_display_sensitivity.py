@@ -19,7 +19,7 @@ from PySide6.QtCore import QCoreApplication
 
 app = QCoreApplication([])
 
-import dses_spectrum_analyzer as A
+import dses_workbench as A
 
 rng = np.random.default_rng(42)
 N = 1024
