@@ -741,6 +741,24 @@ menu bar!) + drift-scan box test (dock behavior on headless Openbox/xrdp
       catch scintillation maxima, wider capture BW if the feed allows, and
       record only after the v1.1.7 overflow/gap-padding fix ships.
 
+- [ ] **build_doc.py: port the Windows PDF step to PDFMaker ("Save as Adobe
+      PDF") — Rick, 2026-09-08.** Today build_doc prints Word -> PostScript
+      -> acrodist.exe (the Distiller printer path). It failed twice on
+      2026-09-08: a stale pywin32 gen_py cache (CLSIDToPackageMap), then
+      a modal "Adobe PDF" dialog because the printer's "Rely on system
+      fonts only" option had been re-enabled — the build hung silently
+      with an orphaned hidden WINWORD, and only a Win32 window-text dump
+      revealed why. DOCUMENT_STANDARDS.md §8.2 already names Word's
+      "Save as Adobe PDF" (the Acrobat PDFMaker add-in) as the PREFERRED
+      export (validated 23-Aug-2026: subset-embedded house fonts,
+      selectable text, no printer, no Distiller, no printer-preference
+      dependency). Port: drive PDFMaker from Word COM instead of
+      PrintOut/acrodist, keep the printer path as the fallback, keep the
+      pypdf verification (extractable chars high, images ~0, subsetted
+      MinionPro/MyriadPro/SourceCodePro), and update §8.2's "reference
+      implementation: build_doc.py" pointer. Both dev machines: the Mac
+      path (LibreOffice) is untouched. Small tooling item; do it before
+      the next docs-heavy release (the Observer's Guide).
 - [ ] Website version of the Haswell trip report (derive from the finished
       `.docx`, do not rebuild — see CLAUDE.md handoff notes)
 - [ ] **On-site computer upgrade (hardware, not app):** replace the
