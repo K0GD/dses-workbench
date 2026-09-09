@@ -741,6 +741,22 @@ menu bar!) + drift-scan box test (dock behavior on headless Openbox/xrdp
       catch scintillation maxima, wider capture BW if the feed allows, and
       record only after the v1.1.7 overflow/gap-padding fix ships.
 
+- [ ] **In-place update: offer to refresh the desktop launcher (Rick,
+      2026-09-08, from the 1.4.0 rollout).** Today only the "Install a new
+      copy" path creates a shortcut; an in-place update leaves the existing
+      Windows .lnk / macOS .app / Linux .desktop alone. That is safe (they
+      run launcher.*, which starts whatever is installed) but it means a
+      product rename or icon change never reaches the desktop until the
+      user runs install-shortcut.* by hand — both dev machines needed that
+      manual step for 1.4.0. Proposal: after a successful in-place install,
+      a checkbox/prompt "Refresh the desktop shortcut" (default ON when the
+      shipped APP_NAME or icon differs from the installed one, else OFF)
+      that runs install-shortcut.ps1 / install-shortcut.command /
+      _make_linux_desktop_entry with NO version suffix, then offers to
+      remove the old-named launcher if its name differs. Needs the
+      installer to know the pre-update APP_NAME (read it from the backed-up
+      module in .dses_backup, or persist it in settings.ini). Keep the
+      new-copy behavior (suffixed, side-by-side) unchanged.
 - [ ] **build_doc.py: port the Windows PDF step to PDFMaker ("Save as Adobe
       PDF") — Rick, 2026-09-08.** Today build_doc prints Word -> PostScript
       -> acrodist.exe (the Distiller printer path). It failed twice on
