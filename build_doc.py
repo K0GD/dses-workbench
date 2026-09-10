@@ -636,6 +636,18 @@ def add_table(doc, header_row, body_rows, widths_in=None):
             cell = table.rows[1 + i].cells[j]
             cell.text = ''
             add_runs(cell.paragraphs[0], cell_text)
+    # Word keeps consecutive rows together when every paragraph of a row
+    # carries keep-with-next. The header row always keeps with the first body
+    # row (no orphaned header at a page foot); a short table keeps whole.
+    # Must run AFTER the cell text is written: `cell.text = ...` replaces the
+    # cell's paragraphs and would discard the flag (found 2026-09-10).
+    n_rows = len(table.rows)
+    keep_whole = len(body_rows) <= 10
+    for r_idx, row in enumerate(table.rows):
+        if r_idx < n_rows - 1 and (r_idx == 0 or keep_whole):
+            for cell in row.cells:
+                for para in cell.paragraphs:
+                    para.paragraph_format.keep_with_next = True
 
 
 def parse_table_block(lines, start):
