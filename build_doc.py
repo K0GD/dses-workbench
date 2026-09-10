@@ -608,6 +608,12 @@ def add_table(doc, header_row, body_rows, widths_in=None):
     page the table spans (Rick, 2026-09-10). `widths_in` (list of inches,
     one per column) fixes the column widths; without it Word autofits."""
     cols = len(header_row)
+    # A markdown table whose header cells are all blank ("| | |") is a
+    # headerless key/value block (the document-control table): render it
+    # without the empty first row (Rick, 2026-09-10).
+    headerless = all(not h.strip() for h in header_row)
+    if headerless:
+        header_row, body_rows = body_rows[0], body_rows[1:]
     table = doc.add_table(rows=1 + len(body_rows), cols=cols)
     table.style = 'Light Grid Accent 1'
     if widths_in:
@@ -627,9 +633,10 @@ def add_table(doc, header_row, body_rows, widths_in=None):
         cell = table.rows[0].cells[j]
         cell.text = ''
         add_runs(cell.paragraphs[0], cell_text)
-        for run in cell.paragraphs[0].runs:
-            run.bold = True
-            run.font.name = FONT_HEAD
+        if not headerless:
+            for run in cell.paragraphs[0].runs:
+                run.bold = True
+                run.font.name = FONT_HEAD
     for i, row in enumerate(body_rows):
         for j in range(cols):
             cell_text = row[j] if j < len(row) else ''
