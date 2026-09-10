@@ -344,7 +344,9 @@ def collect_headings(lines):
 def add_table_of_contents(doc, headings):
     """A static, pre-populated outline of the document's headings.
 
-    We deliberately do NOT use Word's TOC *field*: it renders as placeholder
+    Used when toc_mode == 'static' (the default off Windows). The Windows
+    default is add_toc_field(), a real TOC field that Word evaluates.
+    Rationale for keeping this path: Word's TOC *field* renders as placeholder
     text until an application re-evaluates it, and on macOS/Linux the
     LibreOffice conversion path can't update it (and LibreOffice's embedded
     Python is launch-constraint-blocked from scripting it). A static outline
@@ -367,6 +369,88 @@ def add_table_of_contents(doc, headings):
         if level == base:
             run.font.bold = True
 
+    add_page_break(doc)
+
+
+def add_banner_paragraph(doc, text):
+    """A paragraph with the Heading-1 look (white on the teal banner) but WITHOUT
+    the Heading 1 style, so a Word TOC field does not list it. Used for the
+    document title in the body and for the "Contents" heading itself."""
+    p = doc.add_paragraph()
+    run = p.add_run(text)
+    run.font.name = FONT_HEAD
+    run.font.size = Pt(11)
+    run.font.bold = True
+    run.font.color.rgb = H1_TEXT_RGB
+    p.paragraph_format.space_before = Pt(12)
+    p.paragraph_format.space_after = Pt(6)
+    p.paragraph_format.keep_with_next = True
+    set_paragraph_shading(p, H1_BG_HEX)
+    return p
+
+
+def _ensure_toc_styles(doc):
+    """Define Word's built-in 'toc 1..3' paragraph styles in the house look:
+    level 1 Myriad bold, lower levels regular, right tab with dot leader at
+    the text width so the page numbers line up (DOCUMENT_STANDARDS TOC rule).
+    Word applies these when it populates the TOC field. The Hyperlink
+    character style is pinned to the house font (the \\h switch makes the
+    entries hyperlinks) so no theme font leaks into the PDF."""
+    from docx.enum.style import WD_STYLE_TYPE
+    from docx.enum.text import WD_TAB_LEADER
+    text_width = Inches(8.5 - PAGE_MARGINS['left'] - PAGE_MARGINS['right'])
+    for lvl in (1, 2, 3):
+        name = f'toc {lvl}'
+        try:
+            st = doc.styles[name]
+        except KeyError:
+            st = doc.styles.add_style(name, WD_STYLE_TYPE.PARAGRAPH)
+        st.base_style = doc.styles['Normal']
+        st.font.name = FONT_HEAD
+        st.font.size = Pt(10.5 if lvl == 1 else 10)
+        st.font.bold = (lvl == 1)
+        st.font.color.rgb = RGBColor(0x1A, 0x1A, 0x1A)
+        pf = st.paragraph_format
+        pf.left_indent = Pt(14 * (lvl - 1))
+        pf.space_before = Pt(5 if lvl == 1 else 0)
+        pf.space_after = Pt(2)
+        pf.tab_stops.clear_all()
+        pf.tab_stops.add_tab_stop(text_width, WD_TAB_ALIGNMENT.RIGHT,
+                                  WD_TAB_LEADER.DOTS)
+    try:
+        hl = doc.styles['Hyperlink']
+    except KeyError:
+        hl = doc.styles.add_style('Hyperlink', WD_STYLE_TYPE.CHARACTER)
+    hl.font.name = FONT_HEAD
+    hl.font.color.rgb = RGBColor(0x1A, 0x1A, 0x1A)
+    hl.font.underline = False
+
+
+def add_toc_field(doc):
+    """Insert a real Word TOC field (levels 1-3, hyperlinked, page numbers).
+    It renders as a placeholder line until an application evaluates it:
+    the Windows/Word conversion path does that (Fields.Update twice), so the
+    PDF carries live page numbers. LibreOffice does NOT evaluate it, which
+    is why the static outline (add_table_of_contents) remains the default
+    off Windows."""
+    add_banner_paragraph(doc, "Contents")
+    _ensure_toc_styles(doc)
+    p = doc.add_paragraph()
+    run = p.add_run()
+    begin = OxmlElement('w:fldChar')
+    begin.set(qn('w:fldCharType'), 'begin')
+    begin.set(qn('w:dirty'), 'true')
+    instr = OxmlElement('w:instrText')
+    instr.set(qn('xml:space'), 'preserve')
+    instr.text = ' TOC \\o "1-3" \\h \\z '
+    sep = OxmlElement('w:fldChar')
+    sep.set(qn('w:fldCharType'), 'separate')
+    txt = OxmlElement('w:t')
+    txt.text = "Table of contents: open in Word and update fields (F9)."
+    end = OxmlElement('w:fldChar')
+    end.set(qn('w:fldCharType'), 'end')
+    for el in (begin, instr, sep, txt, end):
+        run._r.append(el)
     add_page_break(doc)
 
 
@@ -533,8 +617,15 @@ def parse_table_block(lines, start):
 # Main parser
 # ---------------------------------------------------------------------------
 
+# TOC rendering: 'field' = a real Word TOC field with page numbers (needs the
+# Word conversion path to evaluate it); 'static' = pre-populated outline that
+# renders anywhere (LibreOffice cannot evaluate the field). Default by platform.
+TOC_MODE_DEFAULT = 'field' if sys.platform == 'win32' else 'static'
+
+
 def md_to_docx(src_path: Path, dst_path: Path, cover: bool = True,
-               toc: bool = True):
+               toc: bool = True, toc_mode: str = None):
+    toc_mode = toc_mode or TOC_MODE_DEFAULT
     text = src_path.read_text(encoding='utf-8')
     text = smartify_quotes(text)
     lines = text.split('\n')
@@ -544,14 +635,25 @@ def md_to_docx(src_path: Path, dst_path: Path, cover: bool = True,
     apply_heading_styles(doc)
     if cover:
         add_cover_page(doc)
-    if toc:
+    if toc and toc_mode == 'field':
+        add_toc_field(doc)
+    elif toc:
         add_table_of_contents(doc, collect_headings(lines))
 
     # Style a Heading-1 paragraph so it gets the teal banner. We do this by
     # post-processing each Heading-1 paragraph after add_heading() rather
     # than wiring it into the global style (which would also paint the TOC,
     # the cover page, etc., with shading).
+    # The document's first level-1 heading is its title (already on the
+    # cover): render it as a banner paragraph WITHOUT the Heading 1 style so
+    # a TOC field does not list it (the static outline drops it likewise).
+    seen_h1 = {'n': 0}
+
     def add_h1_banner(text):
+        seen_h1['n'] += 1
+        if cover and seen_h1['n'] == 1:
+            add_banner_paragraph(doc, text)
+            return
         p = doc.add_heading(text, level=1)
         set_paragraph_shading(p, H1_BG_HEX)
 
@@ -934,6 +1036,12 @@ def main():
                          "instruction sheets).")
     ap.add_argument('--no-toc', action='store_true',
                     help="Skip the table of contents.")
+    ap.add_argument('--toc', choices=['field', 'static'], default=None,
+                    dest='toc_mode',
+                    help="TOC style: 'field' = real Word TOC field with page "
+                         "numbers (evaluated by Word; the default on Windows), "
+                         "'static' = pre-populated outline without page numbers "
+                         "(renders anywhere; the default off Windows).")
     ap.add_argument('--force', action='store_true',
                     help="Overwrite the --docx target even if git reports it "
                          "modified (i.e., discard hand-made Word edits).")
@@ -983,7 +1091,8 @@ def main():
                   "overwrite anyway.", file=sys.stderr)
             sys.exit(3)
 
-    md_to_docx(src, docx_out, cover=not args.no_cover, toc=not args.no_toc)
+    md_to_docx(src, docx_out, cover=not args.no_cover, toc=not args.no_toc,
+               toc_mode=args.toc_mode)
     try:
         convert_docx_to_pdf(docx_out, pdf_out)
     except Exception as exc:
