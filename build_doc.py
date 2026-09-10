@@ -405,6 +405,14 @@ def _ensure_toc_styles(doc):
             st = doc.styles[name]
         except KeyError:
             st = doc.styles.add_style(name, WD_STYLE_TYPE.PARAGRAPH)
+        # Word recognises its built-in TOC styles by style ID 'TOC1'..'TOC3'
+        # (python-docx derives 'toc1'); with the wrong ID Word treats ours as
+        # custom, renames it 'TOC 11', and formats the entries with its own
+        # defaults (theme fonts leaked into the PDF, 2026-09-10).
+        st.element.set(qn('w:styleId'), f'TOC{lvl}')
+        # python-docx marks added styles customStyle=1; a custom style with a
+        # built-in name is exactly what makes Word rename it. Drop the flag.
+        st.element.attrib.pop(qn('w:customStyle'), None)
         st.base_style = doc.styles['Normal']
         st.font.name = FONT_HEAD
         st.font.size = Pt(10.5 if lvl == 1 else 10)
@@ -421,6 +429,7 @@ def _ensure_toc_styles(doc):
         hl = doc.styles['Hyperlink']
     except KeyError:
         hl = doc.styles.add_style('Hyperlink', WD_STYLE_TYPE.CHARACTER)
+        hl.element.attrib.pop(qn('w:customStyle'), None)
     hl.font.name = FONT_HEAD
     hl.font.color.rgb = RGBColor(0x1A, 0x1A, 0x1A)
     hl.font.underline = False
@@ -530,6 +539,23 @@ def apply_heading_styles(doc):
     normal = doc.styles['Normal']
     normal.font.name = FONT_BODY
     normal.font.size = Pt(11)
+
+    # The default template's heading styles name the THEME fonts
+    # (asciiTheme="majorHAnsi" = Cambria) and theme attributes take precedence
+    # over the explicit face python-docx's font.name sets. Word then copies
+    # the heading paragraph-mark formatting into the TOC entries, so Cambria
+    # leaked into the PDF's embedded fonts (2026-09-10). Strip the theme
+    # attributes and pin every script slot to the house heading face.
+    for st in (h1, h2, h3):
+        rpr = st.element.get_or_add_rPr()
+        rf = rpr.find(qn('w:rFonts'))
+        if rf is None:
+            rf = OxmlElement('w:rFonts')
+            rpr.insert(0, rf)
+        for attr in ('asciiTheme', 'hAnsiTheme', 'eastAsiaTheme', 'cstheme'):
+            rf.attrib.pop(qn(f'w:{attr}'), None)
+        for attr in ('ascii', 'hAnsi', 'eastAsia', 'cs'):
+            rf.set(qn(f'w:{attr}'), FONT_HEAD)
 
     # Also pin the DOCUMENT DEFAULTS (w:docDefaults), not just the Normal
     # style: runless paragraphs (spacers, image anchors, table paragraph
@@ -986,6 +1012,16 @@ def _convert_docx_to_pdf_word(docx_path: Path, pdf_path: Path):
                         doc.TablesOfContents(1).Update()
                 except Exception:
                     pass
+            # Word writes each TOC entry's paragraph mark in the THEME font
+            # (asciiTheme=minorHAnsi, 12 pt) regardless of the toc styles, and
+            # that font then rides into the PDF's embedded-font list (Cambria,
+            # 2026-09-10). Pin the whole TOC range to the house heading face;
+            # sizes and the level-1 bold still come from the toc styles.
+            try:
+                if doc.TablesOfContents.Count > 0:
+                    doc.TablesOfContents(1).Range.Font.Name = FONT_HEAD
+            except Exception:
+                pass
             # Save the .docx so the populated TOC persists for future opens
             # in Word (otherwise the TOC reverts to the placeholder).
             doc.Save()
