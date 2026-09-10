@@ -602,10 +602,27 @@ def add_code_block(doc, lines):
         run.font.size = Pt(9.5)
 
 
-def add_table(doc, header_row, body_rows):
+def add_table(doc, header_row, body_rows, widths_in=None):
+    """Markdown table -> Word table. Rows are marked cantSplit (a row never
+    breaks across a page) and the header row repeats at the top of every
+    page the table spans (Rick, 2026-09-10). `widths_in` (list of inches,
+    one per column) fixes the column widths; without it Word autofits."""
     cols = len(header_row)
     table = doc.add_table(rows=1 + len(body_rows), cols=cols)
     table.style = 'Light Grid Accent 1'
+    if widths_in:
+        table.autofit = False
+        for j, w in enumerate(widths_in[:cols]):
+            table.columns[j].width = Inches(w)
+            for row in table.rows:
+                row.cells[j].width = Inches(w)
+    for r_idx, row in enumerate(table.rows):
+        tr_pr = row._tr.get_or_add_trPr()
+        cant = OxmlElement('w:cantSplit')
+        tr_pr.append(cant)
+        if r_idx == 0:
+            hdr = OxmlElement('w:tblHeader')
+            tr_pr.append(hdr)
     for j, cell_text in enumerate(header_row):
         cell = table.rows[0].cells[j]
         cell.text = ''
@@ -685,6 +702,7 @@ def md_to_docx(src_path: Path, dst_path: Path, cover: bool = True,
 
     i = 0
     prev_was_table = False          # for post-table paragraph spacing
+    pending_widths = None           # from a '<!-- widths: ... -->' comment
     while i < len(lines):
         line = lines[i]
         stripped = line.strip()
@@ -705,10 +723,22 @@ def md_to_docx(src_path: Path, dst_path: Path, cover: bool = True,
             add_code_block(doc, code_lines)
             continue
 
+        # Single-line HTML comments are authoring notes, except the table
+        # width hint '<!-- widths: 1.2,3.0,2.3 -->' (inches per column) that
+        # applies to the next table.
+        m_c = re.match(r'^<!--\s*(.*?)\s*-->$', stripped)
+        if m_c:
+            m_w = re.match(r'widths:\s*([\d.,\s]+)$', m_c.group(1))
+            if m_w:
+                pending_widths = [float(x) for x in m_w.group(1).split(',')
+                                  if x.strip()]
+            i += 1; continue
+
         if stripped.startswith('|') and i + 1 < len(lines) \
                 and re.match(r'^\s*\|[\s\-:|]+\|\s*$', lines[i + 1]):
             header, body, i = parse_table_block(lines, i)
-            add_table(doc, header, body)
+            add_table(doc, header, body, widths_in=pending_widths)
+            pending_widths = None
             prev_was_table = True
             continue
 
@@ -806,7 +836,13 @@ def md_to_docx(src_path: Path, dst_path: Path, cover: bool = True,
         p = doc.add_paragraph()
         if after_table:
             p.paragraph_format.space_before = Pt(6)
-        add_runs(p, ' '.join(s.strip() for s in para_lines))
+        para_text = ' '.join(s.strip() for s in para_lines)
+        add_runs(p, para_text)
+        # A lead-in paragraph ("The decisions are:") stays with the list,
+        # table, or code block it introduces instead of hanging at the foot
+        # of a page (Rick, 2026-09-10).
+        if para_text.rstrip().endswith(':'):
+            p.paragraph_format.keep_with_next = True
 
     doc.save(dst_path)
     print(f"Wrote {dst_path} ({dst_path.stat().st_size // 1024} KB)")
