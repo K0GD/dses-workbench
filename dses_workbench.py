@@ -135,6 +135,7 @@ import shutil
 import subprocess
 
 from argparse import ArgumentParser
+import calendar
 from datetime import datetime
 from pathlib import Path
 import configparser
@@ -3024,6 +3025,26 @@ period, DM, and how long each stays up. Selecting one fills the recording
 RA/Dec for the <code>.fil</code> header — better than the position the app
 otherwise infers from the name.</p>
 <ul>
+<li><b>Plan for a date and time</b>: the table normally shows the sky
+<i>now</i>. Tick <b>Plan for</b> — or just edit the date/time box, or use the
+<code>-1 d</code> / <code>-1 h</code> / <code>+1 h</code> / <code>+1 d</code>
+steps — and everything is recomputed for that instant instead: altitude,
+azimuth, time above the mask, next window, and which rows count as viable.
+Read the box as <b>UTC</b> (the convention in every file this app writes) or
+as your <b>Local</b> clock; switching keeps the same instant. Any date works,
+past as well as future, so you can also ask what was overhead when an old
+recording was made. The window title, the copied-table header line and the
+readout beside the box all say <b>PLANNED</b> so a planned table is never
+mistaken for the live sky, and <b>Now</b> puts it back. The readout also gives
+the site's <b>local sidereal time</b> — a source transits when LST equals its
+right ascension.</li>
+<li><b>Hover for an explanation</b>: every column header explains what the
+column is, and <i>every individual cell</i> explains what its own value means
+— the delay this pulsar's DM produces across the band you are tuned to and
+inside one channel, when this source next crosses the meridian and how high,
+the clock time it crosses the elevation mask, which catalog anchors a flux
+estimate came from, and what went into its Min&nbsp;rec. If a number looks
+surprising, hover it before believing it.</li>
 <li><b>Search</b>: type part of a name (<code>b0329</code>,
 <code>J0332</code>), or filter numerically — <code>dm&lt;30</code>,
 <code>p&lt;0.1</code> (seconds), <code>flux&gt;10</code>,
@@ -3057,9 +3078,10 @@ high-DM sources are kept high, where scattering has not destroyed the
 pulse. Approximate physics — the band to <i>try first</i>, not a
 guarantee.</li>
 <li><b>Copy for reports</b>: Ctrl+C copies the selected rows (with a
-header line) as tab-separated text that pastes cleanly into email, Excel,
-or Word; right-click offers Copy cell / Copy rows / Copy whole
-table.</li>
+header line, and a comment line naming the site, the instant, the mask and
+the tuning the numbers came from) as tab-separated text that pastes cleanly
+into email, Excel, or Word; right-click offers Copy cell / Copy rows / Copy
+whole table.</li>
 <li><b>What do I need?</b>: solves the dispersion arithmetic backwards for
 the selected source — which of the dish's bands (and how much bandwidth)
 would make its <i>DM measurable</i>, and what to set in the self-test
@@ -4710,7 +4732,107 @@ def _restore_icon():
     return QtGui.QIcon(pm)
 
 
-class _NumericItem(QtWidgets.QTableWidgetItem):
+# Planner table: column label + the explanation you get by hovering the
+# header. One entry per column so labels and help can never drift apart;
+# the per-CELL tooltips, which add this row's own numbers, are built lazily
+# by PulsarPlannerDialog._cell_tip (Rick, 2026-09-10: "hover over a header
+# or an individual cell and get an explanation of what you are viewing").
+PLANNER_COLUMNS = (
+    ("Pulsar",
+     "ATNF psrcat J2000 designation. A star marks a magnetar (psrcat TYPE\n"
+     "AXP/SGR). Choosing a row loads the name into the recording Source\n"
+     "field and hands the recorder that pulsar's EXACT catalog RA/Dec for\n"
+     "the .fil header, instead of the approximate position the app would\n"
+     "otherwise parse out of the name."),
+    ("B name",
+     "The older B1950-based designation, when the pulsar has one (B0329+54\n"
+     "is the same object as J0332+5434). Either name works in the Search\n"
+     "box and as a recording Source."),
+    ("Alt °",
+     "Altitude above the horizon at the reference time, in degrees, and\n"
+     "what the elevation mask is compared against. Apparent place\n"
+     "(precession, nutation, aberration) when astropy is installed; no\n"
+     "refraction and no mount corrections, so it is where the SKY is, not\n"
+     "what an encoder will read."),
+    ("Az °",
+     "Azimuth of the source at the reference time: compass bearing, north\n"
+     "= 0°, east = 90°, south = 180°, west = 270°. Sky position only —\n"
+     "your mount's own pointing corrections still apply on top."),
+    ("P0 (s)",
+     "Catalog rotation period in seconds (barycentric) — the period you\n"
+     "fold at. PRESTO's topocentric best period differs from it by the\n"
+     "Earth's own motion, up to about one part in 10,000."),
+    ("DM",
+     "Dispersion measure in pc cm-3: the column of free electrons to the\n"
+     "source, which delays low frequencies more than high ones as 1/f².\n"
+     "Hover a cell for the delay it produces across the band you are\n"
+     "tuned to and inside one of your channels — a DM whose sweep is much\n"
+     "smaller than the pulse cannot be measured, only assumed."),
+    ("Flux (mJy)",
+     "Period-averaged flux density — the sort key for this table and the\n"
+     "input to Min rec. Either the nearest catalog band quoted verbatim\n"
+     "(S400 below ~900 MHz, S1400 above) or, with “Flux at tuned freq” on,\n"
+     "a power-law estimate at the frequency you are tuned to, labeled\n"
+     "est@MHz. Pulsar flux scintillates: factors of a few between nights\n"
+     "are normal. A dash means the catalog has no flux for this source —\n"
+     "not that the source is faint."),
+    ("Min rec",
+     "Radiometer minimum recording length for an 8-sigma folded\n"
+     "detection at the current sample rate, using the site SEFD\n"
+     "([site] sefd_jy — measured on Cygnus A at 1420 MHz) and the\n"
+     "catalog W50 pulse width (5% duty assumed when absent). An aid,\n"
+     "not a gate: one SEFD serves every band, so low-band numbers\n"
+     "read optimistic, and RFI / scintillation / pointing loss add\n"
+     "on top."),
+    ("Best f",
+     "The dish band (from the Tuning presets) where this source\n"
+     "detects FASTEST: minimum estimated time-to-8-sigma over 408,\n"
+     "680.5, 1299.5, 1422, 1666 and 2304 MHz, using flux scaled to\n"
+     "each band, SEFD scaled by sky temperature (galactic synchrotron\n"
+     "brightens the sky at low frequency), and pulse broadening from\n"
+     "channel DM smearing + empirical interstellar scattering (which\n"
+     "smears high-DM sources into invisibility at low bands). The\n"
+     "physics is approximate — treat it as which band to TRY first,\n"
+     "not a guarantee."),
+    ("Time left",
+     "How long the source stays above the elevation mask, counted from the\n"
+     "reference time; “circumpolar” means it never drops below the mask in\n"
+     "the next 24 h. A recording that outlasts this ends up staring at\n"
+     "empty sky — the app warns about that at record time as well."),
+    ("Next window",
+     "For a source below the mask: how long until it clears the mask, and\n"
+     "how long the window then lasts. Windows open 3 m 56 s earlier every\n"
+     "day, so something that just misses tonight is easier tomorrow."),
+)
+
+
+class _TipItem(QtWidgets.QTableWidgetItem):
+    """Table cell whose tooltip is built ON DEMAND by a callable.
+
+    Rick, 2026-09-10: every cell should explain what you are looking at.
+    Built eagerly that is ~50,000 strings for a full catalog listing (11
+    columns x 4,400 rows) on every refresh, nearly all of them never read.
+    Qt asks for `ToolTipRole` only when the pointer actually rests on a
+    cell, so overriding `data()` moves the whole cost to the hover — and
+    the answer is cached, so re-hovering the same cell is free."""
+
+    def __init__(self, text, tip=None):
+        super().__init__(text)
+        self._tip_fn = tip
+        self._tip_text = None
+
+    def data(self, role):
+        if role == Qt.ToolTipRole and self._tip_fn is not None:
+            if self._tip_text is None:
+                try:
+                    self._tip_text = self._tip_fn() or ""
+                except Exception as exc:      # a tooltip must never crash
+                    self._tip_text = f"(no explanation available: {exc})"
+            return self._tip_text
+        return super().data(role)
+
+
+class _NumericItem(_TipItem):
     """Table cell that DISPLAYS a formatted string but SORTS numerically.
 
     QTableWidgetItem's default comparison uses the display text, so
@@ -4718,8 +4840,8 @@ class _NumericItem(QtWidgets.QTableWidgetItem):
     separately and overriding __lt__ keeps the pretty text and the right
     order."""
 
-    def __init__(self, text, value):
-        super().__init__(text)
+    def __init__(self, text, value, tip=None):
+        super().__init__(text, tip)
         self._value = float(value)
         self.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
@@ -4738,15 +4860,27 @@ class PulsarPlannerDialog(QtWidgets.QDialog):
     an approximate position out of the pulsar's name.
     """
 
-    def __init__(self, rows, site, center_hz, parent=None, rate_hz=2e6):
+    def __init__(self, rows, site, center_hz, parent=None, rate_hz=2e6,
+                 nchan=2048):
         super().__init__(parent)
         self.setWindowTitle("Pulsars in view")
-        self.resize(980, 520)
+        self.resize(1080, 600)
         self.selected = None
         self._rows = rows
         self._site = site
         self._center_hz = center_hz
         self._rate_hz = float(rate_hz or 2e6)
+        self._nchan = max(1, int(nchan or 2048))
+        self._ref_ts_used = time.time()
+        self._setting_when = False
+
+        # A full recompute costs ~2.5 s for a 4,400-row catalog (one astropy
+        # transform plus a stepped set-time search per row), and the time and
+        # mask controls both fire on every keystroke — so coalesce them.
+        self._debounce = QTimer(self)
+        self._debounce.setSingleShot(True)
+        self._debounce.setInterval(350)
+        self._debounce.timeout.connect(self._refresh)
 
         v = QtWidgets.QVBoxLayout(self)
         top = QtWidgets.QHBoxLayout()
@@ -4756,7 +4890,11 @@ class PulsarPlannerDialog(QtWidgets.QDialog):
         self._mask.setDecimals(1)
         self._mask.setSuffix(" °")
         self._mask.setValue(site.get("mask_deg", 2.0))
-        self._mask.valueChanged.connect(self._refresh)
+        self._mask.setToolTip(
+            "The lowest elevation you are willing to observe at. Sources\n"
+            "below it drop out of the list (or are marked below-mask), and\n"
+            "“Time left” counts down to this elevation, not to the horizon.")
+        self._mask.valueChanged.connect(self._schedule_refresh)
         top.addWidget(self._mask)
         top.addSpacing(12)
         self._magnetars = QtWidgets.QCheckBox("Include magnetars")
@@ -4764,13 +4902,13 @@ class PulsarPlannerDialog(QtWidgets.QDialog):
         self._magnetars.setToolTip(
             "Magnetars (psrcat TYPE AXP/SGR) usually have no catalog flux, so "
             "they would vanish under any flux sort. Kept visible by default.")
-        self._magnetars.toggled.connect(self._refresh)
+        self._magnetars.toggled.connect(self._schedule_refresh)
         top.addWidget(self._magnetars)
         self._show_below = QtWidgets.QCheckBox("Include below mask")
         self._show_below.setToolTip(
             "Also list sources that are not up yet, with when their next "
             "observing window opens and how long it lasts.")
-        self._show_below.toggled.connect(self._refresh)
+        self._show_below.toggled.connect(self._schedule_refresh)
         top.addWidget(self._show_below)
         self._flux_at_f = QtWidgets.QCheckBox("Flux at tuned freq")
         self._flux_at_f.setChecked(True)
@@ -4787,6 +4925,74 @@ class PulsarPlannerDialog(QtWidgets.QDialog):
         top.addWidget(self._summary)
         v.addLayout(top)
 
+        # --- reference time --------------------------------------------------
+        # Rick, 2026-09-10: the planner has to answer "what will be up when I
+        # get to the dish on Saturday evening", not only "what is up while I
+        # stand here". Every function in pulsar_planner already took a
+        # timestamp; this row is the control that was missing. It reads
+        # backwards too — point it at the start of an old recording to see
+        # what was overhead when the data was taken.
+        tr = QtWidgets.QHBoxLayout()
+        self._plan = QtWidgets.QCheckBox("Plan for:")
+        self._plan.setToolTip(
+            "Off: the table is the sky NOW.\n"
+            "On: the table is the sky at the date and time in the box —\n"
+            "altitude, azimuth, time above the mask, next window and\n"
+            "viability are all computed for that instant. Editing the time,\n"
+            "or using a step button, turns this on for you.")
+        self._plan.toggled.connect(self._schedule_refresh)
+        tr.addWidget(self._plan)
+        self._when = QtWidgets.QDateTimeEdit()
+        self._when.setDisplayFormat("yyyy-MM-dd  HH:mm")
+        self._when.setCalendarPopup(True)
+        self._when.setToolTip(
+            "The instant to plan for — any date, future or past. Type in it,\n"
+            "step a field with the arrow keys, or pick a date from the\n"
+            "calendar button. The sky repeats 3 m 56 s earlier each day\n"
+            "(sidereal drift), so a source that just misses tonight is\n"
+            "easier tomorrow.")
+        self._when.dateTimeChanged.connect(self._on_when_edited)
+        tr.addWidget(self._when)
+        self._tz = QtWidgets.QComboBox()
+        self._tz.addItems(["UTC", "Local"])
+        self._tz.setToolTip(
+            "How to read the box: UTC — the convention in every recording\n"
+            "header, ezRA file and fold this app writes — or this computer's\n"
+            "local clock. Switching keeps the same instant and merely\n"
+            "relabels it; tooltips name both clocks either way.")
+        self._tz_prev = True                    # box is showing UTC
+        self._tz.currentIndexChanged.connect(self._on_tz_changed)
+        tr.addWidget(self._tz)
+        for _label, _dh in (("-1 d", -24.0), ("-1 h", -1.0),
+                            ("+1 h", 1.0), ("+1 d", 24.0)):
+            _b = QtWidgets.QToolButton()
+            _b.setText(_label)
+            _b.setToolTip(f"Step the planned time by {_label}")
+            _b.clicked.connect(lambda _=False, d=_dh: self._step_time(d))
+            tr.addWidget(_b)
+        self._now_btn = QtWidgets.QPushButton("Now")
+        self._now_btn.setToolTip("Back to the live sky, and recompute")
+        self._now_btn.clicked.connect(self._reset_now)
+        tr.addWidget(self._now_btn)
+        tr.addSpacing(10)
+        self._time_note = QtWidgets.QLabel("")
+        self._time_note.setToolTip(
+            "The instant this whole table is computed for, on both clocks,\n"
+            "plus the site's local sidereal time. LST is what really says\n"
+            "where the sky is: a source crosses the meridian — its highest,\n"
+            "cleanest point — when LST equals its right ascension.")
+        tr.addWidget(self._time_note, 1)
+        v.addLayout(tr)
+        self._set_when(time.time())
+
+        # Keep the box and the LST readout live while they show "now", so
+        # that ticking "Plan for" starts from the current instant. Display
+        # only: the table is never recomputed behind the user's back.
+        self._clock = QTimer(self)
+        self._clock.setInterval(1000)
+        self._clock.timeout.connect(self._tick_clock)
+        self._clock.start()
+
         srch = QtWidgets.QHBoxLayout()
         srch.addWidget(QtWidgets.QLabel("Search:"))
         self._search = QtWidgets.QLineEdit()
@@ -4802,28 +5008,11 @@ class PulsarPlannerDialog(QtWidgets.QDialog):
         srch.addWidget(self._search, 1)
         v.addLayout(srch)
 
-        self._table = QtWidgets.QTableWidget(0, 11, self)
+        self._table = QtWidgets.QTableWidget(0, len(PLANNER_COLUMNS), self)
         self._table.setHorizontalHeaderLabels(
-            ["Pulsar", "B name", "Alt °", "Az °", "P0 (s)", "DM",
-             "Flux (mJy)", "Min rec", "Best f", "Time left", "Next window"])
-        self._table.horizontalHeaderItem(8).setToolTip(
-            "The dish band (from the Tuning presets) where this source\n"
-            "detects FASTEST: minimum estimated time-to-8-sigma over 408,\n"
-            "680.5, 1299.5, 1422, 1666 and 2304 MHz, using flux scaled to\n"
-            "each band, SEFD scaled by sky temperature (galactic synchrotron\n"
-            "brightens the sky at low frequency), and pulse broadening from\n"
-            "channel DM smearing + empirical interstellar scattering (which\n"
-            "smears high-DM sources into invisibility at low bands). The\n"
-            "tooltip physics is approximate — treat it as which band to TRY\n"
-            "first, not a guarantee.")
-        self._table.horizontalHeaderItem(7).setToolTip(
-            "Radiometer minimum recording length for an 8-sigma folded\n"
-            "detection at the current sample rate, using the site SEFD\n"
-            "([site] sefd_jy — measured on Cygnus A at 1420 MHz) and the\n"
-            "catalog W50 pulse width (5% duty assumed when absent). An aid,\n"
-            "not a gate: one SEFD serves every band, so low-band numbers\n"
-            "read optimistic, and RFI / scintillation / pointing loss add\n"
-            "on top.")
+            [c[0] for c in PLANNER_COLUMNS])
+        for _c, (_lbl, _tip) in enumerate(PLANNER_COLUMNS):
+            self._table.horizontalHeaderItem(_c).setToolTip(_tip)
         self._table.setSelectionBehavior(QtWidgets.QTableWidget.SelectRows)
         self._table.setSelectionMode(
             QtWidgets.QTableWidget.ExtendedSelection)
@@ -4839,10 +5028,12 @@ class PulsarPlannerDialog(QtWidgets.QDialog):
         v.addWidget(self._table, 1)
 
         note = QtWidgets.QLabel(
-            "Sorted by flux in the tuned band. Green rows are viable now: "
-            "up, and “Min rec” (the 8-σ radiometer estimate at the current "
-            "sample rate) fits inside “Time left”. Ctrl+C or right-click "
-            "copies rows/cells as text for reports.")
+            "Sorted by flux in the tuned band. Green rows are viable: up at "
+            "the reference time, with “Min rec” (the 8-σ radiometer estimate "
+            "at the current sample rate) fitting inside “Time left”. "
+            "<b>Hover any header or cell</b> for an explanation of what you "
+            "are looking at. Ctrl+C or right-click copies rows/cells as text "
+            "for reports.")
         note.setStyleSheet("color: gray;")
         note.setWordWrap(True)
         v.addWidget(note)
@@ -4863,6 +5054,163 @@ class PulsarPlannerDialog(QtWidgets.QDialog):
         v.addWidget(btns)
 
         self._refresh()
+
+    # -- reference time ----------------------------------------------------
+    #
+    # One instant drives the whole dialog: "now" while the Plan box is
+    # clear, otherwise whatever is in the date/time box. The box holds a
+    # bare wall clock and the UTC/Local combo says how to read it — the
+    # conversion is done with time.gmtime/calendar.timegm rather than
+    # QDateTime's time-zone API, which has moved twice across the Qt 6
+    # releases this app must run on (the Pi's radioconda PySide6 is older
+    # than this dev box's).
+
+    def _tz_utc(self):
+        return self._tz.currentText() == "UTC"
+
+    def _set_when(self, ts):
+        """Show an instant in the box without it counting as a user edit."""
+        st = time.gmtime(ts) if self._tz_utc() else time.localtime(ts)
+        self._setting_when = True
+        try:
+            self._when.setDateTime(QtCore.QDateTime(
+                QtCore.QDate(st.tm_year, st.tm_mon, st.tm_mday),
+                QtCore.QTime(st.tm_hour, st.tm_min, st.tm_sec)))
+        finally:
+            self._setting_when = False
+
+    def _ts_from_box(self, utc=None):
+        """The box's wall clock as a unix timestamp."""
+        utc = self._tz_utc() if utc is None else utc
+        q = self._when.dateTime()
+        d, t_ = q.date(), q.time()
+        parts = (d.year(), d.month(), d.day(),
+                 t_.hour(), t_.minute(), t_.second(), 0, 1, -1)
+        if utc:
+            return float(calendar.timegm(parts))
+        return float(time.mktime(parts))      # -1 lets mktime settle DST
+
+    def _ref_ts(self):
+        """The instant the table is computed for."""
+        return self._ts_from_box() if self._plan.isChecked() else time.time()
+
+    def _on_when_edited(self, *_):
+        """A hand-edited time means the user wants to plan — say so for
+        them rather than making them find the checkbox first."""
+        if self._setting_when:
+            return
+        if not self._plan.isChecked():
+            self._plan.setChecked(True)       # toggled -> _schedule_refresh
+        else:
+            self._schedule_refresh()
+
+    def _on_tz_changed(self, *_):
+        """Same instant, other clock: read the box in the zone it was
+        showing, then re-render it in the newly chosen one. No recompute —
+        tooltips name both clocks, so nothing in the table changes."""
+        ts = self._ts_from_box(utc=self._tz_prev)
+        self._tz_prev = self._tz_utc()
+        self._set_when(ts)
+        self._update_time_note()
+
+    def _step_time(self, hours):
+        base = self._ref_ts()
+        self._plan.blockSignals(True)         # one refresh, not two
+        self._plan.setChecked(True)
+        self._plan.blockSignals(False)
+        self._set_when(base + hours * 3600.0)
+        self._schedule_refresh()
+
+    def _reset_now(self):
+        self._plan.blockSignals(True)
+        self._plan.setChecked(False)
+        self._plan.blockSignals(False)
+        self._set_when(time.time())
+        self._schedule_refresh()
+
+    def _tick_clock(self):
+        """Keep the box and the LST readout current while they show "now".
+
+        Not while the box has focus: the first keystroke or calendar click
+        switches to planning mode, but until that signal lands the user is
+        typing into a field this timer would otherwise overwrite."""
+        if self._plan.isChecked() or self._when.hasFocus():
+            return
+        self._set_when(time.time())
+        self._update_time_note()
+
+    def _schedule_refresh(self, *_):
+        self._update_time_note()
+        self._debounce.start()
+
+    def _update_time_note(self):
+        import pulsar_planner
+        ts = self._ref_ts()
+        lst = pulsar_planner.lst_hours(ts, self._site["lon_deg"])
+        stamp = f"{self._fmt_clock(ts)}  ·  LST {self._fmt_lst(lst)}"
+        if self._plan.isChecked():
+            dh = (ts - time.time()) / 3600.0
+            off = (f"{dh:+.1f} h" if abs(dh) < 48.0 else f"{dh / 24.0:+.1f} d")
+            self._time_note.setText(f"PLANNED  {stamp}  ({off} from now)")
+            self._time_note.setStyleSheet("color: #8a5000; font-weight: bold;")
+        else:
+            self._time_note.setText(f"Now  {stamp}")
+            self._time_note.setStyleSheet("color: gray;")
+
+    # -- formatting helpers ------------------------------------------------
+
+    @staticmethod
+    def _fmt_clock(ts, with_date=True):
+        """"2026-09-12 03:00 UTC (21:00 local)" — both clocks, always, so a
+        tooltip is unambiguous whichever one the box is set to."""
+        u, l = time.gmtime(ts), time.localtime(ts)
+        uf = time.strftime("%Y-%m-%d %H:%M" if with_date else "%H:%M", u)
+        same_day = (u.tm_year, u.tm_mon, u.tm_mday) == (l.tm_year, l.tm_mon,
+                                                        l.tm_mday)
+        lf = time.strftime("%H:%M" if same_day else "%m-%d %H:%M", l)
+        return f"{uf} UTC ({lf} local)"
+
+    @staticmethod
+    def _fmt_ms(ms):
+        """Milliseconds at a readable scale — channel smearing at 2048
+        channels is microseconds, and "0.000 ms" says nothing."""
+        if ms >= 1.0:
+            return f"{ms:.2f} ms"
+        if ms >= 0.001:
+            return f"{ms * 1000.0:.0f} µs"
+        return "under 1 µs"
+
+    @staticmethod
+    def _fmt_lst(hours):
+        return f"{int(hours):02d}h {int((hours % 1) * 60):02d}m"
+
+    @staticmethod
+    def _fmt_packed(v, ra=False):
+        """SIGPROC packed sexagesimal (33259.3) -> "03:32:59.3"."""
+        neg = v < 0
+        v = abs(v)
+        d = int(v // 1e4)
+        m = int((v - d * 1e4) // 1e2)
+        sec = v - d * 1e4 - m * 1e2
+        sign = "" if ra else ("-" if neg else "+")
+        return f"{sign}{d:02d}:{m:02d}:{sec:04.1f}"
+
+    _COMPASS = ("N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
+                "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW")
+
+    @classmethod
+    def _compass(cls, az_deg):
+        return cls._COMPASS[int((az_deg % 360.0) / 22.5 + 0.5) % 16]
+
+    @staticmethod
+    def _wrap(paras, width=74):
+        """Tooltip body: each paragraph wrapped onto its own line(s) (an
+        empty entry becomes a blank line). Qt does not reflow plain-text
+        tooltips, and a 300-character line makes one wider than the
+        screen."""
+        import textwrap
+        return "\n".join("" if not p else textwrap.fill(p, width)
+                         for p in paras)
 
     def _selected_row(self):
         row = self._table.currentRow()
@@ -4926,6 +5274,9 @@ class PulsarPlannerDialog(QtWidgets.QDialog):
 
     def _refresh(self):
         import pulsar_planner
+        self._debounce.stop()               # a manual call satisfies it
+        ts = self._ref_ts()
+        self._ref_ts_used = ts
         QtWidgets.QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
             vis = pulsar_planner.visible_now(
@@ -4933,10 +5284,17 @@ class PulsarPlannerDialog(QtWidgets.QDialog):
                 mask_deg=self._mask.value(), center_hz=self._center_hz,
                 include_magnetars=self._magnetars.isChecked(),
                 height_m=self._site.get("amsl", 0.0),
-                include_below=self._show_below.isChecked())
+                include_below=self._show_below.isChecked(),
+                unix_ts=ts)
         finally:
             QtWidgets.QApplication.restoreOverrideCursor()
         self._all = vis
+        self._update_time_note()
+        # Loud in the title bar as well: a screenshot of a planned table
+        # must not be mistaken for the live sky.
+        self.setWindowTitle(
+            "Pulsars in view" + (f" — planned for {self._fmt_clock(ts)}"
+                                 if self._plan.isChecked() else ""))
         self._apply_filter()
 
     # -- search ------------------------------------------------------------
@@ -4991,11 +5349,10 @@ class PulsarPlannerDialog(QtWidgets.QDialog):
         viable_fg = QtGui.QBrush(QtGui.QColor("#0a3d0a"))
         n_viable = 0
         sefd = self._site.get("sefd_jy") or 4000.0
+        planned = self._plan.isChecked()
+        then = "then" if planned else "now"
+        ref_ts = self._ref_ts_used
         for i, r in enumerate(vis):
-            def item(text, sort_value=None):
-                if sort_value is None:
-                    return QtWidgets.QTableWidgetItem(text)
-                return _NumericItem(text, sort_value)
             hrs = r["hours_left"]
             left = ("circumpolar" if hrs >= 23.99
                     else f"{int(hrs)}h {int((hrs % 1) * 60):02d}m")
@@ -5016,34 +5373,48 @@ class PulsarPlannerDialog(QtWidgets.QDialog):
                             f"  ·  {win:.1f} h long")
                 nxt_sort = 1e6 if rise is None else rise
             else:
-                nxt, nxt_sort = "up now", -1.0
+                nxt, nxt_sort = f"up {then}", -1.0
             # Minimum recording duration (8-sigma folded, radiometer) at the
             # current sample rate — compared against time-above-mask to call
             # a target viable. The header tooltip states the assumptions.
             tmin = pulsar_planner.min_duration_s(
                 fmjy, r["p0_s"], sefd, self._rate_hz,
                 w50_ms=r.get("w50_ms"))
-            bf, _bt = pulsar_planner.best_band_mhz(r, sefd, self._rate_hz)
+            bf, bt = pulsar_planner.best_band_mhz(r, sefd, self._rate_hz)
             viable = (tmin is not None and not r.get("below_mask")
                       and tmin <= hrs * 3600.0)
             if viable:
                 n_viable += 1
+            # Everything a per-cell explanation needs that is not in the
+            # catalog row itself. Cheap to build; the TEXT is not built
+            # until the pointer rests on the cell (see _TipItem).
+            ctx = {"ts": ref_ts, "sefd": sefd, "flux_mjy": fmjy,
+                   "flux_label": flabel, "tmin": tmin, "best_f": bf,
+                   "best_t": bt, "hrs": hrs, "viable": viable}
+
+            def item(text, col, sort_value=None, r=r, ctx=ctx):
+                tip = lambda: self._cell_tip(r, col, ctx)   # noqa: E731
+                if sort_value is None:
+                    return _TipItem(text, tip)
+                return _NumericItem(text, sort_value, tip)
+
             cells = [
-                item(r["name"] + ("  ★" if r["magnetar"] else "")),
-                item("" if r["bname"] == "*" else r["bname"]),
-                item(f"{r['alt_deg']:.1f}", r["alt_deg"]),
-                item(f"{r['az_deg']:.1f}", r["az_deg"]),
-                item("—" if r["p0_s"] is None else f"{r['p0_s']:.6f}",
+                item(r["name"] + ("  ★" if r["magnetar"] else ""), 0),
+                item("" if r["bname"] == "*" else r["bname"], 1),
+                item(f"{r['alt_deg']:.1f}", 2, r["alt_deg"]),
+                item(f"{r['az_deg']:.1f}", 3, r["az_deg"]),
+                item("—" if r["p0_s"] is None else f"{r['p0_s']:.6f}", 4,
                      r["p0_s"] or 0.0),
-                item("—" if r["dm"] is None else f"{r['dm']:.2f}", r["dm"] or 0.0),
-                item(flux, fmjy if fmjy is not None else -1.0),
-                item("—" if tmin is None else self._fmt_duration(tmin),
+                item("—" if r["dm"] is None else f"{r['dm']:.2f}", 5,
+                     r["dm"] or 0.0),
+                item(flux, 6, fmjy if fmjy is not None else -1.0),
+                item("—" if tmin is None else self._fmt_duration(tmin), 7,
                      tmin if tmin is not None else 1e12),
-                item("—" if bf is None else f"{bf:g}",
+                item("—" if bf is None else f"{bf:g}", 8,
                      bf if bf is not None else 1e12),
-                item(left, hrs) if not r.get("below_mask")
-                else QtWidgets.QTableWidgetItem(left),
-                item(nxt, nxt_sort),
+                item(left, 9, hrs) if not r.get("below_mask")
+                else item(left, 9),
+                item(nxt, 10, nxt_sort),
             ]
             for c, it in enumerate(cells):
                 if viable:
@@ -5061,7 +5432,7 @@ class PulsarPlannerDialog(QtWidgets.QDialog):
         n_up = sum(1 for r in vis if not r.get("below_mask"))
         parts = [f"{n_up} above {self._mask.value():.0f}°"]
         if n_viable:
-            parts.append(f"{n_viable} viable now")
+            parts.append(f"{n_viable} viable {then}")
         if len(vis) != n_up:
             parts.append(f"{len(vis) - n_up} below")
         if n_mag:
@@ -5070,7 +5441,328 @@ class PulsarPlannerDialog(QtWidgets.QDialog):
             parts.append(f"filtered from {len(self._all)}")
         self._summary.setText("  ·  ".join(parts))
 
+    # -- per-cell explanations ---------------------------------------------
+
+    def _cell_tip(self, r, col, ctx):
+        """What ONE cell means: the column's job, plus what this row's own
+        number is telling you. Built on hover (see _TipItem), so the text
+        can afford to do real arithmetic — the DM sweep across the tuned
+        band, the source's transit time, the set clock time — instead of
+        repeating the header."""
+        import math
+        import pulsar_planner as pp
+        site = self._site
+        ts = ctx["ts"]
+        mask = self._mask.value()
+        at = ("the planned " if self._plan.isChecked() else "") \
+            + self._fmt_clock(ts)
+        bname = r.get("bname") or "*"
+        p0, dm, w50 = r.get("p0_s"), r.get("dm"), r.get("w50_ms")
+        w_ms = (w50 if (w50 and w50 > 0)
+                else (0.05 * p0 * 1000.0 if p0 else None))
+        below = bool(r.get("below_mask"))
+        paras = []
+
+        if col == 0:                                        # Pulsar
+            paras.append(r["name"] + ("" if bname == "*" else f"   =   {bname}")
+                         + "   —   ATNF psrcat J2000 designation.")
+            paras.append(
+                f"Catalog position (J2000): RA {self._fmt_packed(r['raj'], ra=True)}, "
+                f"Dec {self._fmt_packed(r['decj'])}. Choosing this row hands the "
+                f"recorder that exact position for the .fil header, instead of the "
+                f"approximate one the app would parse out of the name.")
+            if r.get("magnetar"):
+                paras.append(
+                    f"Magnetar (psrcat TYPE {r.get('type') or 'AXP/SGR'}) — marked "
+                    f"with a star, and never dropped by a flux filter, because the "
+                    f"catalog usually carries no flux for these.")
+            paras.append("Double-click the row, or “Use as Source”, to load it "
+                         "into the recording panel.")
+
+        elif col == 1:                                      # B name
+            if bname == "*":
+                paras.append("This pulsar has no B1950-era designation — only "
+                             "its J2000 name. Nothing is missing.")
+            else:
+                paras.append(
+                    f"{bname} is the older B1950-based name for {r['name']} — the "
+                    f"same object. Most observing notes and papers before ~1993 use "
+                    f"this form, and either name works in the Search box and as a "
+                    f"recording Source.")
+
+        elif col == 2:                                      # Alt
+            if below:
+                paras.append(
+                    f"Altitude {r['alt_deg']:.1f}° at {at} — BELOW your {mask:.1f}° "
+                    f"elevation mask, so there is nothing to record yet. “Next "
+                    f"window” says when that changes.")
+            else:
+                paras.append(
+                    f"Altitude {r['alt_deg']:.1f}° above the horizon at {at}; your "
+                    f"elevation mask is {mask:.1f}°.")
+            culm = pp.max_alt_deg(r["dec_deg"], site["lat_deg"])
+            if culm <= 0.0:
+                paras.append(
+                    f"From this latitude the source never clears the horizon at all "
+                    f"(it culminates {abs(culm):.1f}° below it) — no time of day or "
+                    f"year helps.")
+            else:
+                th = pp.next_transit_h(r["ra_deg"], site["lon_deg"], ts)
+                paras.append(
+                    f"It culminates at {culm:.1f}° from this site, and next crosses "
+                    f"the meridian — highest, least atmosphere, best place to catch "
+                    f"it — in {th:.1f} h, at {self._fmt_clock(ts + th * 3600.0)}.")
+            paras.append(
+                "Apparent place: precession, nutation and aberration are applied "
+                "when astropy is installed. No refraction and no mount corrections, "
+                "so this is where the SKY is, not what your encoders will read.")
+
+        elif col == 3:                                      # Az
+            paras.append(
+                f"Azimuth {r['az_deg']:.1f}° at {at} — bearing {self._compass(r['az_deg'])}, "
+                f"measuring north = 0°, east = 90°, south = 180°, west = 270°.")
+            paras.append(
+                "Sky position only: your mount's own pointing corrections (encoder "
+                "offsets, boresight tilt) still apply on top of this number.")
+
+        elif col == 4:                                      # P0
+            if p0 is None:
+                paras.append(
+                    "The catalog has no rotation period for this source, so it "
+                    "cannot be folded blind, and Min rec / Best f cannot be "
+                    "estimated. Search it out in the literature, or record and "
+                    "search for the period yourself.")
+            else:
+                paras.append(
+                    f"Rotation period {p0:.6f} s ({1.0 / p0:.3f} Hz) — the period you "
+                    f"fold at. It is barycentric; PRESTO's topocentric best period "
+                    f"differs by the Earth's own motion, up to about one part in "
+                    f"10,000, which is why folds are quoted -topo or barycentered.")
+                if w50 and w50 > 0:
+                    paras.append(
+                        f"Catalog W50 (width at half maximum) is {w50:.1f} ms = "
+                        f"{100.0 * w50 / 1000.0 / p0:.2f}% of the period. A narrow "
+                        f"pulse concentrates the same average flux into less time, "
+                        f"which is why Min rec falls as the duty cycle falls.")
+                else:
+                    paras.append(
+                        f"The catalog has no W50 for this source, so a 5% duty cycle "
+                        f"({0.05 * p0 * 1000.0:.1f} ms) is assumed wherever a pulse "
+                        f"width is needed — deliberately conservative.")
+
+        elif col == 5:                                      # DM
+            if dm is None:
+                paras.append("No dispersion measure in the catalog: fold at a "
+                             "searched DM, or take the value from a paper.")
+            else:
+                import pulsar_sim
+                lo = (self._center_hz - self._rate_hz / 2.0) / 1e6
+                hi = (self._center_hz + self._rate_hz / 2.0) / 1e6
+                sweep_ms = pulsar_sim.sweep_per_dm_s(
+                    self._center_hz, self._rate_hz) * dm * 1e3
+                chan_ms = pulsar_sim.channel_smear_s(
+                    dm, self._rate_hz / self._nchan, self._center_hz) * 1e3
+                paras.append(
+                    f"Dispersion measure {dm:.2f} pc cm-3 — the column of free "
+                    f"electrons between here and the source. It delays low "
+                    f"frequencies more than high ones, as 1/f².")
+                paras.append(
+                    f"Across the band you are tuned to ({lo:.3f}–{hi:.3f} MHz) that "
+                    f"is a {self._fmt_ms(sweep_ms)} delay, bottom edge to top; inside "
+                    f"one of your {self._nchan} channels it smears the pulse by "
+                    f"{self._fmt_ms(chan_ms)} (no dedispersion undoes that part).")
+                if w_ms:
+                    if sweep_ms < 0.5 * w_ms:
+                        paras.append(
+                            f"The pulse is about {w_ms:.1f} ms wide, wider than the "
+                            f"sweep, so a fold here CANNOT measure this DM — its DM "
+                            f"search slides toward zero and the result means nothing. "
+                            f"Fold at the catalog value and report the DM as "
+                            f"unconstrained; “What do I need?…” solves for a band and "
+                            f"bandwidth that could measure it.")
+                    elif chan_ms > 0.5 * w_ms:
+                        paras.append(
+                            f"Channel smearing ({self._fmt_ms(chan_ms)}) is a large "
+                            f"fraction of the {w_ms:.1f} ms pulse — use more "
+                            f"filterbank channels, or a higher band, or the pulse "
+                            f"arrives flattened however long you record.")
+                    else:
+                        paras.append(
+                            f"The sweep is a usable fraction of the {w_ms:.1f} ms "
+                            f"pulse, so a fold can genuinely optimize DM at this "
+                            f"tuning.")
+
+        elif col == 6:                                      # Flux
+            s400, s1400 = r.get("s400"), r.get("s1400")
+            f_mhz = self._center_hz / 1e6
+            if ctx["flux_mjy"] is None:
+                paras.append(
+                    "The catalog carries no flux density for this source — common "
+                    "for magnetars and for faint recent discoveries. That is silence "
+                    "in the catalog, NOT a faint source, so nothing here is hidden by "
+                    "a flux filter; but Min rec and Best f cannot be estimated.")
+            elif self._flux_at_f.isChecked():
+                anchors = ", ".join(
+                    p for p in (f"S400 = {s400:.1f} mJy" if s400 else "",
+                                f"S1400 = {s1400:.1f} mJy" if s1400 else "") if p)
+                if s400 and s1400 and s400 > 0 and s1400 > 0:
+                    alpha = math.log(s1400 / s400) / math.log(1400.0 / 400.0)
+                    how = (f"this source's own spectral index, {alpha:+.2f}, from "
+                           f"{anchors}")
+                else:
+                    how = (f"a typical pulsar index of -1.6 applied to the one "
+                           f"anchor the catalog gives ({anchors})")
+                paras.append(
+                    f"About {ctx['flux_mjy']:.1f} mJy at the {f_mhz:.3f} MHz you are "
+                    f"tuned to — a power-law ESTIMATE (label {ctx['flux_label']}) "
+                    f"using {how}.")
+                paras.append(
+                    "Real spectra turn over below a few hundred MHz and the estimate "
+                    "does not know that. Untick “Flux at tuned freq” to see the "
+                    "catalog number verbatim instead.")
+            else:
+                paras.append(
+                    f"Catalog {ctx['flux_label']} = {ctx['flux_mjy']:.1f} mJy, quoted "
+                    f"as measured at {'400' if ctx['flux_label'] == 'S400' else '1400'} "
+                    f"MHz — the nearest catalog band to your {f_mhz:.3f} MHz tuning, "
+                    f"not scaled to it. Tick “Flux at tuned freq” to scale it.")
+            paras.append(
+                "Flux here is PERIOD-AVERAGED (much lower than the peak of the "
+                "pulse), it is the sort key for this table, and it is what Min rec "
+                "is computed from. Pulsar flux also scintillates — factors of a few "
+                "between nights are normal at L band.")
+
+        elif col == 7:                                      # Min rec
+            tmin = ctx["tmin"]
+            if tmin is None:
+                paras.append(
+                    "Not estimable: the radiometer equation needs both a flux "
+                    "density and a period, and the catalog is missing one of them "
+                    "for this source.")
+            else:
+                width = (f"catalog W50 {w50:.1f} ms "
+                         f"(duty {100.0 * w50 / 1000.0 / p0:.2f}%)"
+                         if (w50 and w50 > 0 and p0)
+                         else "5% duty assumed (no catalog W50)")
+                paras.append(
+                    f"About {self._fmt_duration(tmin)} of recording to reach an "
+                    f"8-sigma FOLDED detection from this site.")
+                paras.append(
+                    f"Inputs: flux {ctx['flux_mjy']:.1f} mJy, {width}, SEFD "
+                    f"{ctx['sefd']:.0f} Jy ([site] sefd_jy — measured on Cygnus A at "
+                    f"1420 MHz), bandwidth {self._rate_hz / 1e6:.3f} MHz, one "
+                    f"polarization.")
+                if below:
+                    paras.append(
+                        "The source is below the mask at the reference time, so there "
+                        "is no window to compare this against yet — see Next window.")
+                elif ctx["viable"]:
+                    room = ("the source is circumpolar at this mask"
+                            if ctx["hrs"] >= 23.99 else
+                            f"{self._fmt_duration(ctx['hrs'] * 3600.0)} remain above "
+                            f"the mask")
+                    paras.append(f"It fits: {room}, so this row is highlighted "
+                                 f"green.")
+                else:
+                    paras.append(
+                        f"It does NOT fit the {self._fmt_duration(ctx['hrs'] * 3600.0)} "
+                        f"left above the mask — try the Best f band, more bandwidth, "
+                        f"or a different night (the Plan-for box will show you one).")
+                paras.append(
+                    "An aid, not a gate: one SEFD serves every band, so low-band "
+                    "numbers read optimistic, and RFI, scintillation and pointing "
+                    "loss all add on top.")
+
+        elif col == 8:                                      # Best f
+            bf, bt, tmin = ctx["best_f"], ctx["best_t"], ctx["tmin"]
+            if bf is None:
+                paras.append(
+                    "No band can be recommended without a catalog period and flux "
+                    "for this source.")
+            else:
+                line = (f"Fastest detection at {bf:g} MHz: about "
+                        f"{self._fmt_duration(bt)} there")
+                if tmin is not None:
+                    line += (f", against {self._fmt_duration(tmin)} at the "
+                             f"{self._center_hz / 1e6:.3f} MHz you are tuned to now")
+                paras.append(line + ".")
+                paras.append(
+                    "Picked over the dish's tuning presets (408, 680.5, 1299.5, 1422, "
+                    "1666, 2304 MHz) by scaling this source's flux to each band, "
+                    "scaling SEFD by sky temperature (the galaxy is far brighter at "
+                    "low frequency), and broadening the pulse by channel DM smearing "
+                    "plus empirical interstellar scattering — which is why high-DM "
+                    "sources are kept high and steep-spectrum low-DM ones are sent "
+                    "low.")
+                paras.append(
+                    f"Assumes the current {self._rate_hz / 1e6:.3f} MHz bandwidth and "
+                    f"256 channels. Approximate physics: the band to TRY first, not a "
+                    f"guarantee.")
+
+        elif col == 9:                                      # Time left
+            if below:
+                paras.append(
+                    f"Below the {mask:.1f}° mask at {at}, so there is no time above "
+                    f"it to count. See Next window for the wait.")
+            elif ctx["hrs"] >= 23.99:
+                paras.append(
+                    f"Circumpolar at this mask: from {at} it does not drop below "
+                    f"{mask:.1f}° at any point in the next 24 h, so the recording "
+                    f"length is your choice, not the sky's.")
+            else:
+                paras.append(
+                    f"{self._fmt_duration(ctx['hrs'] * 3600.0)} above the {mask:.1f}° "
+                    f"mask from {at} — it crosses the mask at "
+                    f"{self._fmt_clock(ts + ctx['hrs'] * 3600.0)}.")
+                paras.append(
+                    "A recording that outlasts this ends up staring at empty sky. If "
+                    "a Source and a “Record for” duration are both set, the app warns "
+                    "about that at record time too.")
+
+        elif col == 10:                                     # Next window
+            if not below:
+                paras.append(
+                    f"Up at {at} — this column is for sources below the mask, where "
+                    f"it gives the wait until they clear it and how long the window "
+                    f"then lasts.")
+            else:
+                rise = r.get("rise_in_h")
+                win = r.get("window_h") or 0.0
+                if rise is None:
+                    paras.append(
+                        f"It does not clear the {mask:.1f}° mask at any point in the "
+                        f"24 h after {at} — too far south for this latitude, or the "
+                        f"mask is set higher than the source ever reaches.")
+                else:
+                    paras.append(
+                        f"Rises above {mask:.1f}° in {self._fmt_duration(rise * 3600.0)} "
+                        f"— at {self._fmt_clock(ts + rise * 3600.0)} — and then stays "
+                        f"up {win:.1f} h.")
+                    paras.append(
+                        "Set “Plan for” to inside that window to see the source's "
+                        "altitude, azimuth and viability as they will be then.")
+            paras.append(
+                "Windows open 3 m 56 s earlier every day (sidereal drift), so "
+                "something that just misses tonight is a little easier tomorrow.")
+
+        return self._wrap(paras)
+
     # -- clipboard ---------------------------------------------------------
+
+    def _copy_context(self):
+        """One comment line naming the site, the instant and the settings the
+        copied numbers belong to. A table pasted into a report is worse than
+        useless if nobody can tell what time it was for."""
+        import pulsar_planner
+        ts = self._ref_ts_used
+        lst = pulsar_planner.lst_hours(ts, self._site["lon_deg"])
+        return ("# Pulsars in view — "
+                f"{self._site.get('name') or 'site'}, "
+                f"{'planned for ' if self._plan.isChecked() else ''}"
+                f"{self._fmt_clock(ts)}, LST {self._fmt_lst(lst)}, "
+                f"mask {self._mask.value():.1f} deg, tuned "
+                f"{self._center_hz / 1e6:.3f} MHz at "
+                f"{self._rate_hz / 1e6:.3f} MS/s")
 
     def _headers(self):
         return [self._table.horizontalHeaderItem(c).text()
@@ -5082,7 +5774,7 @@ class PulsarPlannerDialog(QtWidgets.QDialog):
         rows = sorted({ix.row() for ix in self._table.selectedIndexes()})
         if not rows:
             return
-        lines = ["\t".join(self._headers())]
+        lines = [self._copy_context(), "\t".join(self._headers())]
         for rr in rows:
             lines.append("\t".join(
                 (self._table.item(rr, c).text() if self._table.item(rr, c)
@@ -5105,7 +5797,7 @@ class PulsarPlannerDialog(QtWidgets.QDialog):
         menu.exec(self._table.viewport().mapToGlobal(pos))
 
     def _copy_all(self):
-        lines = ["\t".join(self._headers())]
+        lines = [self._copy_context(), "\t".join(self._headers())]
         for rr in range(self._table.rowCount()):
             lines.append("\t".join(
                 (self._table.item(rr, c).text() if self._table.item(rr, c)
@@ -5373,9 +6065,10 @@ class B210SelfTestDialog(QtWidgets.QDialog):
         cat = self._mw._ensure_psr_catalog()
         if cat is None:
             return
-        dlg = PulsarPlannerDialog(cat.rows, self._mw._site_dict(),
-                                  self._mw.center_freq, self,
-                                  rate_hz=getattr(self._mw, "samp_rate", 2e6))
+        dlg = PulsarPlannerDialog(
+            cat.rows, self._mw._site_dict(), self._mw.center_freq, self,
+            rate_hz=getattr(self._mw, "samp_rate", 2e6),
+            nchan=getattr(self._mw, "_fil_nchans", 2048))
         dlg._show_below.setChecked(True)
         if dlg.exec() == QtWidgets.QDialog.Accepted and dlg.selected:
             r = dlg.selected
@@ -7516,7 +8209,8 @@ class dses_workbench(gr.top_block, QtWidgets.QMainWindow):
 
         dlg = PulsarPlannerDialog(cat.rows, self._site_dict(),
                                   self.center_freq, self,
-                                  rate_hz=getattr(self, "samp_rate", 2e6))
+                                  rate_hz=getattr(self, "samp_rate", 2e6),
+                                  nchan=getattr(self, "_fil_nchans", 2048))
         if dlg.exec() == QtWidgets.QDialog.Accepted and dlg.selected:
             r = dlg.selected
             name = r["bname"] if r["bname"] != "*" else r["name"]
@@ -7530,11 +8224,16 @@ class dses_workbench(gr.top_block, QtWidgets.QMainWindow):
             hrs = r["hours_left"]
             left = ("circumpolar" if hrs >= 23.99
                     else f"{int(hrs)}h {int((hrs % 1) * 60):02d}m above mask")
+            # The alt/az/time-left quoted here belong to whatever instant the
+            # planner was showing; if that was a planned one, say so rather
+            # than letting it read as the live sky.
+            when = (f"  [as of {dlg._fmt_clock(dlg._ref_ts_used)}]"
+                    if dlg._plan.isChecked() else "")
             self._status_bar.showMessage(
                 f"Source: {name} — alt {r['alt_deg']:.1f}°, az "
                 f"{r['az_deg']:.1f}°, {left}"
                 + (f", P0 {r['p0_s']:.6f} s, DM {r['dm']:.2f}"
-                   if r["p0_s"] and r["dm"] else ""), 15000)
+                   if r["p0_s"] and r["dm"] else "") + when, 15000)
 
     def _check_source_visibility(self):
         """Warn if the named source sets before a timed recording finishes.

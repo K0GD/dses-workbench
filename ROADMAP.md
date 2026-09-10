@@ -6,6 +6,42 @@ cross-machine record (Mac + Windows) — keep it committed and pushed.
 Conventions: `[ ]` planned, `[x]` shipped (note the commit), `[-]` dropped
 (note why). Move items between versions freely until they ship.
 
+## Unreleased on main (goes in the next cut after 1.4.0)
+
+- [x] **Pulsars in View: PLAN FOR A DATE AND TIME** (Rick's request
+      2026-09-10; landed same day). The dialog computed everything for
+      `time.time()`, so it could only answer "what is up while I stand
+      here". New reference-time row: a `Plan for:` checkbox + date/time box
+      (calendar popup) read as **UTC or Local**, `-1 d / -1 h / +1 h / +1 d`
+      steps, and a `Now` button. Altitude, azimuth, time-above-mask, next
+      window and the green viability highlight are all computed for the
+      chosen instant (`visible_now(unix_ts=…)`, which already took one).
+      Any date works, past included — point it at the start of an old
+      recording to see what was overhead when the data was taken. Planned
+      state is loud: window title, an amber `PLANNED …(+n h from now)`
+      readout with the site's LST, "up then"/"viable then" wording, and a
+      context comment line on copied tables. Refreshes are debounced 350 ms
+      (a full recompute is 0.7-3.9 s for a 4,400-row catalog), and the box
+      tracks the clock while it shows "now" (never while it has focus).
+      New in pulsar_planner: `lst_hours`, `next_transit_h`, `max_alt_deg`.
+- [x] **Pulsars in View: HEADER AND PER-CELL EXPLANATIONS** (same request).
+      Every column header now carries help (was 2 of 11), from a single
+      `PLANNER_COLUMNS` table so labels and help cannot drift apart, and
+      **every individual cell explains its own value**: the catalog
+      position behind a name, the source's culmination and next meridian
+      crossing, the delay this DM produces across the tuned band and inside
+      one channel (with a plain statement when the DM is unmeasurable
+      there), which catalog anchors a flux estimate came from and its
+      spectral index, every input to Min rec plus whether it fits the time
+      left, Best f against the current tuning, the clock time the source
+      crosses the mask, and when a below-mask window opens. Built lazily by
+      `_TipItem.data(ToolTipRole)` — ~50,000 strings would otherwise be
+      built per refresh and nearly all thrown away. Tests:
+      `test_pulsar_planner_dialog.py` (new, headless, 38 checks) and three
+      sidereal cases in `test_pulsar_planner.py`.
+- [ ] At the next cut: version bump, Installing.md §9 regenerate from the
+      in-app Help (the planner bullets changed), guide PDF rebuild.
+
 ## v1.1.8 — SHIPPED 2026-08-03 (cut + published from Windows)
 
 **Release plan (Rick, 2026-08-02):** no point release for the two Ray UI
@@ -688,6 +724,19 @@ menu bar!) + drift-scan box test (dock behavior on headless Openbox/xrdp
       Fix: accumulate blocks ACROSS ticks to a target N while recording
       (slower update instead of a biased trace), or correct the small-N
       bias + show a "display averaging reduced" status note.
+- [ ] **astropy's IERS auto-download makes the FIRST planner open hang**
+      (measured 2026-09-10 on the Windows dev box, while adding the
+      date/time control): the first alt/az transform in a process pays
+      astropy's IERS refresh — **84-99 s** with a blocked or slow network
+      versus **0.87 s** with `astropy.utils.iers.conf.auto_download =
+      False`; every refresh after that is 0.7-3.9 s (cached in-process).
+      At a site with no internet — the Pi at Haswell — that is a ~1.5 min
+      freeze on the first Ctrl+P of every launch, and the planner is
+      exactly the window a field observer opens first. Candidate fix: set
+      `auto_download = False` inside `pulsar_planner.altaz_batch` (the
+      bundled IERS table is good to milliarcseconds at the current epoch,
+      and this planner only ever claimed arcminutes). Left for Rick to
+      approve because it changes an astropy-wide setting, not just ours.
 - [ ] **Mid-integration row timestamps for ezRA drift-scan files** (from
       the Sept campaign analysis): rows are stamped at integration END, so
       transit fits read τ/2 late (13 s at 25 s rows, 32 s at 64 s). Stamp

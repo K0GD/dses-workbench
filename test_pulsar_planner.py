@@ -151,6 +151,37 @@ def test_next_window():
           "up-now rows report their remaining time as the window")
 
 
+def test_sidereal():
+    """LST, meridian transit and culmination — what the planner's date/time
+    control and its per-cell explanations quote (added 2026-09-10)."""
+    print("\n3c. sidereal time, transit and culmination")
+    ts = 1754300000.0
+    lst = pp.lst_hours(ts, LON)
+    check(0.0 <= lst < 24.0, "LST inside a day", f"{lst:.4f} h")
+    # LST advances one sidereal hour per 0.9973 solar hours.
+    lst2 = pp.lst_hours(ts + 3600.0, LON)
+    check(abs(((lst2 - lst) % 24.0) - 1.0027379) < 1e-3,
+          "LST runs at the sidereal rate", f"{(lst2 - lst) % 24.0:.6f} h/h")
+    # Cygnus A: the campaign's own calibrator, transit measured at LST
+    # 20.0203 (2026-09 analysis). The transit must land at its own RA.
+    ra_cyga = (19 + 59 / 60.0 + 28.4 / 3600.0) * 15.0
+    h = pp.next_transit_h(ra_cyga, LON, ts)
+    check(0.0 <= h <= 24.0, "transit found within a day", f"in {h:.2f} h")
+    lst_at = pp.lst_hours(ts + h * 3600.0, LON)
+    check(abs(lst_at - ra_cyga / 15.0) < 1e-3,
+          "at transit, LST equals the source's RA",
+          f"LST {lst_at:.4f} vs RA {ra_cyga / 15.0:.4f} h")
+    # Culmination: Cyg A's apparent Dec +40.811 from Haswell gives the
+    # el 87.647 the dish is actually parked at (SEGMENT5 solve).
+    check(abs(pp.max_alt_deg(40.734, LAT) - 87.647) < 0.01,
+          "culmination reproduces the parked elevation for Cyg A (J2000)",
+          f"{pp.max_alt_deg(40.734, LAT):.3f}°")
+    check(pp.max_alt_deg(-70.0, LAT) < 0.0,
+          "a far-southern source culminates below the horizon")
+    check(abs(pp.max_alt_deg(LAT, LAT) - 90.0) < 1e-9,
+          "a source at the site's latitude passes through the zenith")
+
+
 def test_cache():
     print("\n4. cache")
     with tempfile.TemporaryDirectory() as d:
@@ -238,6 +269,7 @@ if __name__ == "__main__":
     test_coordinates()
     test_planning()
     test_next_window()
+    test_sidereal()
     test_cache()
     test_duration_and_flux()
     test_live_fetch()
