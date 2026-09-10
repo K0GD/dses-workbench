@@ -263,3 +263,58 @@ detection at low C/N0. Suggested addition: *Deep Space Communications*
 (JPL DESCANSO series, Joseph Yuen, ed.; free PDF from JPL) — the reference
 for exactly this regime; and Mengali & D'Andrea, *Synchronization
 Techniques for Digital Receivers*, for the sync module.
+
+---
+
+## Update 2026-09-09 — ORI's Python implementation found; decisions
+
+**Found.** Michelle re-published `signal_design/Python_Implementation/`
+in the EVE repo on 2026-09-08 (permissions had hidden it). It is a
+**transmit-only SigMF generator** (`eve_tx_sigmf.py`: text → 90 bits +
+CRC-16 → BCH(127,106) via `galois` → 11 MSB-first 12-bit symbols →
+continuous-phase tone per symbol → cf32 SigMF at 250 kS/s, comb offset
+25 kHz above the tune) plus an **AWGN analytic link check**
+(`eve_link_check.py`). Written by Michelle from Pete's June 2026 slide,
+not ported from the MATLAB. No demodulator, channel model, Doppler, or
+sync. "Tested" = tones land on d×5.74 Hz, BCH round-trips, SigMF
+validates, 22 s smoke file played through a B210. Never received over
+the air. The smoke SigMF pair named in its README is not in the repo.
+
+**It is a different waveform from the MATLAB** (section 1 above):
+
+| Parameter | MATLAB (May) | Python (June slide) |
+|---|---|---|
+| bin / spread | 2.67 Hz | 2.87 Hz |
+| tone spacing | 5.34 Hz | 5.74 Hz |
+| frames per symbol | 540 | 473 (slide ≈ 440) |
+| symbol | 202.25 s | 164.794 s (= 472.96 frames, not integer) |
+| bit order | LSB first | MSB first |
+| comb | symmetric about DC | one-sided 0–23.5 kHz |
+| payload | 106 random bits | 90 msg + CRC-16 |
+
+BCH generator polynomial is the same in both (Lin & Costello octal
+11554743 = galois default = MATLAB `bchenc`), so the golden-vector gap
+in Stage 0 is closed.
+
+**Decisions (Rick, 2026-09-09).**
+1. Treat the Python conventions as the interoperability spec (it is what
+   the other stations get); keep `EveParams` switchable to the MATLAB set
+   for reproducing Pete's curve. Confirmation of 2.87 Hz / frame count
+   requested from Pete and Michelle (email sent 2026-09-09 18:10 MDT,
+   NAS DSES archive; also asks monostatic vs bistatic and whether ORI
+   wants the receiver contributed back).
+2. The modulator port shrinks to adopting the generator's conventions
+   plus our streaming/schedule layer; the demodulator, Rayleigh channel,
+   Doppler, schedule, sync and validation stages are unchanged and still
+   ours to build. `galois` becomes a dependency (environment.yml).
+3. **Separate project, not inside the Workbench.** EVE is a station
+   controller (real TX drive, key-down/cooldown interlocks, ephemeris
+   schedule, 30-min frames) and ships to nobody who runs the Workbench;
+   the Workbench keeps its TX-locked-at-minimum policy and its release
+   train. Reuse is by factoring the B210 radio classes out of
+   `dses_workbench.py` into an importable module (a refactor the
+   Workbench benefits from too) plus copying the small proven pieces.
+   One B210 = one process, so the EVE tool owns the radio during a run.
+4. Constant envelope confirmed for the Class-C PAs: one tone at a time at
+   fixed amplitude; only the ten symbol-hop phase steps are non-constant,
+   and our streaming source will make hops phase-continuous.
