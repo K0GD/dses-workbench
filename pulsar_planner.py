@@ -190,6 +190,45 @@ def hours_above_mask(ra_deg, dec_deg, lat_deg, lon_deg, unix_ts, mask_deg,
     return horizon_hours          # circumpolar (or never sets within a day)
 
 
+# Sidereal-to-solar rate: the sky comes back to the same place every
+# 23h56m04s of clock time, so a wait expressed in sidereal hours is that
+# much shorter in the hours a wristwatch counts.
+SIDEREAL_RATE = 1.0027379
+
+
+def lst_hours(unix_ts, lon_deg):
+    """Local mean sidereal time in hours (0-24) at a longitude.
+
+    The planner reports it because LST — not clock time — is what says
+    where the sky is: the drift-scan campaign's transits are all quoted in
+    LST, and an observer planning "when is this source overhead" is really
+    asking when LST reaches the source's RA.
+    """
+    return ((_gmst_deg(unix_ts) + lon_deg) % 360.0) / 15.0
+
+
+def next_transit_h(ra_deg, lon_deg, unix_ts):
+    """Hours of CLOCK time until the source next crosses the local meridian.
+
+    Closed form (LST advances one sidereal hour per 0.9973 solar hours), so
+    it costs nothing to compute per row on demand. The meridian is where a
+    source is highest and the atmosphere thinnest — for a drift scan it is
+    the whole observation.
+    """
+    dh_sidereal = ((ra_deg / 15.0) - lst_hours(unix_ts, lon_deg)) % 24.0
+    return dh_sidereal / SIDEREAL_RATE
+
+
+def max_alt_deg(dec_deg, lat_deg):
+    """Altitude the source reaches at upper culmination (degrees).
+
+    90 - |lat - dec|. Negative means it never clears the horizon from this
+    latitude at all — worth saying plainly, since no amount of waiting
+    helps.
+    """
+    return 90.0 - abs(lat_deg - dec_deg)
+
+
 # --------------------------------------------------------------------------
 # catalog
 # --------------------------------------------------------------------------
