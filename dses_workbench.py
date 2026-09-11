@@ -127,6 +127,10 @@ from gnuradio import uhd
 # recording sink. Lives next to this script.
 import sigproc_fil
 import ezra_txt
+from dses_radio import (_addr_to_dict, DRIVER_UHD_B200, find_b200_uhd,  # noqa: F401
+                        RadioSource, UhdB200Source, RealtimeMode,
+                        ensure_uhd_images)
+ensure_uhd_images()   # dev envs have UHD but no firmware images
 
 # In-app upgrade helper (download/verify/extract/install). OS-neutral core; the
 # Qt install dialog + per-OS shortcut/relaunch live here in the app.
@@ -2518,59 +2522,11 @@ def load_sigmf_meta(base_path):
     return sr, cf, dtype
 
 
-def _addr_to_dict(a):
-    """Pull serial/product/name out of a uhd device_addr object. to_dict()
-    has been observed to return {} in some Python contexts even when the
-    string form has full info, so we fall back to parsing str(a)."""
-    # Try to_dict / dict first.
-    for fn in ((lambda: a.to_dict()),
-               (lambda: {k: a.get(k) for k in a.keys()}),
-               (lambda: dict(a))):
-        try:
-            d = fn()
-            if d:
-                return d
-        except Exception:
-            continue
-    # Last resort: parse the "Device Address:\n    key: value\n..." string.
-    d = {}
-    for line in str(a).splitlines():
-        if ':' in line:
-            k, _, v = line.partition(':')
-            d[k.strip()] = v.strip()
-    return d
-
-
-# Driver identifiers used internally. Settings store the chosen one in
-# [rx]/device_driver and the corresponding serial in [rx]/device_serial.
-DRIVER_UHD_B200 = "uhd_b200"
-
 # Soapy drivers we surface to the picker. Anything not in this list is
 # still enumerable via SoapySDR.Device.enumerate() with no filter, but we
 # only advertise these to avoid showing internal/loopback adapters.
 SOAPY_KNOWN_DRIVERS = ("sdrplay", "rtlsdr", "hackrf", "airspy",
                        "airspyhf", "bladerf", "lime", "plutosdr")
-
-
-def find_b200_uhd():
-    """Return UHD B200-family devices as {driver, serial, product, label}."""
-    try:
-        addrs = uhd.find('type=b200')
-    except Exception as exc:
-        print(f"UHD discovery failed: {exc}", file=sys.stderr)
-        return []
-    out = []
-    for a in addrs:
-        d = _addr_to_dict(a)
-        serial = d.get('serial', '')
-        product = d.get('product', d.get('type', 'B200'))
-        out.append({
-            'driver':  DRIVER_UHD_B200,
-            'serial':  serial,
-            'product': product,
-            'label':   f"USRP {product} — {serial or '(no serial)'}",
-        })
-    return out
 
 
 _soapy_log_filter_installed = False
@@ -3992,347 +3948,6 @@ class InstallUpdateDialog(QtWidgets.QDialog):
 
 
 # === Radio source abstraction ===
-
-class RadioSource:
-    """Common interface for whatever produces baseband I/Q samples for the
-    flowgraph — currently UHD's USRP source; SoapySDR-backed devices land
-    in a sibling subclass. The main class doesn't talk to UHD directly any
-    more; it talks through this interface so the wiring is swappable.
-
-    Subclasses set `self.block` to the GR block emitting complex64 samples
-    and implement the three set_* methods. `samp_rate_options` and
-    `gain_range` let the UI adapt to the device's capabilities (subclasses
-    override when the defaults — B210's range — aren't right)."""
-
-    # The GR source block. Connected to the display chain at
-    # dses_workbench.__init__'s "Connections" section.
-    block = None
-
-    # Discrete sample-rate choices the sidebar combo offers. Defaults to
-    # a conservative generic set almost any SDR can do; hardware subclasses
-    # override with the device's actually-supported list. (This used to be
-    # list(FFT_SIZES) — an unknown Soapy driver would offer "rates" of
-    # 1–262 kHz that were really FFT lengths.)
-    samp_rate_options = [1e6, 2e6, 2.048e6, 4e6, 5e6, 8e6, 10e6]
-
-    # (min_db, max_db, step_db) for the RX-gain slider in the sidebar.
-    gain_range = (0.0, 76.0, 1.0)
-
-    # Short label for the sidebar Device button and the window title.
-    display_label = "(unknown radio)"
-
-    # Verbose hardware description for SigMF metadata (core:hw field).
-    hw_info = "(unknown radio)"
-
-    # RF input ports the device exposes (e.g. ['TX/RX', 'RX2'] on a B210,
-    # ['Tuner 1 50ohm', 'Tuner 2 50ohm'] on an RSPduo). Subclasses fill this
-    # from the live block. A single-port radio leaves it length-1 (or empty)
-    # and the sidebar omits the Antenna combo.
-    antennas = []
-
-    # The port currently selected; set by subclasses after opening.
-    current_antenna = ""
-
-    # Hardware LO offset (Hz) currently applied; 0 = LO on the displayed
-    # center (classic zero-IF behavior, DC artefact mid-band).
-    lo_offset = 0.0
-
-    def set_samp_rate(self, hz: float) -> None:
-        raise NotImplementedError
-
-    def set_center_freq(self, hz: float) -> None:
-        raise NotImplementedError
-
-    def lo_offset_supported(self) -> bool:
-        """True if this radio can park its LO away from the displayed center
-        (the DDC/BB shift stage brings the band back, so the display and all
-        recorded frequencies are unchanged — only the DC artefact moves)."""
-        return False
-
-    def set_lo_offset(self, hz: float) -> bool:
-        """Apply LO offset `hz` and re-tune. Returns True if the hardware
-        honored it; False leaves the radio in classic (offset 0) tuning."""
-        return hz == 0.0
-
-    def set_gain(self, db: float) -> None:
-        raise NotImplementedError
-
-    def set_antenna(self, name: str) -> None:
-        # Default: radios with a single fixed port don't need to do anything.
-        pass
-
-    def antenna_needs_restart(self, name: str) -> bool:
-        """True if applying antenna `name` changes the active RX frontend in a
-        way that requires the flowgraph to be restarted (lock/unlock) for the
-        change to take effect. Default: live setter is enough."""
-        return False
-
-    def samp_rate_range(self):
-        """(min_hz, max_hz) the device will accept for a manual sample-rate
-        entry. Default: the span of the discrete `samp_rate_options`; hardware-
-        backed subclasses override with the device's real reported limits."""
-        opts = self.samp_rate_options or [1e6]
-        return (float(min(opts)), float(max(opts)))
-
-    def freq_range(self):
-        """(min_hz, max_hz) center frequencies the device can tune to, or
-        None if unknown. Hardware-backed subclasses override with real
-        limits; the base can't know, so the sweep range just isn't clamped."""
-        return None
-
-    def get_actual_samp_rate(self) -> float:
-        """The rate the device is really running, which can differ from the
-        requested value after the driver snaps to an achievable rate. Return
-        0.0 when unknown (the caller then keeps the requested value)."""
-        return 0.0
-
-
-class UhdB200Source(RadioSource):
-    """Wraps `uhd.usrp_source` for B200-family devices (B200 / B210)."""
-
-    # 0.625 and 1.25 MHz are the validated DSES lab simulator geometries
-    # (UHF 625 kHz / L-band 1.25 MHz) — needed so a live .fil capture matches
-    # the proven offline tsamp; the B210 supports rates well below 1 MHz.
-    # Every preset is "clean" for the AD9361 in UHD's automatic master-clock
-    # mode: MCR = rate × 2^n lands inside the 5–61.44 MHz clock range, so
-    # decimation stays on the half-band filter chain (flat passband) rather
-    # than falling back to CIC filtering (passband droop — a smeared
-    # calibration error in a radio-astronomy spectrum). 61.44 MS/s is the
-    # device's single-channel ceiling (56 MHz max analog bandwidth); rates
-    # ≥ 25 MS/s need USB 3 and a host that can drink from the hose —
-    # watch the overflow/gap indicators, especially when recording.
-    samp_rate_options = [0.625e6, 1e6, 1.25e6, 2e6, 4e6, 5e6, 8e6, 10e6,
-                         16e6, 20e6, 25e6, 30.72e6, 40e6, 50e6, 56e6,
-                         61.44e6]
-    gain_range = (0.0, 76.0, 1.0)
-
-    def __init__(self, serial: str, samp_rate: float, center_freq: float,
-                 gain: float, antenna: str = ""):
-        self._serial = serial
-        # Cache the live freq/gain so we can re-apply them after a receiver
-        # (subdev) switch, which resets per-frontend state.
-        self._cur_freq = center_freq
-        self._cur_gain = gain
-        self._lo_offset = 0.0
-        self.block = uhd.usrp_source(
-            ",".join((f'serial={serial}', '')),
-            uhd.stream_args(
-                cpu_format="fc32",
-                args='recv_frame_size=8192,num_recv_frames=1024',
-                channels=list(range(0, 1)),
-            ),
-        )
-        # Deep output buffers on every edge leaving the source: at 16 MS/s
-        # the GR default gives a downstream Python sink only a few ms of
-        # slack, so ANY GIL pause longer than that backs the chain up and
-        # the radio prints 'O' (the constant Haswell-recording overflows,
-        # root-caused 2026-08-02). 4 Mi samples ≈ 32 MB/edge ≈ 260 ms of
-        # cushion at 16 MS/s — Python-thread scheduling jitter is absorbed
-        # instead of dropped.
-        self.block.set_min_output_buffer(1 << 22)
-        self.block.set_samp_rate(samp_rate)
-        self.block.set_time_unknown_pps(uhd.time_spec(0))
-        self.block.set_center_freq(center_freq, 0)
-
-        # The B210 has two RX frontends, mapped as subdevs "A:A" and "A:B"
-        # (receiver A and receiver B). The B200 has just "A:A". The default
-        # subdev spec lists all available frontends.
-        try:
-            self._subdevs = self.block.get_subdev_spec(0).split()
-        except Exception:
-            self._subdevs = []
-        try:
-            ports = list(self.block.get_antennas(0))   # e.g. ['TX/RX', 'RX2']
-        except Exception:
-            ports = []
-        self._ports = ports
-        self._recv_labels = ['A', 'B', 'C', 'D'][:len(self._subdevs)]
-        if len(self._subdevs) >= 2 and ports:
-            # Composite "<receiver> : <port>" — covers all physical inputs.
-            self.antennas = [f"{r} : {p}"
-                             for r in self._recv_labels for p in ports]
-        else:
-            # Single-receiver B200 (or unknown): plain port names.
-            self.antennas = ports
-        # The frontend the streamer is currently mapped to. Default mapping
-        # for channel 0 is the first subdev (receiver A).
-        self._current_subdev = self._subdevs[0] if self._subdevs else None
-
-        chosen = self._pick_initial(antenna)
-        self._apply(chosen)
-        self.block.set_gain(gain, 0)
-        self.display_label = f"USRP B210 — {serial}"
-        self.hw_info = f"Ettus USRP B210 (s/n {serial})"
-
-    def _pick_initial(self, saved: str) -> str:
-        """Saved port if still valid; else prefer an RX2 input; else first."""
-        if saved and saved in self.antennas:
-            return saved
-        for a in self.antennas:
-            if a.endswith("RX2"):
-                return a
-        return self.antennas[0] if self.antennas else "RX2"
-
-    def _split(self, name: str):
-        """(subdev_spec_or_None, port) for a composite or plain antenna name."""
-        if ' : ' in name:
-            recv, port = name.split(' : ', 1)
-            idx = self._recv_labels.index(recv) if recv in self._recv_labels else 0
-            spec = self._subdevs[idx] if idx < len(self._subdevs) else None
-            return spec, port
-        return None, name
-
-    def _apply(self, name: str) -> None:
-        spec, port = self._split(name)
-        if spec is not None and spec != self._current_subdev:
-            # Remap channel 0 to a different RX frontend (receiver A↔B).
-            # set_subdev_spec only takes effect when the RX streamer is
-            # (re)created — the caller must do this while the flowgraph is
-            # stopped or inside a lock()/unlock() cycle (see
-            # antenna_needs_restart). Per-frontend params reset on the
-            # remap, so re-apply freq + gain.
-            self.block.set_subdev_spec(spec, 0)
-            self._tune()
-            self.block.set_gain(self._cur_gain, 0)
-            self._current_subdev = spec
-        self.block.set_antenna(port, 0)
-        self.current_antenna = name
-
-    def antenna_needs_restart(self, name: str) -> bool:
-        spec, _ = self._split(name)
-        return spec is not None and spec != self._current_subdev
-
-    def set_samp_rate(self, hz: float) -> None:
-        # UHD snaps to the nearest achievable rate internally; read the result
-        # back with get_actual_samp_rate().
-        self.block.set_samp_rate(hz)
-        if self._lo_offset:
-            # The analog filter is centered on the LO, not on the displayed
-            # band — re-fit it to the new rate (see _apply_bandwidth).
-            self._apply_bandwidth()
-
-    def _apply_bandwidth(self) -> None:
-        """Fit the AD9361 analog filter to the offset geometry. The filter is
-        a lowpass at complex baseband centered on the LO; the wanted band
-        occupies [lo_off − rate/2, lo_off + rate/2] relative to the LO, so
-        the filter must open to 2·|lo_off| + rate when the LO is parked
-        off-center (capped at the 56 MHz device limit). With offset 0 this
-        is just the sample rate — the driver's default policy."""
-        try:
-            rate = float(self.block.get_samp_rate())
-        except Exception:
-            rate = 2e6
-        bw = min(56e6, 2.0 * abs(self._lo_offset) + rate)
-        try:
-            self.block.set_bandwidth(bw, 0)
-        except Exception as exc:
-            print(f"B210 set_bandwidth({bw:.0f}) failed: {exc}",
-                  file=sys.stderr)
-
-    def _tune(self) -> bool:
-        """(Re)tune to the cached center with the current LO offset. With an
-        offset, uhd.tune_request parks the LO at center+offset and the DDC
-        shifts the band back — display and recorded frequencies unchanged,
-        the zero-IF DC artefact moves to `offset` from center (out of the
-        recorded band once |offset| > rate/2).
-
-        VERIFIED, not trusted: some UHD builds honor the MANUAL rf policy
-        but never apply the AUTO dsp compensation (the Pi's radioconda
-        gr-uhd 3.10.12 did exactly this on 2026-08-19/24 — the band ended
-        up centered on the LO while the app believed it was on target, so
-        every recorded header was off by the LO offset). We check the tune
-        result's actual_dsp_freq and, if the compensation is missing, issue
-        an explicit MANUAL-dsp request, trying both sign conventions with
-        readback. Returns False if the offset could not be applied
-        faithfully — the caller then falls back to classic tuning."""
-        if not self._lo_offset:
-            self.block.set_center_freq(self._cur_freq, 0)
-            return True
-        off = self._lo_offset
-        res = self.block.set_center_freq(
-            uhd.tune_request(self._cur_freq, off), 0)
-        try:
-            dsp = float(res.actual_dsp_freq)
-        except Exception:
-            dsp = None
-        if dsp is not None and abs(abs(dsp) - abs(off)) < 1.0:
-            return True          # compensation applied — band is on target
-        # Compensation missing: build the request with dsp MANUAL ourselves.
-        for sign in (-1.0, 1.0):
-            try:
-                req = uhd.tune_request()
-                req.rf_freq_policy = uhd.tune_request.POLICY_MANUAL
-                req.rf_freq = self._cur_freq + off
-                req.dsp_freq_policy = uhd.tune_request.POLICY_MANUAL
-                req.dsp_freq = sign * off
-                r2 = self.block.set_center_freq(req, 0)
-                if abs(abs(float(r2.actual_dsp_freq)) - abs(off)) < 1.0:
-                    print(f"B210 LO offset: UHD dsp AUTO compensation absent; "
-                          f"using MANUAL dsp {sign*off:+.0f} Hz", file=sys.stderr)
-                    return True
-            except Exception as exc:
-                print(f"B210 manual-dsp tune failed: {exc}", file=sys.stderr)
-                break
-        # Could not make the offset honest — classic tuning, offset off.
-        print("B210 LO offset could not be applied faithfully on this UHD; "
-              "falling back to classic tuning.", file=sys.stderr)
-        self._lo_offset = 0.0
-        self.lo_offset = 0.0
-        self._apply_bandwidth()
-        self.block.set_center_freq(self._cur_freq, 0)
-        return False
-
-    def lo_offset_supported(self) -> bool:
-        return True
-
-    def set_lo_offset(self, hz: float) -> bool:
-        self._lo_offset = float(hz)
-        self.lo_offset = self._lo_offset
-        self._apply_bandwidth()
-        return self._tune()
-
-    def set_center_freq(self, hz: float) -> None:
-        self._cur_freq = hz
-        self._tune()
-
-    def set_gain(self, db: float) -> None:
-        self._cur_gain = db
-        self.block.set_gain(db, 0)
-
-    def set_antenna(self, name: str) -> None:
-        self._apply(name)
-
-    def samp_rate_range(self):
-        """The B200-family's true rate envelope.
-
-        Deliberately NOT from get_samp_rates(): UHD answers that query
-        relative to the CURRENT master clock (e.g. "0.031–16 MHz" while
-        clocked for 16 MS/s), but in automatic master-clock mode a new rate
-        request re-clocks the AD9361 — verified on hardware 2026-08-02:
-        every preset up to 61.44 MS/s lands EXACT starting from a 16 MS/s
-        clock. Clamping against the momentary query capped every rate
-        change at the boot rate's ceiling (even the old 25 MHz preset
-        silently became 16), so report the chip's real envelope and let
-        the driver snap + actual-rate readback handle the rest."""
-        return (62.5e3, 61.44e6)
-
-    def freq_range(self):
-        """The B210's RF tuning range, from UHD."""
-        try:
-            r = self.block.get_freq_range(0)     # uhd.meta_range_t
-            lo, hi = float(r.start()), float(r.stop())
-            if hi > lo > 0:
-                return (lo, hi)
-        except Exception:
-            pass
-        return None
-
-    def get_actual_samp_rate(self) -> float:
-        try:
-            return float(self.block.get_samp_rate())
-        except Exception:
-            return 0.0
-
 
 # Per-Soapy-driver default sample-rate lists and gain ranges. SDRPlay
 # devices share the same set; RTL-SDR is fixed at 2.4 MHz or 2.048 MHz
@@ -10078,52 +9693,22 @@ class dses_workbench(gr.top_block, QtWidgets.QMainWindow):
     # All of this is plain CPython and applies identically on Windows, macOS,
     # and Linux; the timer call below is the only platform-specific piece.
 
-    _GC_RT_THRESHOLD = (700, 50_000, 50_000)
+    _GC_RT_THRESHOLD = RealtimeMode.GC_RT_THRESHOLD
 
     def _begin_realtime_mode(self):
-        """Cap host-side stall length for the duration of a recording:
-        confine Python's GC to cheap young-generation collections, and on
-        Windows replace the 15.6 ms scheduler quantum with 1 ms (macOS and
-        Linux already schedule at ~1 ms; no equivalent is needed there)."""
-        if getattr(self, '_rt_active', False):
-            return
-        self._rt_active = True
-        try:
-            self._rt_saved_gc_threshold = gc.get_threshold()
-            # freeze() moves every object allocated so far into a permanent
-            # generation that collections never rescan (cheap - no collect
-            # pass). Gen-0 keeps its default 700-allocation cadence, so
-            # per-collection work stays sub-millisecond; gen-1/gen-2 sweeps
-            # become vanishingly rare, which removes the full-heap stalls.
-            # GC stays ENABLED, so reference cycles are still reclaimed -
-            # memory is bounded no matter how long the recording runs.
-            gc.freeze()
-            gc.set_threshold(*self._GC_RT_THRESHOLD)
-        except Exception:
-            self._rt_saved_gc_threshold = None
-        if sys.platform == "win32":
-            try:
-                ctypes.windll.winmm.timeBeginPeriod(1)
-                self._rt_timer_period = True
-            except Exception:
-                self._rt_timer_period = False
+        """Cap host-side stall length for the duration of a recording (GC
+        confinement + 1 ms Windows timer): dses_radio.RealtimeMode."""
+        rt = getattr(self, '_rt_mode', None)
+        if rt is None:
+            rt = self._rt_mode = RealtimeMode(self._GC_RT_THRESHOLD)
+        rt.begin()
+        self._rt_active = rt.active
 
     def _end_realtime_mode(self):
-        if not getattr(self, '_rt_active', False):
-            return
+        rt = getattr(self, '_rt_mode', None)
+        if rt is not None:
+            rt.end()
         self._rt_active = False
-        try:
-            if getattr(self, '_rt_saved_gc_threshold', None):
-                gc.set_threshold(*self._rt_saved_gc_threshold)
-            gc.unfreeze()
-        except Exception:
-            pass
-        if sys.platform == "win32" and getattr(self, '_rt_timer_period', False):
-            try:
-                ctypes.windll.winmm.timeEndPeriod(1)
-            except Exception:
-                pass
-            self._rt_timer_period = False
 
     def _on_recording_started(self):
         """Called once a recording sink is actually live: start the elapsed /

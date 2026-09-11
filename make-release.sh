@@ -48,6 +48,7 @@ copy_if_present() {
 for f in \
     dses_workbench.py \
     dses_spectrum_analyzer.py \
+    dses_radio.py \
     sigproc_fil.py \
     pulsar_planner.py \
     pulsar_sim.py \

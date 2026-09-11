@@ -53,6 +53,7 @@ try {
     $files = @(
         'dses_workbench.py',
         'dses_spectrum_analyzer.py',   # launch shim under the pre-1.4.0 name
+        'dses_radio.py',               # shared B210 layer (also used by the EVE modem)
         'sigproc_fil.py',
         'pulsar_planner.py',
         'pulsar_sim.py',
