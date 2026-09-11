@@ -94,6 +94,8 @@ When you're ready to ship a new version:
 
 Edit `APP_VERSION` near the top of `dses_workbench.py`. Use semantic versioning: `MAJOR.MINOR.PATCH`. Bug fixes only → bump PATCH; new features → bump MINOR; breaking changes → bump MAJOR.
 
+This is enforced from **1.5.0** (Rick, 2026-09-11): the 1.3.x/1.4.x point releases carried features because the program was still developmental; it is now mostly stable, so the third digit means "bug release" and a feature release moves the second digit.
+
 ### 4.2 Commit the source changes
 
 Note the version in the commit message.

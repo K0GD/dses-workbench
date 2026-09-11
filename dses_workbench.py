@@ -149,7 +149,7 @@ import time
 
 # === App metadata ===
 APP_NAME        = "DSES Radio Astronomy Workbench"
-APP_VERSION     = "1.4.0"
+APP_VERSION     = "1.5.0"
 APP_AUTHOR      = "Richard M Hambly (K0GD)"
 APP_AUTHOR_EMAIL = "rick@cnssys.com"
 APP_COPYRIGHT   = "Copyright © 2026 Richard M Hambly (K0GD)"
