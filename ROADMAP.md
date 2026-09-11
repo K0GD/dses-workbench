@@ -724,19 +724,29 @@ menu bar!) + drift-scan box test (dock behavior on headless Openbox/xrdp
       Fix: accumulate blocks ACROSS ticks to a target N while recording
       (slower update instead of a biased trace), or correct the small-N
       bias + show a "display averaging reduced" status note.
-- [ ] **astropy's IERS auto-download makes the FIRST planner open hang**
-      (measured 2026-09-10 on the Windows dev box, while adding the
-      date/time control): the first alt/az transform in a process pays
-      astropy's IERS refresh — **84-99 s** with a blocked or slow network
-      versus **0.87 s** with `astropy.utils.iers.conf.auto_download =
-      False`; every refresh after that is 0.7-3.9 s (cached in-process).
-      At a site with no internet — the Pi at Haswell — that is a ~1.5 min
-      freeze on the first Ctrl+P of every launch, and the planner is
-      exactly the window a field observer opens first. Candidate fix: set
-      `auto_download = False` inside `pulsar_planner.altaz_batch` (the
-      bundled IERS table is good to milliarcseconds at the current epoch,
-      and this planner only ever claimed arcminutes). Left for Rick to
-      approve because it changes an astropy-wide setting, not just ours.
+- [x] **Planner sky math: IERS download OFF + closed form PRECESSED — DONE
+      2026-09-11 (Rick's call, same morning).** Two findings corrected the
+      09-10 note: (1) astropy 8 re-downloads the 3.7 MB IERS-A table on
+      EVERY process start (its cache is write-only), so the cost was 16 s
+      per launch with internet, 84-99 s black-holed — and in the black-holed
+      case it then RAISED and the planner silently fell back to the closed
+      form; "0.87 s with auto_download=False" had been that fallback, not
+      astropy. The working setting is `auto_download=False` AND
+      `auto_max_age=None` (bundled table): measured 0.06" from a fresh
+      download at the same instant, ~1 s, no network. (2) astropy is a
+      dev-only extra — the Haswell Pi (`/home/dses/radioconda`) and the
+      Windows production install (`C:\ProgramData\radioconda`) have NO
+      astropy and were always on the closed form, which was 18.5' high in
+      altitude: all precession (J2000 catalog positions treated as of-date,
+      26 yr x 50"/yr). `precess_j2000()` (IAU 1976, Meeus 21.b reproduced
+      to 0.00", astropy FK5 to 0.1") now feeds altaz(), the rise/set/next-
+      window searches (precess once, step with `_altaz_of_date`), and the
+      transit/culmination helpers. Whole-catalog residual vs astropy:
+      median 0.2-0.4', p95 0.46', max 0.49' at 1995/now/+1 yr/2035 (was
+      18.5'). Cyg A's transit moved +53 s and its culmination +4.3' — the
+      SEGMENT5 "apparent Dec" lesson, now built in. `LAST_ENGINE` says
+      which path ran; the Alt tooltip quotes it. Nutation + aberration
+      (the remaining 0.5') are the only further step, not worth taking.
 - [ ] **Mid-integration row timestamps for ezRA drift-scan files** (from
       the Sept campaign analysis): rows are stamped at integration END, so
       transit fits read τ/2 late (13 s at 25 s rows, 32 s at 64 s). Stamp

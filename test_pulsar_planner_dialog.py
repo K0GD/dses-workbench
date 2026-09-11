@@ -112,22 +112,27 @@ def test_reference_time(dlg):
 
 def test_planned_table(rows):
     print("\n2. a planned instant reaches the planning code")
-    # Half a sidereal day apart, B0329+54's altitude must differ a lot: the
-    # proof that the table is really computed for the box, not for now.
+    # Plan for B0329+54's next meridian crossing: the table must then show
+    # it at its culmination altitude — a check that holds whatever the
+    # clock says when the test runs. (A fixed offset does not: alt(t) equals
+    # alt(t + 12 h) twice a day, and the 2026-09-11 run landed on one.)
     dlg = make_dialog(rows)
     i = row_of(dlg, "J0332+5434")
     check(i >= 0, "B0329+54 is in the table")
-    alt_now = float(dlg._table.item(i, 2).text())
+    ra_b, dec_b = 53.2471, 54.5787
+    now_ts = dlg._ref_ts_used
+    th = pp.next_transit_h(ra_b, LON, now_ts, dec_deg=dec_b)
 
     dlg._plan.setChecked(True)
-    dlg._set_when(dlg._ref_ts_used + 11.967 * 3600.0)   # 1/2 sidereal day
+    dlg._set_when(now_ts + th * 3600.0)
     dlg._refresh()
     i2 = row_of(dlg, "J0332+5434")
     alt_then = float(dlg._table.item(i2, 2).text())
-    check(abs(alt_then - alt_now) > 5.0,
-          "altitude changes when the planned time does",
-          f"{alt_now:.1f}° -> {alt_then:.1f}°")
-    expect, _ = pp.altaz(53.2471, 54.5787, LAT, LON, dlg._ref_ts_used)
+    culm = pp.max_alt_deg(dec_b, LAT, ra_deg=ra_b, unix_ts=now_ts)
+    check(abs(alt_then - culm) < 0.5,
+          "planned for its transit, the table shows B0329+54 at culmination",
+          f"{alt_then:.1f}° vs {culm:.1f}° ({th:.1f} h ahead)")
+    expect, _ = pp.altaz(ra_b, dec_b, LAT, LON, dlg._ref_ts_used)
     check(abs(alt_then - expect) < 1.0,
           "and matches an independent altaz() for that instant",
           f"table {alt_then:.1f}° vs {expect:.1f}°")
@@ -177,6 +182,9 @@ def test_cell_tips(dlg):
           "name cell quotes the catalog position")
     check("meridian" in tips[2] and "°" in tips[2],
           "altitude cell gives the transit")
+    check(("Computed with astropy" in tips[2]) != ("closed form" in tips[2]),
+          "altitude cell names the engine that computed it",
+          f"engine={pp.LAST_ENGINE}")
     check("0.714520" in tips[4], "period cell quotes P0", tips[4][:60])
     check("pc cm-3" in tips[5] and "ms" in tips[5],
           "DM cell converts DM into a delay across the tuned band")

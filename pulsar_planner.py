@@ -15,10 +15,13 @@ Two pieces:
     onto a Raspberry Pi at a remote site.
 
   * `visible_now()` -- horizontal coordinates + time-above-mask for a site,
-    using astropy when available and a self-contained fallback when it is
-    not. The fallback is accurate to a few arcminutes, which is far below
-    the beamwidth of any DSES dish, so a missing astropy degrades the
-    planner's precision imperceptibly rather than disabling it.
+    using astropy when available and a self-contained closed form when it
+    is not. The closed form precesses the J2000 catalog position to date
+    (the 22' that dominated its error before 2026-09-11) and is then good
+    to about half an arcminute -- nutation and aberration are what remain,
+    far below the beamwidth of any DSES dish -- so a missing astropy
+    degrades the planner's precision imperceptibly rather than disabling
+    it. The rise/set/transit searches always use the closed form.
 
 Flux handling follows the tuned band: DSES records anywhere from 0.1-2 GHz,
 so the caller passes the current center frequency and gets the nearest
@@ -35,6 +38,7 @@ import os
 import time
 import urllib.parse
 import urllib.request
+import warnings
 from pathlib import Path
 
 # ATNF psrcat web query. `table_bottom.txt` style plain output; we ask for
@@ -112,9 +116,49 @@ def _gmst_deg(unix_ts):
     return gmst % 360.0
 
 
+def precess_j2000(ra_deg, dec_deg, unix_ts):
+    """J2000 (RA, Dec) -> mean equator and equinox of date, in degrees.
+
+    IAU 1976 precession as the rigorous rotation of Meeus, *Astronomical
+    Algorithms* ch. 21 — good to ~1" over a century. Catalog positions are
+    J2000 and the equinox has moved 50"/yr since: by 2026 that is 22', most
+    of a beamwidth, and it was the whole of the closed form's error until
+    2026-09-11 (measured 18.5' high in altitude against astropy). What this
+    still leaves out — nutation (<= 17") and annual aberration (<= 20.5") —
+    is what separates it from astropy's apparent place.
+    """
+    t = (_julian_day(unix_ts) - 2451545.0) / 36525.0
+    zeta = math.radians((2306.2181 * t + 0.30188 * t * t
+                         + 0.017998 * t ** 3) / 3600.0)
+    z = math.radians((2306.2181 * t + 1.09468 * t * t
+                      + 0.018203 * t ** 3) / 3600.0)
+    theta = math.radians((2004.3109 * t - 0.42665 * t * t
+                          - 0.041833 * t ** 3) / 3600.0)
+    a = math.radians(ra_deg) + zeta
+    d = math.radians(dec_deg)
+    cos_d = math.cos(d)
+    A = cos_d * math.sin(a)
+    B = math.cos(theta) * cos_d * math.cos(a) - math.sin(theta) * math.sin(d)
+    C = math.sin(theta) * cos_d * math.cos(a) + math.cos(theta) * math.sin(d)
+    ra = math.degrees(math.atan2(A, B) + z) % 360.0
+    dec = math.degrees(math.asin(max(-1.0, min(1.0, C))))
+    return ra, dec
+
+
 def altaz(ra_deg, dec_deg, lat_deg, lon_deg, unix_ts):
-    """(altitude, azimuth) in degrees. Mean coordinates, no refraction —
-    accurate to a few arcminutes, far inside any DSES beam."""
+    """(altitude, azimuth) in degrees for a J2000 position.
+
+    Precessed to date; no nutation, aberration or refraction — good to
+    about half an arcminute, far inside any DSES beam."""
+    ra, dec = precess_j2000(ra_deg, dec_deg, unix_ts)
+    return _altaz_of_date(ra, dec, lat_deg, lon_deg, unix_ts)
+
+
+def _altaz_of_date(ra_deg, dec_deg, lat_deg, lon_deg, unix_ts):
+    """altaz() for a position ALREADY precessed to date — the inner loop of
+    the rise/set searches, which precess once and then step the clock a few
+    hundred times (precession moves 0.14"/day; re-doing it per step would
+    only cost time)."""
     lst = (_gmst_deg(unix_ts) + lon_deg) % 360.0
     ha = math.radians((lst - ra_deg) % 360.0)
     dec = math.radians(dec_deg)
@@ -136,27 +180,60 @@ def altaz(ra_deg, dec_deg, lat_deg, lon_deg, unix_ts):
     return math.degrees(alt), az % 360.0
 
 
+# Which engine computed the last altaz_batch(): "astropy" (apparent place)
+# or "closed-form" (precessed mean place). The planner quotes it in the
+# altitude explanations so a reader knows what kind of number they have.
+LAST_ENGINE = "closed-form"
+
+
 def altaz_batch(ra_list, dec_list, lat_deg, lon_deg, unix_ts, height_m=0.0):
     """Alt/az for many sources at one instant.
 
-    Uses astropy when importable — it applies precession, nutation and
-    aberration, which the closed form below does not; measured against it,
-    the fallback runs ~15' high in altitude. That is a third of the 60-ft
-    dish's L-band beam: irrelevant for "is it up and for how long", which is
-    all the planner claims, but there is no reason to accept it when the
-    better answer is one import away. Vectorized so a 3000-row catalog costs
-    one transform rather than 3000.
+    Uses astropy when importable — it adds nutation and aberration to the
+    precession the closed form already applies; the two agree to about
+    half an arcminute, a tiny fraction of the 60-ft dish's 0.7 deg L-band
+    beam. astropy is a dev-only extra in environment.yml, so most installs
+    (the Haswell Pi, the radioconda production installs) take the closed
+    form; the tooltips say which one ran. Vectorized so a 4,400-row catalog
+    costs one transform rather than 4,400.
+
+    Earth-orientation data: astropy 8 re-downloads the 3.7 MB IERS-A table
+    on EVERY process start (its cache is write-only), which measured 16 s
+    online and 84-99 s with the network black-holed — and in the latter
+    case it then raised and this function silently fell back to the closed
+    form. So the download is off and the table bundled with astropy is
+    used as-is: measured against a freshly downloaded one at the same
+    instant, the difference is 0.06" (2026-09-11). No network, no wait.
     """
+    global LAST_ENGINE
     try:
         from astropy.coordinates import SkyCoord, EarthLocation, AltAz
         from astropy.time import Time
+        from astropy.utils import iers
+        from astropy.utils.exceptions import AstropyWarning
         import astropy.units as u
+        iers.conf.auto_download = False
+        iers.conf.auto_max_age = None
         loc = EarthLocation(lat=lat_deg * u.deg, lon=lon_deg * u.deg,
                             height=height_m * u.m)
         frame = AltAz(obstime=Time(unix_ts, format="unix"), location=loc)
-        sc = SkyCoord(ra=ra_list * u.deg, dec=dec_list * u.deg).transform_to(frame)
+        with warnings.catch_warnings():
+            # Beyond the bundled table's range astropy warns and uses mean
+            # polar motion / UT1 = UTC, and erfa calls a date past its
+            # leap-second list "dubious": arcsecond effects, accepted here
+            # (a planning date ten years out is a legitimate question).
+            warnings.simplefilter("ignore", AstropyWarning)
+            try:
+                from erfa import ErfaWarning
+                warnings.simplefilter("ignore", ErfaWarning)
+            except ImportError:
+                pass
+            sc = SkyCoord(ra=ra_list * u.deg,
+                          dec=dec_list * u.deg).transform_to(frame)
+        LAST_ENGINE = "astropy"
         return list(sc.alt.deg), list(sc.az.deg)
     except Exception:
+        LAST_ENGINE = "closed-form"
         out_alt, out_az = [], []
         for ra, dec in zip(ra_list, dec_list):
             a, z = altaz(ra, dec, lat_deg, lon_deg, unix_ts)
@@ -173,17 +250,19 @@ def hours_above_mask(ra_deg, dec_deg, lat_deg, lon_deg, unix_ts, mask_deg,
     sources (returns horizon_hours), sources already below the mask
     (returns 0.0), and the elevation mask itself without special cases.
     """
-    alt0, _ = altaz(ra_deg, dec_deg, lat_deg, lon_deg, unix_ts)
+    ra_deg, dec_deg = precess_j2000(ra_deg, dec_deg, unix_ts)
+    alt0, _ = _altaz_of_date(ra_deg, dec_deg, lat_deg, lon_deg, unix_ts)
     if alt0 < mask_deg:
         return 0.0
     step = step_min * 60.0
     n = int(horizon_hours * 3600.0 / step)
     for i in range(1, n + 1):
-        alt, _ = altaz(ra_deg, dec_deg, lat_deg, lon_deg, unix_ts + i * step)
+        alt, _ = _altaz_of_date(ra_deg, dec_deg, lat_deg, lon_deg,
+                                unix_ts + i * step)
         if alt < mask_deg:
             # linear interpolation inside the last step
-            prev_alt, _ = altaz(ra_deg, dec_deg, lat_deg, lon_deg,
-                                unix_ts + (i - 1) * step)
+            prev_alt, _ = _altaz_of_date(ra_deg, dec_deg, lat_deg, lon_deg,
+                                         unix_ts + (i - 1) * step)
             frac = ((prev_alt - mask_deg) / (prev_alt - alt)
                     if prev_alt != alt else 0.0)
             return ((i - 1) + max(0.0, min(1.0, frac))) * step / 3600.0
@@ -207,25 +286,32 @@ def lst_hours(unix_ts, lon_deg):
     return ((_gmst_deg(unix_ts) + lon_deg) % 360.0) / 15.0
 
 
-def next_transit_h(ra_deg, lon_deg, unix_ts):
+def next_transit_h(ra_deg, lon_deg, unix_ts, dec_deg=None):
     """Hours of CLOCK time until the source next crosses the local meridian.
 
     Closed form (LST advances one sidereal hour per 0.9973 solar hours), so
     it costs nothing to compute per row on demand. The meridian is where a
     source is highest and the atmosphere thinnest — for a drift scan it is
-    the whole observation.
+    the whole observation. Pass `dec_deg` to precess a J2000 RA to date
+    first: precession in RA is ~3 s/yr, 80 s of clock time by 2026, and a
+    transit time quoted to the minute should not carry that.
     """
+    if dec_deg is not None:
+        ra_deg, _ = precess_j2000(ra_deg, dec_deg, unix_ts)
     dh_sidereal = ((ra_deg / 15.0) - lst_hours(unix_ts, lon_deg)) % 24.0
     return dh_sidereal / SIDEREAL_RATE
 
 
-def max_alt_deg(dec_deg, lat_deg):
+def max_alt_deg(dec_deg, lat_deg, ra_deg=None, unix_ts=None):
     """Altitude the source reaches at upper culmination (degrees).
 
     90 - |lat - dec|. Negative means it never clears the horizon from this
     latitude at all — worth saying plainly, since no amount of waiting
-    helps.
+    helps. With `ra_deg` and `unix_ts` the J2000 declination is precessed
+    to date first (up to 20"/yr — 9' by 2026 for the worst-placed sources).
     """
+    if ra_deg is not None and unix_ts is not None:
+        _, dec_deg = precess_j2000(ra_deg, dec_deg, unix_ts)
     return 90.0 - abs(lat_deg - dec_deg)
 
 
@@ -544,8 +630,10 @@ def next_window(ra_deg, dec_deg, lat_deg, lon_deg, unix_ts, mask_deg,
     step = step_min * 60.0
     n = int(horizon_hours * 3600.0 / step)
     rise_i = None
+    ra_d, dec_d = precess_j2000(ra_deg, dec_deg, unix_ts)   # once, not 288x
     for i in range(0, n + 1):
-        alt, _ = altaz(ra_deg, dec_deg, lat_deg, lon_deg, unix_ts + i * step)
+        alt, _ = _altaz_of_date(ra_d, dec_d, lat_deg, lon_deg,
+                                unix_ts + i * step)
         if alt >= mask_deg:
             rise_i = i
             break

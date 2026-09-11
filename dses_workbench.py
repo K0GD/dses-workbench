@@ -4750,10 +4750,12 @@ PLANNER_COLUMNS = (
      "box and as a recording Source."),
     ("Alt °",
      "Altitude above the horizon at the reference time, in degrees, and\n"
-     "what the elevation mask is compared against. Apparent place\n"
-     "(precession, nutation, aberration) when astropy is installed; no\n"
-     "refraction and no mount corrections, so it is where the SKY is, not\n"
-     "what an encoder will read."),
+     "what the elevation mask is compared against. Apparent place when\n"
+     "astropy is installed; otherwise the built-in closed form, J2000\n"
+     "position precessed to date (the two agree to about half an\n"
+     "arcminute — hover a cell to see which one ran). No refraction and\n"
+     "no mount corrections, so it is where the SKY is, not what an\n"
+     "encoder will read."),
     ("Az °",
      "Azimuth of the source at the reference time: compass bearing, north\n"
      "= 0°, east = 90°, south = 180°, west = 270°. Sky position only —\n"
@@ -5500,22 +5502,35 @@ class PulsarPlannerDialog(QtWidgets.QDialog):
                 paras.append(
                     f"Altitude {r['alt_deg']:.1f}° above the horizon at {at}; your "
                     f"elevation mask is {mask:.1f}°.")
-            culm = pp.max_alt_deg(r["dec_deg"], site["lat_deg"])
+            culm = pp.max_alt_deg(r["dec_deg"], site["lat_deg"],
+                                  ra_deg=r["ra_deg"], unix_ts=ts)
             if culm <= 0.0:
                 paras.append(
                     f"From this latitude the source never clears the horizon at all "
                     f"(it culminates {abs(culm):.1f}° below it) — no time of day or "
                     f"year helps.")
             else:
-                th = pp.next_transit_h(r["ra_deg"], site["lon_deg"], ts)
+                th = pp.next_transit_h(r["ra_deg"], site["lon_deg"], ts,
+                                       dec_deg=r["dec_deg"])
                 paras.append(
                     f"It culminates at {culm:.1f}° from this site, and next crosses "
                     f"the meridian — highest, least atmosphere, best place to catch "
                     f"it — in {th:.1f} h, at {self._fmt_clock(ts + th * 3600.0)}.")
-            paras.append(
-                "Apparent place: precession, nutation and aberration are applied "
-                "when astropy is installed. No refraction and no mount corrections, "
-                "so this is where the SKY is, not what your encoders will read.")
+            if pp.LAST_ENGINE == "astropy":
+                paras.append(
+                    "Computed with astropy: apparent place (precession, nutation, "
+                    "aberration) using the Earth-orientation table bundled with "
+                    "astropy — no download; 0.06\" from a freshly fetched one. No "
+                    "refraction and no mount corrections, so this is where the SKY "
+                    "is, not what your encoders will read.")
+            else:
+                paras.append(
+                    "Computed with the built-in closed form (astropy is not "
+                    "installed here): the J2000 catalog position precessed to "
+                    "date, without nutation or aberration — good to about half an "
+                    "arcminute, 1/80 of the beam. No refraction and no mount "
+                    "corrections, so this is where the SKY is, not what your "
+                    "encoders will read.")
 
         elif col == 3:                                      # Az
             paras.append(

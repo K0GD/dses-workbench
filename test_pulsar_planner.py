@@ -72,14 +72,31 @@ def test_coordinates():
     lst = (pp._gmst_deg(ts) + LON) % 360.0
     alt, _ = pp.altaz(lst, LAT, LAT, LON, ts)
     check(abs(alt - 90.0) < 0.5, "zenith source reads alt~90", f"{alt:.2f}")
-    # astropy agreement (only if astropy is importable)
+    # astropy agreement (only if astropy is importable). Since the closed
+    # form precesses (2026-09-11) the two differ only by nutation and
+    # aberration: under an arcminute, not the 18' of before.
     try:
         import astropy  # noqa: F401
+        t0 = time.time()
         a, z = pp.altaz_batch([53.2475], [54.5787], LAT, LON, ts, AMSL)
+        dt = time.time() - t0
         fa, fz = pp.altaz(53.2475, 54.5787, LAT, LON, ts)
-        check(abs(a[0] - fa) < 0.5 and abs(z[0] - fz) < 0.5,
-              "astropy path agrees with fallback to <0.5 deg",
-              f"alt {a[0]:.2f} vs {fa:.2f}")
+        check(pp.LAST_ENGINE == "astropy",
+              "astropy engine actually ran (not the fallback)", pp.LAST_ENGINE)
+        check(abs(a[0] - fa) * 60 < 1.5 and abs(z[0] - fz) * 60 < 1.5,
+              "astropy and the precessed closed form agree to <1.5 arcmin",
+              f"alt {a[0]:.4f} vs {fa:.4f} ({abs(a[0] - fa) * 60:.2f}')")
+        from astropy.utils import iers
+        check(iers.conf.auto_download is False and iers.conf.auto_max_age is None,
+              "altaz_batch switched the IERS download off (no network, no hang)")
+        check(dt < 10.0, "transform did not go to the network", f"{dt:.2f} s")
+        # Beyond the bundled Earth-orientation table: must still answer.
+        far = ts + 5 * 365.25 * 86400.0
+        a5, z5 = pp.altaz_batch([53.2475], [54.5787], LAT, LON, far, AMSL)
+        fa5, _ = pp.altaz(53.2475, 54.5787, LAT, LON, far)
+        check(math.isfinite(a5[0]) and abs(a5[0] - fa5) * 60 < 1.5,
+              "five years out still answers, within 1.5' of the closed form",
+              f"{pp.LAST_ENGINE}: {a5[0]:.4f} vs {fa5:.4f}")
     except ImportError:
         print("  SKIP  astropy comparison (astropy not installed)")
 
@@ -180,6 +197,66 @@ def test_sidereal():
           "a far-southern source culminates below the horizon")
     check(abs(pp.max_alt_deg(LAT, LAT) - 90.0) < 1e-9,
           "a source at the site's latitude passes through the zenith")
+    # With the declination supplied, the transit is computed for the RA OF
+    # DATE: for Cyg A that is ~55 s of clock time later than the J2000 RA.
+    h2 = pp.next_transit_h(ra_cyga, LON, ts, dec_deg=40.734)
+    ra_d, dec_d = pp.precess_j2000(ra_cyga, 40.734, ts + h2 * 3600.0)
+    check(abs(pp.lst_hours(ts + h2 * 3600.0, LON) - ra_d / 15.0) < 1e-3,
+          "with dec, the transit lands on the RA of date",
+          f"LST {pp.lst_hours(ts + h2 * 3600.0, LON):.4f} vs {ra_d / 15.0:.4f} h")
+    check(20.0 < abs(h2 - h) * 3600.0 < 120.0,
+          "precession shifts the transit by tens of seconds",
+          f"{(h2 - h) * 3600.0:+.1f} s")
+    # Cyg A's dec of date is ~4' north of J2000 — the SEGMENT5 lesson that
+    # the Appendix-A elevation target had used the J2000 value.
+    culm_d = pp.max_alt_deg(40.734, LAT, ra_deg=ra_cyga, unix_ts=ts)
+    _, dec_ts = pp.precess_j2000(ra_cyga, 40.734, ts)
+    check(abs(culm_d - (90.0 - abs(LAT - dec_ts))) < 1e-9
+          and 2.0 < abs(culm_d - 87.647) * 60.0 < 8.0,
+          "culmination with precession uses the dec of date",
+          f"{culm_d:.3f} vs J2000 {pp.max_alt_deg(40.734, LAT):.3f}")
+
+
+def test_precession():
+    """precess_j2000 (2026-09-11): the closed form's dominant error term."""
+    print("\n2b. precession J2000 -> date")
+    # Meeus, Astronomical Algorithms (2nd ed.) example 21.b: theta Persei,
+    # proper motion already applied, J2000 -> 2028 Nov 13.19 TD
+    # (JD 2462088.69): 2h44m12.975s +49d13'39.90" -> 2h46m11.331s
+    # +49d20'54.54". TT-UTC (~70 s) moves the epoch by 2e-6 century: nil.
+    ts = (2462088.69 - 2440587.5) * 86400.0
+    ra, dec = pp.precess_j2000(41.0540625, 49.2277500, ts)
+    d_ra = abs(ra - 41.5472125) * 3600.0
+    d_dec = abs(dec - 49.3484833) * 3600.0
+    check(d_ra < 1.0 and d_dec < 1.0, "reproduces Meeus 21.b to 1 arcsec",
+          f"dRA {d_ra:.2f}\"  dDec {d_dec:.2f}\"")
+    j2000 = (2451545.0 - 2440587.5) * 86400.0
+    ra0, dec0 = pp.precess_j2000(41.0540625, 49.2277500, j2000)
+    check(abs(ra0 - 41.0540625) < 1e-9 and abs(dec0 - 49.2277500) < 1e-9,
+          "identity at J2000.0")
+    # 2026: the shift is ~22' — the error the closed form used to carry.
+    now = 1789000000.0
+    ra_n, dec_n = pp.precess_j2000(53.2475, 54.5787, now)
+    sep = math.degrees(math.acos(
+        math.sin(math.radians(54.5787)) * math.sin(math.radians(dec_n))
+        + math.cos(math.radians(54.5787)) * math.cos(math.radians(dec_n))
+        * math.cos(math.radians(53.2475 - ra_n)))) * 60.0
+    check(15.0 < sep < 30.0, "B0329+54 has moved ~22' since J2000",
+          f"{sep:.1f}'")
+    try:
+        from astropy.coordinates import SkyCoord, FK5
+        from astropy.time import Time
+        import astropy.units as u
+        c = SkyCoord(ra=41.0540625 * u.deg, dec=49.2277500 * u.deg,
+                     frame="fk5", equinox="J2000").transform_to(
+                         FK5(equinox=Time(ts, format="unix")))
+        d_ra = abs(c.ra.deg - ra) * 3600.0
+        d_dec = abs(c.dec.deg - dec) * 3600.0
+        check(d_ra < 1.0 and d_dec < 1.0,
+              "agrees with astropy FK5 precession to 1 arcsec",
+              f"dRA {d_ra:.2f}\"  dDec {d_dec:.2f}\"")
+    except ImportError:
+        print("  SKIP  astropy FK5 cross-check (astropy not installed)")
 
 
 def test_cache():
@@ -270,6 +347,7 @@ if __name__ == "__main__":
     test_planning()
     test_next_window()
     test_sidereal()
+    test_precession()
     test_cache()
     test_duration_and_flux()
     test_live_fetch()
