@@ -3070,13 +3070,21 @@ highlighted green are viable now</b> — up, with Min&nbsp;rec fitting
 inside Time&nbsp;left. It is an aid, not a gate: one SEFD serves every
 band (low-band numbers read optimistic) and RFI, scintillation, and
 pointing loss add on top.</li>
-<li><b>Best f</b>: the dish band (of the Tuning presets) where this source
-detects fastest — flux scaled to each band, SEFD scaled by sky
-temperature, and pulse broadening from channel DM smearing plus empirical
-interstellar scattering. Steep-spectrum low-DM sources are sent low;
-high-DM sources are kept high, where scattering has not destroyed the
-pulse. Approximate physics — the band to <i>try first</i>, not a
-guarantee.</li>
+<li><b>Best band</b>: of the bands the dish has feeds for (the Tuning
+presets), the one where this source detects fastest — flux scaled to each
+band, SEFD scaled by sky temperature, and pulse broadening from channel DM
+smearing plus empirical interstellar scattering. Steep-spectrum low-DM
+sources are sent low; high-DM sources are kept high, where scattering has
+not destroyed the pulse. Approximate physics — the band to <i>try
+first</i>, not a guarantee.</li>
+<li><b>Best f</b>: the same model with the feed list taken away — the
+frequency anywhere from 100 MHz to 6 GHz where the source detects fastest,
+i.e. what a feed built for it would want to be. Hover the cell to see how
+far the dish's best real band falls short (often not far: for most bright
+pulsars the 408 MHz feed is within a few tens of percent of the optimum).
+An answer at the very bottom of the range means "as low as you can go",
+not a measured optimum — real pulsar spectra turn over there and the model
+does not know it.</li>
 <li><b>Copy for reports</b>: Ctrl+C copies the selected rows (with a
 header line, and a comment line naming the site, the instant, the mask and
 the tuning the numbers came from) as tab-separated text that pastes cleanly
@@ -4786,16 +4794,26 @@ PLANNER_COLUMNS = (
      "not a gate: one SEFD serves every band, so low-band numbers\n"
      "read optimistic, and RFI / scintillation / pointing loss add\n"
      "on top."),
+    ("Best band",
+     "Of the bands the dish has feeds for (the Tuning presets: 408,\n"
+     "680.5, 1299.5, 1422, 1666 and 2304 MHz), the one where this source\n"
+     "detects FASTEST — the minimum estimated time-to-8-sigma, using flux\n"
+     "scaled to each band, SEFD scaled by sky temperature (galactic\n"
+     "synchrotron brightens the sky at low frequency), and pulse\n"
+     "broadening from channel DM smearing + empirical interstellar\n"
+     "scattering (which smears high-DM sources into invisibility at low\n"
+     "bands). The physics is approximate — treat it as which band to TRY\n"
+     "first, not a guarantee. Best f is the same model with the feed\n"
+     "list taken away."),
     ("Best f",
-     "The dish band (from the Tuning presets) where this source\n"
-     "detects FASTEST: minimum estimated time-to-8-sigma over 408,\n"
-     "680.5, 1299.5, 1422, 1666 and 2304 MHz, using flux scaled to\n"
-     "each band, SEFD scaled by sky temperature (galactic synchrotron\n"
-     "brightens the sky at low frequency), and pulse broadening from\n"
-     "channel DM smearing + empirical interstellar scattering (which\n"
-     "smears high-DM sources into invisibility at low bands). The\n"
-     "physics is approximate — treat it as which band to TRY first,\n"
-     "not a guarantee."),
+     "The frequency ANYWHERE from 100 MHz to 6 GHz where the same model\n"
+     "detects this source fastest — what a feed built for it would want\n"
+     "to be, and how far the dish's nearest real band (Best band) falls\n"
+     "short; hover a cell for the comparison. Same caveats as Best band,\n"
+     "plus: the flux power law and the sky model are not trusted below\n"
+     "~100 MHz and real pulsar spectra turn over there, so an answer at\n"
+     "the very bottom of the range means “as low as you can go”, not a\n"
+     "measured optimum."),
     ("Time left",
      "How long the source stays above the elevation mask, counted from the\n"
      "reference time; “circumpolar” means it never drops below the mask in\n"
@@ -5383,6 +5401,7 @@ class PulsarPlannerDialog(QtWidgets.QDialog):
                 fmjy, r["p0_s"], sefd, self._rate_hz,
                 w50_ms=r.get("w50_ms"))
             bf, bt = pulsar_planner.best_band_mhz(r, sefd, self._rate_hz)
+            ff, ft = pulsar_planner.best_freq_mhz(r, sefd, self._rate_hz)
             viable = (tmin is not None and not r.get("below_mask")
                       and tmin <= hrs * 3600.0)
             if viable:
@@ -5392,7 +5411,8 @@ class PulsarPlannerDialog(QtWidgets.QDialog):
             # until the pointer rests on the cell (see _TipItem).
             ctx = {"ts": ref_ts, "sefd": sefd, "flux_mjy": fmjy,
                    "flux_label": flabel, "tmin": tmin, "best_f": bf,
-                   "best_t": bt, "hrs": hrs, "viable": viable}
+                   "best_t": bt, "free_f": ff, "free_t": ft, "hrs": hrs,
+                   "viable": viable}
 
             def item(text, col, sort_value=None, r=r, ctx=ctx):
                 tip = lambda: self._cell_tip(r, col, ctx)   # noqa: E731
@@ -5414,9 +5434,11 @@ class PulsarPlannerDialog(QtWidgets.QDialog):
                      tmin if tmin is not None else 1e12),
                 item("—" if bf is None else f"{bf:g}", 8,
                      bf if bf is not None else 1e12),
-                item(left, 9, hrs) if not r.get("below_mask")
-                else item(left, 9),
-                item(nxt, 10, nxt_sort),
+                item("—" if ff is None else f"{ff:.0f}", 9,
+                     ff if ff is not None else 1e12),
+                item(left, 10, hrs) if not r.get("below_mask")
+                else item(left, 10),
+                item(nxt, 11, nxt_sort),
             ]
             for c, it in enumerate(cells):
                 if viable:
@@ -5688,33 +5710,72 @@ class PulsarPlannerDialog(QtWidgets.QDialog):
                     "numbers read optimistic, and RFI, scintillation and pointing "
                     "loss all add on top.")
 
-        elif col == 8:                                      # Best f
+        elif col == 8:                                      # Best band
             bf, bt, tmin = ctx["best_f"], ctx["best_t"], ctx["tmin"]
             if bf is None:
                 paras.append(
                     "No band can be recommended without a catalog period and flux "
                     "for this source.")
             else:
-                line = (f"Fastest detection at {bf:g} MHz: about "
-                        f"{self._fmt_duration(bt)} there")
+                line = (f"Of the bands the dish has feeds for, {bf:g} MHz detects "
+                        f"this source fastest: about {self._fmt_duration(bt)} there")
                 if tmin is not None:
                     line += (f", against {self._fmt_duration(tmin)} at the "
                              f"{self._center_hz / 1e6:.3f} MHz you are tuned to now")
                 paras.append(line + ".")
                 paras.append(
-                    "Picked over the dish's tuning presets (408, 680.5, 1299.5, 1422, "
-                    "1666, 2304 MHz) by scaling this source's flux to each band, "
-                    "scaling SEFD by sky temperature (the galaxy is far brighter at "
-                    "low frequency), and broadening the pulse by channel DM smearing "
-                    "plus empirical interstellar scattering — which is why high-DM "
-                    "sources are kept high and steep-spectrum low-DM ones are sent "
-                    "low.")
+                    "Picked over the Tuning presets (408, 680.5, 1299.5, 1422, 1666, "
+                    "2304 MHz) by scaling this source's flux to each band, scaling "
+                    "SEFD by sky temperature (the galaxy is far brighter at low "
+                    "frequency), and broadening the pulse by channel DM smearing plus "
+                    "empirical interstellar scattering — which is why high-DM sources "
+                    "are kept high and steep-spectrum low-DM ones are sent low. Best f "
+                    "runs the same model with the feed list taken away.")
                 paras.append(
                     f"Assumes the current {self._rate_hz / 1e6:.3f} MHz bandwidth and "
                     f"256 channels. Approximate physics: the band to TRY first, not a "
                     f"guarantee.")
 
-        elif col == 9:                                      # Time left
+        elif col == 9:                                      # Best f (any)
+            ff, ft = ctx["free_f"], ctx["free_t"]
+            bf, bt = ctx["best_f"], ctx["best_t"]
+            if ff is None:
+                paras.append(
+                    "No frequency can be recommended without a catalog period and "
+                    "flux for this source.")
+            else:
+                lo, hi = pp.BEST_F_RANGE_MHZ
+                paras.append(
+                    f"If you could tune anywhere, about {ff:.0f} MHz detects this "
+                    f"source fastest: about {self._fmt_duration(ft)} there.")
+                if bf is not None and bt is not None and ft and ft > 0:
+                    ratio = bt / ft
+                    if ratio < 1.05:
+                        paras.append(
+                            f"The dish's best real band, {bf:g} MHz, is as good as it "
+                            f"gets ({self._fmt_duration(bt)}) — a purpose-built feed "
+                            f"would buy nothing here.")
+                    else:
+                        paras.append(
+                            f"The dish's best real band, {bf:g} MHz, needs {ratio:.1f}x "
+                            f"longer ({self._fmt_duration(bt)}) — that factor is what a "
+                            f"feed built for this source would buy.")
+                if ff <= lo * 1.01 or ff >= hi * 0.99:
+                    end, way = (("bottom", "low") if ff <= lo * 1.01
+                                else ("top", "high"))
+                    paras.append(
+                        f"This sits at the {end} of the searched range ({lo:.0f} MHz to "
+                        f"{hi / 1000.0:.0f} GHz): the model wants to keep going, so read "
+                        f"it as “as {way} as you can go”, not a measured optimum.")
+                paras.append(
+                    "Same model as Best band — flux scaled by this source's spectral "
+                    "index, SEFD scaled by sky temperature, pulse broadened by channel "
+                    "DM smearing and interstellar scattering — searched in 5% steps "
+                    "from 100 MHz to 6 GHz and refined. Real pulsar spectra turn over "
+                    "below a few hundred MHz and the model does not know that: treat a "
+                    "very low answer with suspicion.")
+
+        elif col == 10:                                     # Time left
             if below:
                 paras.append(
                     f"Below the {mask:.1f}° mask at {at}, so there is no time above "
@@ -5734,7 +5795,7 @@ class PulsarPlannerDialog(QtWidgets.QDialog):
                     "a Source and a “Record for” duration are both set, the app warns "
                     "about that at record time too.")
 
-        elif col == 10:                                     # Next window
+        elif col == 11:                                     # Next window
             if not below:
                 paras.append(
                     f"Up at {at} — this column is for sources below the mask, where "

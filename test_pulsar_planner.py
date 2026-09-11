@@ -338,6 +338,25 @@ def test_duration_and_flux():
           "DM-500 clone pushed high by scattering", f"best {bf2} MHz")
     check(pp.best_band_mhz({"p0_s": None, "dm": 1.0}, 4000.0, 2e6)
           == (None, None), "no period -> no best band")
+    # Unconstrained twin (2026-09-11): the same model searched from
+    # 100 MHz to 6 GHz. Never slower than the best real band; sits where
+    # the physics says — sky noise vs spectral index for B0329, scattering
+    # for the DM-500 clone, the top of the range for a flat spectrum.
+    ff, ft = pp.best_freq_mhz(b0329, 4000.0, 2e6)
+    check(ff is not None and 150.0 < ff < 700.0,
+          "B0329 free optimum in the low hundreds of MHz",
+          f"{ff:.0f} MHz, {ft:.1f}s")
+    check(ft <= bt * 1.001, "free optimum never slower than the best feed",
+          f"{ft:.2f} vs {bt:.2f} s")
+    ff2, _ = pp.best_freq_mhz(hidm, 4000.0, 2e6)
+    check(ff2 > 800.0, "DM-500 clone's free optimum stays high (scattering)",
+          f"{ff2:.0f} MHz")
+    flat = dict(b0329, s400=b0329["s1400"])
+    ff3, _ = pp.best_freq_mhz(flat, 4000.0, 2e6)
+    check(ff3 >= pp.BEST_F_RANGE_MHZ[1] * 0.99,
+          "flat spectrum runs to the top of the range", f"{ff3:.0f} MHz")
+    check(pp.best_freq_mhz({"p0_s": None, "dm": 1.0}, 4000.0, 2e6)
+          == (None, None), "no period -> no best frequency")
 
 
 if __name__ == "__main__":

@@ -192,9 +192,21 @@ def test_cell_tips(dlg):
           "flux cell names the catalog anchors it scaled from")
     check("SEFD" in tips[7] and "8-sigma" in tips[7],
           "Min rec cell lists its inputs")
-    check("MHz" in tips[8], "Best f cell names the band")
-    check(("mask" in tips[9]) or ("ircumpolar" in tips[9]),
+    check("MHz" in tips[8] and "feeds" in tips[8],
+          "Best band cell names the band and says it is feed-limited")
+    check("MHz" in tips[9] and "tune anywhere" in tips[9]
+          and "best real band" in tips[9],
+          "Best f cell gives the free optimum and compares the real band")
+    check(("mask" in tips[10]) or ("ircumpolar" in tips[10]),
           "Time left cell explains itself against the mask")
+    # The two columns must agree on which is which: the free optimum can
+    # never be a slower answer than the feed-limited one.
+    bb = float(dlg._table.item(i, 8).text())
+    bf = float(dlg._table.item(i, 9).text())
+    check(100.0 <= bf <= 6000.0 and bb in (408.0, 680.5, 1299.5, 1422.0,
+                                            1666.0, 2304.0),
+          "Best band is a preset, Best f is any frequency",
+          f"band {bb:g}  free {bf:g}")
 
     # Lazy and cached: the text is built on the first ToolTipRole query.
     it = dlg._table.item(i, 5)

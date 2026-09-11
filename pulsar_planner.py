@@ -502,28 +502,27 @@ def _scatter_ms(dm, f_mhz):
     return tau_1ghz * (f_mhz / 1000.0) ** -3.86
 
 
-def best_band_mhz(row, sefd_jy_1420, bw_hz, bands=DISH_BANDS_MHZ,
-                  nchan=256):
-    """The dish band (MHz) where this source detects FASTEST, and the
-    estimated minimum duration there: min over the tuning presets of the
-    radiometer time-to-8-sigma using (a) flux scaled to each band, (b)
-    SEFD scaled by sky temperature, and (c) an effective pulse width of
-    sqrt(W50² + per-channel DM smearing² + scattering²) — so a
-    steep-spectrum low-DM source is sent low, and a high-DM source is
-    kept high where scattering hasn't destroyed its pulse.
-    Returns (f_mhz, t_s) or (None, None)."""
+def _detect_time_fn(row, sefd_jy_1420, bw_hz, nchan):
+    """The detection-time model shared by best_band_mhz() and
+    best_freq_mhz(): returns t(f_mhz) -> seconds-to-8-sigma (or None), or
+    None when the row has no period. Per-frequency it uses (a) flux
+    scaled to that frequency, (b) SEFD scaled by sky temperature, and
+    (c) an effective pulse width of sqrt(W50² + per-channel DM smearing²
+    + scattering²) — so a steep-spectrum low-DM source is sent low, and a
+    high-DM source is kept high where scattering hasn't destroyed its
+    pulse."""
     p0 = row.get("p0_s")
     if not p0 or p0 <= 0:
-        return None, None
+        return None
     w50 = row.get("w50_ms")
     w_ms = w50 if (w50 and w50 > 0) else 0.05 * p0 * 1000.0
     dm = row.get("dm") or 0.0
     ch_mhz = (bw_hz / max(nchan, 1)) / 1e6
-    best_f, best_t = None, None
-    for f in bands:
+
+    def t_of(f):
         s_mjy, _ = flux_at_freq(row, f * 1e6)
         if s_mjy is None:
-            continue
+            return None
         t_chan = 8.3e6 * dm * ch_mhz / f ** 3          # ms, DM smearing
         w_eff = math.sqrt(w_ms ** 2 + t_chan ** 2
                           + _scatter_ms(dm, f) ** 2)
@@ -532,11 +531,88 @@ def best_band_mhz(row, sefd_jy_1420, bw_hz, bands=DISH_BANDS_MHZ,
         # guard doesn't silently fall back to the 5% assumption and
         # make the WORST band look cheap.
         w_eff = min(w_eff, 0.95 * p0 * 1000.0)
-        t = min_duration_s(s_mjy, p0, sefd_jy_1420 * _sky_sefd_scale(f),
-                           bw_hz, w50_ms=w_eff)
+        return min_duration_s(s_mjy, p0, sefd_jy_1420 * _sky_sefd_scale(f),
+                              bw_hz, w50_ms=w_eff)
+    return t_of
+
+
+def best_band_mhz(row, sefd_jy_1420, bw_hz, bands=DISH_BANDS_MHZ,
+                  nchan=256):
+    """The dish band (MHz) where this source detects FASTEST, and the
+    estimated minimum duration there: the minimum of the detection-time
+    model (see _detect_time_fn) over the tuning presets — i.e. over the
+    feeds the dish actually has. Returns (f_mhz, t_s) or (None, None)."""
+    t_of = _detect_time_fn(row, sefd_jy_1420, bw_hz, nchan)
+    if t_of is None:
+        return None, None
+    best_f, best_t = None, None
+    for f in bands:
+        t = t_of(f)
         if t is not None and (best_t is None or t < best_t):
             best_f, best_t = f, t
     return best_f, best_t
+
+
+# Search range for best_freq_mhz(): the workbench's radios tune from tens of
+# MHz to 6 GHz, but below ~100 MHz neither the sky-temperature model nor
+# the pulsar flux power law (real spectra turn over there) is worth
+# trusting, so the search stops at 100.
+BEST_F_RANGE_MHZ = (100.0, 6000.0)
+
+
+def best_freq_mhz(row, sefd_jy_1420, bw_hz, f_range_mhz=BEST_F_RANGE_MHZ,
+                  nchan=256):
+    """best_band_mhz() with the feed list taken away (Rick, 2026-09-11):
+    the frequency ANYWHERE in `f_range_mhz` where the same model detects
+    fastest — what a feed built for this source would want to be, and how
+    far the dish's nearest real band falls short of it.
+
+    A 5%-step log grid finds the neighbourhood (the model is smooth and,
+    in practice, single-dipped: sky noise rising as f^-2.6 below a few
+    hundred MHz against flux rising as f^alpha), then a golden-section
+    search between the neighbouring grid points pins it to ~0.5%. About a
+    hundred evaluations per row. Returns (f_mhz, t_s) or (None, None); an
+    answer sitting on either end of the range means the true optimum lies
+    outside the model's trusted region.
+    """
+    t_of = _detect_time_fn(row, sefd_jy_1420, bw_hz, nchan)
+    if t_of is None:
+        return None, None
+    f_lo, f_hi = f_range_mhz
+    n = int(math.log(f_hi / f_lo) / math.log(1.05))
+    grid = [f_lo * 1.05 ** i for i in range(n + 1)]
+    if grid[-1] < f_hi:
+        grid.append(f_hi)
+    times = [t_of(f) for f in grid]
+    best_i = None
+    for i, t in enumerate(times):
+        if t is not None and (best_i is None or t < times[best_i]):
+            best_i = i
+    if best_i is None:
+        return None, None
+    # Golden-section refinement in log f between the neighbouring points.
+    a = math.log(grid[max(best_i - 1, 0)])
+    b = math.log(grid[min(best_i + 1, len(grid) - 1)])
+    inv_phi = (math.sqrt(5.0) - 1.0) / 2.0
+    c = b - inv_phi * (b - a)
+    d = a + inv_phi * (b - a)
+    tc, td = t_of(math.exp(c)), t_of(math.exp(d))
+    for _ in range(18):                        # (b-a) shrinks 0.618^18 ~ 2e-4
+        if tc is None or td is None:
+            break
+        if tc < td:
+            b, d, td = d, c, tc
+            c = b - inv_phi * (b - a)
+            tc = t_of(math.exp(c))
+        else:
+            a, c, tc = c, d, td
+            d = a + inv_phi * (b - a)
+            td = t_of(math.exp(d))
+    f_best = math.exp((a + b) / 2.0)
+    t_best = t_of(f_best)
+    if t_best is None or t_best > times[best_i]:
+        f_best, t_best = grid[best_i], times[best_i]
+    return f_best, t_best
 
 
 def min_duration_s(flux_mjy, p0_s, sefd_jy, bw_hz,
