@@ -6,8 +6,27 @@ cross-machine record (Mac + Windows) — keep it committed and pushed.
 Conventions: `[ ]` planned, `[x]` shipped (note the commit), `[-]` dropped
 (note why). Move items between versions freely until they ship.
 
-## Unreleased on main (goes in the next cut after 1.4.0)
+## v1.5.0 — SHIPPED 2026-09-11 (cut + published from Windows, release commit 6ed8d46, tag v1.5.0)
 
+**Versioning from here (Rick, 2026-09-11):** feature release = second
+digit, bug-fix release = third digit; the 1.3.x/1.4.x point releases
+carried features while the program was still developmental.
+
+- [x] **Pulsars in View: BEST BAND + unconstrained BEST F** (from Rick's
+      hands-on pass of the 1.5.0 candidate, same day): the fastest-detection
+      column was limited to the Tuning-preset bands — right when read as
+      "the feeds the dish has", so it is now called **Best band** (same
+      math), and a new **Best f** runs the same detection-time model with
+      the feed list taken away: 5%-step log grid 100 MHz–6 GHz, golden-
+      section refined, ~100 evaluations/row (0.2 ms; ~1 s whole catalog).
+      One shared model (`_detect_time_fn`) so the Best f tooltip states the
+      feed penalty: B0329+54 296 MHz vs 408 (1.2x), Crab 169 vs 408 (6.5x),
+      Vela within 2%, DM-500 sources kept high by scattering, flat spectra
+      run to the top of the range (flagged "as high as you can go"). The
+      search stops at 100 MHz — flux power law and sky model untrusted
+      below — and says so.
+- [x] **Planner sky math** (IERS download off + closed form precessed):
+      see the Backlog entry marked DONE 2026-09-11 below for the numbers.
 - [x] **Pulsars in View: PLAN FOR A DATE AND TIME** (Rick's request
       2026-09-10; landed same day). The dialog computed everything for
       `time.time()`, so it could only answer "what is up while I stand
@@ -39,8 +58,12 @@ Conventions: `[ ]` planned, `[x]` shipped (note the commit), `[-]` dropped
       built per refresh and nearly all thrown away. Tests:
       `test_pulsar_planner_dialog.py` (new, headless, 38 checks) and three
       sidereal cases in `test_pulsar_planner.py`.
-- [ ] At the next cut: version bump, Installing.md §9 regenerate from the
-      in-app Help (the planner bullets changed), guide PDF rebuild.
+- [x] At the cut (done 2026-09-11): APP_VERSION 1.5.0, Installing.md §9
+      synced from the in-app Help, §3 link + folder names bumped, guide PDF
+      rebuilt (cover 1.5.0), zip d50d9d1d… (63,865,251 bytes) published to
+      sw_distribution/dses-workbench/ with the sidecar, guide and manifest,
+      legacy b210_sa/manifest.json rewritten, live verification through
+      updater.py's own flow PASS from both manifest URLs, tag v1.5.0.
 
 ## v1.1.8 — SHIPPED 2026-08-03 (cut + published from Windows)
 
