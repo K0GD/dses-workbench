@@ -1,6 +1,6 @@
 # DSES Radio Astronomy Workbench — Installation Guide
 
-**Version 1.5.0**
+**Version 1.5.1**
 Author: Richard M Hambly (K0GD) — rick@cnssys.com
 License: GPL-3.0-or-later
 
@@ -150,14 +150,14 @@ Accept the prompt; conda downloads and installs the three packages. If the launc
 
 Download the application from the distribution site. You can either use the direct links below, or browse the folder <https://gpstime.com/sw_distribution/dses-workbench/> and pick the newest `dses-workbench-*.zip`:
 
-- **Application (zip):** <https://gpstime.com/sw_distribution/dses-workbench/dses-workbench-1.5.0.zip>
+- **Application (zip):** <https://gpstime.com/sw_distribution/dses-workbench/dses-workbench-1.5.1.zip>
 - **This guide (PDF):** <https://gpstime.com/sw_distribution/dses-workbench/DSES_Radio_Astronomy_Workbench_Installation.pdf>
 
 The zip is roughly 60 MB — it includes a short sample recording so the program can run in playback mode when no radio is attached. (Replace `1.4.0` in the link with a newer version number if a later release has been published.)
 
 ### 3.1 Windows 11
 
-1. Extract the zip anywhere you have write permission. A common choice is `Documents\DSES-Workbench`. The extracted folder will be `dses-workbench-1.5.0\` and will contain `dses_workbench.py`, `launcher.bat`, `launcher.ps1`, `install-shortcut.ps1`, `LICENSE`, the `icons\` folder, and this guide.
+1. Extract the zip anywhere you have write permission. A common choice is `Documents\DSES-Workbench`. The extracted folder will be `dses-workbench-1.5.1\` and will contain `dses_workbench.py`, `launcher.bat`, `launcher.ps1`, `install-shortcut.ps1`, `LICENSE`, the `icons\` folder, and this guide.
 2. Double-click **`launcher.bat`** to start the application.
 3. The first time you run it, the launcher searches for Radioconda in this order: the `RADIOCONDA_ROOT` environment variable, any currently-activated conda env, `%LOCALAPPDATA%\radioconda`, `C:\ProgramData\radioconda`, `%USERPROFILE%\radioconda`, a cached config file, then `conda info --base` if `conda` is on PATH. If none of these find a working install, you'll get a prompt asking for the path; type it in and the launcher remembers it for next time.
 4. (Optional) Create a desktop shortcut (with the app's pulsar icon) by running **`install-shortcut.ps1`**. The reliable way — which works regardless of your PowerShell execution policy — is to open PowerShell in the extracted folder and run:
@@ -176,12 +176,12 @@ After the first run, the app's window opens with the spectrum and waterfall plot
 
    ``bash
    mkdir -p ~/Applications && cd ~/Applications
-   unzip ~/Downloads/dses-workbench-1.5.0.zip
-   cd dses-workbench-1.5.0
+   unzip ~/Downloads/dses-workbench-1.5.1.zip
+   cd dses-workbench-1.5.1
    chmod +x launcher.sh
    ``
 
-   The extracted `dses-workbench-1.5.0/` folder contains `dses_workbench.py`, `launcher.sh`, `dses-workbench.desktop`, `LICENSE`, the `icons/` folder, and this guide. (Avoid system locations like `/opt` unless you extract with `sudo` — keeping it in your home directory avoids permission issues.)
+   The extracted `dses-workbench-1.5.1/` folder contains `dses_workbench.py`, `launcher.sh`, `dses-workbench.desktop`, `LICENSE`, the `icons/` folder, and this guide. (Avoid system locations like `/opt` unless you extract with `sudo` — keeping it in your home directory avoids permission issues.)
 
 2. Launch:
 
@@ -206,8 +206,8 @@ The steps are the same as Linux. Extract it into your personal **`~/Applications
 
 ``bash
 mkdir -p ~/Applications && cd ~/Applications
-unzip ~/Downloads/dses-workbench-1.5.0.zip
-cd dses-workbench-1.5.0
+unzip ~/Downloads/dses-workbench-1.5.1.zip
+cd dses-workbench-1.5.1
 chmod +x launcher.sh
 ./launcher.sh
 ``
@@ -227,7 +227,7 @@ On Apple Silicon, **make sure** you installed the `arm64` build of Radioconda. M
 If the Finder warns about an unidentified developer when running `launcher.sh`, clear the quarantine attribute on the unzipped folder:
 
 ``bash
-xattr -dr com.apple.quarantine dses-workbench-1.5.0
+xattr -dr com.apple.quarantine dses-workbench-1.5.1
 ``
 
 
@@ -357,7 +357,7 @@ Radioconda does **not** need reinstalling for an app update.
 If you'd rather apply it yourself, each release is a self-contained zip:
 
 1. **Close** the running app.
-2. **Extract** the new zip alongside the old one — a new folder named with the version (e.g. `dses-workbench-1.5.0`) — or overwrite the old folder's files.
+2. **Extract** the new zip alongside the old one — a new folder named with the version (e.g. `dses-workbench-1.5.1`) — or overwrite the old folder's files.
 3. **Run** `launcher.bat` (Windows) or `launcher.sh` (macOS/Linux) from the **new** folder.
 
 ### What is preserved across versions
@@ -453,7 +453,7 @@ The GR flow graph is running but no samples are arriving. Usual causes:
 ### macOS: "developer cannot be verified"
 
 ``bash
-xattr -dr com.apple.quarantine /path/to/dses-workbench-1.5.0
+xattr -dr com.apple.quarantine /path/to/dses-workbench-1.5.1
 ``
 
 For the optional Desktop **`.app`** icon (built by `install-shortcut.command`), the same warning can appear the first time you double-click it — right-click the app → **Open** once, or approve it in **System Settings → Privacy & Security → Open Anyway**. You only need to do this once per machine.
@@ -600,7 +600,7 @@ Beyond the standard test, two advanced modes make it a general pulsar *simulator
 
 The "what are you trying to do tonight?" selector. Pick a goal and every science-critical setting — band, sample rate, recording format, channels, integration — is set to a validated bundle in one step:
 
-- **Pulsar — L-band**: 16 MHz, filterbank, 2044 channels, Integrate 1 (127.7 µs samples) at the 1422 MHz band — the geometry behind the 28σ B0329+54 detection at Haswell.
+- **Pulsar — L-band**: 16 MHz, filterbank, 2044 channels, Integrate 1 (127.7 µs samples) at the L-band feed (1420.4 MHz) — the geometry behind the 28σ B0329+54 detection at Haswell.
 
 - **Pulsar — UHF**: 20 MHz, filterbank, 256 channels, Integrate 16 (204.8 µs) centered at 420 MHz — the proven Haswell UHF geometry.
 
@@ -720,7 +720,7 @@ The check is read-only and never auto-downloads or auto-installs. To trigger a c
 
 ### Tips for pulsar work
 
-- 1422 MHz preset is centered on the neutral-hydrogen line (HI).
+- The 1420.4 MHz preset tunes the L-band feed directly to the neutral-hydrogen line (1420.406 MHz), so HI stays in band at any sample rate. For drift scans prefer the **Hydrogen line** Observation preset, which also sets the rate, format and LO offset.
 
 - 1666 MHz preset covers the OH maser band.
 
