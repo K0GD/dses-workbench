@@ -6936,7 +6936,11 @@ class dses_workbench(gr.top_block, QtWidgets.QMainWindow):
         _ez_grid.addWidget(QtWidgets.QLabel("Az (deg):"), 0, 0)
         self._ez_az_spin = QtWidgets.QDoubleSpinBox()
         self._ez_az_spin.setRange(0.0, 360.0)
-        self._ez_az_spin.setDecimals(1)
+        # 4 decimals: the Haswell protocol reads the park position off the
+        # 16-bit encoder application (e.g. az 359.9176) — one decimal, the
+        # original choice when az/el were nominal labels, silently rounded
+        # the entered value (Rick, 2026-09-13 restore).
+        self._ez_az_spin.setDecimals(4)
         self._ez_az_spin.setValue(self._ez_az_deg)
         self._ez_az_spin.setToolTip(
             "Dish azimuth written into the ezRA drift-scan file header.")
@@ -6945,7 +6949,7 @@ class dses_workbench(gr.top_block, QtWidgets.QMainWindow):
         _ez_grid.addWidget(QtWidgets.QLabel("El (deg):"), 1, 0)
         self._ez_el_spin = QtWidgets.QDoubleSpinBox()
         self._ez_el_spin.setRange(0.0, 90.0)
-        self._ez_el_spin.setDecimals(1)
+        self._ez_el_spin.setDecimals(4)
         self._ez_el_spin.setValue(self._ez_el_deg)
         self._ez_el_spin.setToolTip(
             "Dish elevation written into the ezRA drift-scan file header.")

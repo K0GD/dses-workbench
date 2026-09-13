@@ -110,7 +110,10 @@ class EzraTxtWriter:
         self._fh.write(f"freqMin {h['freq_min_mhz']:g} "
                        f"freqMax {h['freq_max_mhz']:g} "
                        f"freqBinQty {self.bin_qty}\n")
-        self._fh.write(f"azDeg {h['az_deg']:g} elDeg {h['el_deg']:g}\n")
+        # .10g, not :g — %g rounds to 6 significant figures, which turned
+        # az 359.9176 into 359.918 in the header (encoder-precision az/el
+        # arrived with the 2026-09 site protocol).
+        self._fh.write(f"azDeg {h['az_deg']:.10g} elDeg {h['el_deg']:.10g}\n")
         self._fh.write("# times are in UTC\n")
         self._fh.write(f"# gain {h['gain_text'] or 'xx'}\n")
         self._fh.write("# frequency spectrums of RMS power in dB\n")
