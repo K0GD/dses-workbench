@@ -153,7 +153,7 @@ import time
 
 # === App metadata ===
 APP_NAME        = "DSES Radio Astronomy Workbench"
-APP_VERSION     = "1.5.1"
+APP_VERSION     = "1.5.2"
 APP_AUTHOR      = "Richard M Hambly (K0GD)"
 APP_AUTHOR_EMAIL = "rick@cnssys.com"
 APP_COPYRIGHT   = "Copyright © 2026 Richard M Hambly (K0GD)"
@@ -3120,7 +3120,10 @@ the 28σ B0329+54 detection at Haswell.</li>
 <li><b>Magnetar / high-DM</b>: L-band with 4096 channels — narrower channels
 tolerate the larger dispersion of magnetars and distant pulsars.</li>
 <li><b>Hydrogen line — drift scan</b>: ezRA .txt format at 1420.406 MHz,
-2 MHz span. Set the dish Az/El in the Recording group.</li>
+2 MHz span. Set the dish Az/El in the Recording group. Starting an ezRA
+recording whose band does not contain the hydrogen line asks for
+confirmation first (and the status bar warns as soon as the tuning goes
+off the line).</li>
 <li><b>RFI survey — sweep</b>: switches to Sweep mode; set the range in the
 Sweep group.</li>
 <li><b>Manual (expert)</b>: touches nothing. The combo drops back here by
@@ -8812,6 +8815,19 @@ class dses_workbench(gr.top_block, QtWidgets.QMainWindow):
                 combo.setCurrentIndex(OBS_MANUAL_IDX)
         self._update_consequences()
 
+    def _hi_band_gap(self):
+        """When the tuning sits NEAR the hydrogen line (within 25 MHz) but
+        the line itself falls OUTSIDE the recorded span, return that span as
+        (lo_mhz, hi_mhz); otherwise None. The 25 MHz gate keeps OH/continuum
+        drift scans quiet. Shared by the consequences line and the ezRA
+        record-start guard."""
+        rate = float(self.samp_rate) or 1.0
+        hi_off = abs(self.center_freq - 1420.405751786e6)
+        if hi_off < 25e6 and hi_off > rate / 2:
+            return ((self.center_freq - rate / 2) / 1e6,
+                    (self.center_freq + rate / 2) / 1e6)
+        return None
+
     def _update_consequences(self):
         """One live line translating the current science settings into what
         an observer actually cares about. Amber = risky combination."""
@@ -8860,17 +8876,25 @@ class dses_workbench(gr.top_block, QtWidgets.QMainWindow):
             # hydrogen (Ray's 2026-09-12 run: center 1422.0 at 2 MS/s left
             # the whole band 0.8 MHz above the gas). Only fires within
             # ±25 MHz of the line so OH / continuum drift scans stay quiet.
-            hi_hz = 1420.405751786e6
-            hi_off = abs(self.center_freq - hi_hz)
+            gap = self._hi_band_gap()
             hi_txt = ""
-            if hi_off < 25e6 and hi_off > rate / 2:
+            if gap is not None:
                 hi_txt = "  ·  HI line OUT OF the recorded band"
                 warn = (f"the hydrogen line (1420.406 MHz) is outside the "
-                        f"recorded band "
-                        f"({(self.center_freq - rate/2)/1e6:.3f}–"
-                        f"{(self.center_freq + rate/2)/1e6:.3f} MHz) — "
+                        f"recorded band ({gap[0]:.3f}–{gap[1]:.3f} MHz) — "
                         f"tune the center to 1420.406, or use the Hydrogen "
                         f"line Observation preset")
+                # The Observation dock (this label's home) may be closed —
+                # echo the transition to the always-visible status bar too
+                # (found the hard way: the 1.5.1 warning fired invisibly
+                # in a layout with that panel hidden, Rick 2026-09-13).
+                sb = getattr(self, '_status_bar', None)
+                if sb is not None and not getattr(self, '_hi_oob_shown', False):
+                    sb.showMessage(
+                        "Drift-scan warning: the hydrogen line (1420.406 MHz) "
+                        f"is OUTSIDE the recorded band ({gap[0]:.3f}–"
+                        f"{gap[1]:.3f} MHz)", 15000)
+            self._hi_oob_shown = gap is not None
             lbl.setText("integrated spectra, one row per ~10–15 s  ·  "
                         f"~1 MB/hr  ·  {dc_txt}{hi_txt}")
         lbl.setStyleSheet("color: #b45309;" if warn else "color: gray;")
@@ -8886,6 +8910,26 @@ class dses_workbench(gr.top_block, QtWidgets.QMainWindow):
             self.record = 0
             self._record_callback(0)
             return
+        # ezRA drift scans near-but-off the hydrogen line get a hard stop
+        # at record START — the consequences-line warning lives in the
+        # Observation dock, which may be closed (how a hydrogen-free "HI"
+        # run got recorded on 2026-09-12/13 despite the 1.5.1 warning).
+        if self._record_format == 'ezra':
+            gap = self._hi_band_gap()
+            if gap is not None:
+                resp = QtWidgets.QMessageBox.warning(
+                    self, "Hydrogen line not in band",
+                    "The hydrogen line (1420.406 MHz) is OUTSIDE the "
+                    f"recorded band ({gap[0]:.3f}–{gap[1]:.3f} MHz).\n\n"
+                    "A drift scan recorded here cannot contain HI. Tune the "
+                    "center to 1420.406 MHz, or pick the Hydrogen line "
+                    "Observation preset.\n\nRecord anyway?",
+                    QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                    QtWidgets.QMessageBox.No)
+                if resp != QtWidgets.QMessageBox.Yes:
+                    self.record = 0
+                    self._record_callback(0)
+                    return
         self._update_fil_geom_enabled()  # lock geometry while live
         if self._record_format == 'fil':
             self._start_fil_recording()
