@@ -203,8 +203,7 @@ def test_cell_tips(dlg):
     # never be a slower answer than the feed-limited one.
     bb = float(dlg._table.item(i, 8).text())
     bf = float(dlg._table.item(i, 9).text())
-    check(100.0 <= bf <= 6000.0 and bb in (408.0, 680.5, 1299.5, 1422.0,
-                                            1666.0, 2304.0),
+    check(100.0 <= bf <= 6000.0 and bb in pp.DISH_BANDS_MHZ,
           "Best band is a preset, Best f is any frequency",
           f"band {bb:g}  free {bf:g}")
 

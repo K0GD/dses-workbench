@@ -474,8 +474,10 @@ def flux_at_freq(row, center_hz):
 
 
 # The dish's tuning-preset bands (MHz) — the frequencies an observer can
-# actually pick from the Tuning panel. Used by best_band_mhz().
-DISH_BANDS_MHZ = (408.0, 680.5, 1299.5, 1422.0, 1666.0, 2304.0)
+# actually pick from the Tuning panel. Used by best_band_mhz(). The L-band
+# entry is the HI line itself (the preset moved off the feed's nominal
+# 1422.000 on 2026-09-13 so narrow-span HI work keeps the line in band).
+DISH_BANDS_MHZ = (408.0, 680.5, 1299.5, 1420.406, 1666.0, 2304.0)
 
 
 def _sky_sefd_scale(f_mhz, t_sys_1420_k=190.0, t_sky_1420_k=5.0):

@@ -497,6 +497,20 @@ class Settings:
                 and self._cp.get('updates', 'manifest_url').strip()
                 in _LEGACY_MANIFEST_URLS):
             self._cp.remove_option('updates', 'manifest_url')
+        # v1.5.0 -> next: the L-band Tuning preset moved from the feed's
+        # nominal 1422.000 MHz onto the hydrogen line (1420.406 MHz) after
+        # a home station recorded a 2 MS/s "HI" run whose band held no
+        # hydrogen (Ray, 2026-09-12; the 1.6 MHz shift is immaterial to
+        # pulsar folds). A stored preset equal to the old value MUST be
+        # remapped: startup looks the saved value up in the options list,
+        # and an unmatched value raises in the radio-button callback.
+        if (self._cp.has_section('tuning')
+                and self._cp.has_option('tuning', 'preset_hz')):
+            try:
+                if float(self._cp.get('tuning', 'preset_hz')) == 1422e6:
+                    self._cp.set('tuning', 'preset_hz', '1420406000.0')
+            except ValueError:
+                pass
 
     def _fill_missing_with_defaults(self):
         for section, kvs in DEFAULTS.items():
@@ -3099,8 +3113,8 @@ science-critical setting — band, sample rate, recording format, channels,
 integration — is set to a validated bundle in one step:</p>
 <ul>
 <li><b>Pulsar — L-band</b>: 16 MHz, filterbank, 2044 channels, Integrate 1
-(127.7 µs samples) at the 1422 MHz band — the geometry behind the 28σ
-B0329+54 detection at Haswell.</li>
+(127.7 µs samples) at the L-band feed (1420.4 MHz) — the geometry behind
+the 28σ B0329+54 detection at Haswell.</li>
 <li><b>Pulsar — UHF</b>: 20 MHz, filterbank, 256 channels, Integrate 16
 (204.8 µs) centered at 420 MHz — the proven Haswell UHF geometry.</li>
 <li><b>Magnetar / high-DM</b>: L-band with 4096 channels — narrower channels
@@ -3362,7 +3376,10 @@ on first launch, and the old folder keeps a pointer to the current release.</p>
 
 <h3>Tips for pulsar work</h3>
 <ul>
-<li>1422 MHz preset is centered on the neutral-hydrogen line (HI).</li>
+<li>The 1420.4 MHz preset tunes the L-band feed directly to the
+neutral-hydrogen line (1420.406 MHz), so HI stays in band at any sample
+rate. For drift scans prefer the <b>Hydrogen line</b> Observation preset,
+which also sets the rate, format and LO offset.</li>
 <li>1666 MHz preset covers the OH maser band.</li>
 <li>Use <b>Avg α</b> ≈ 0.05 and <b>Max hold</b> to find intermittent
 RFI sources.</li>
@@ -4028,13 +4045,16 @@ SOAPY_DEFAULTS = {
 # wideband folds flatten the single DC channel anyway.
 OBSERVATION_PRESETS = [
     ("Pulsar — L-band", dict(
-        mode='live', band=1422e6, rate=16e6, fmt='fil',
-        nchans=2044, integrate=1, lo_off=0.0)),  # 127.7 µs; 28σ B0329+54 geometry
+        mode='live', band=1420.406e6, rate=16e6, fmt='fil',
+        nchans=2044, integrate=1, lo_off=0.0)),  # 127.7 µs; the 28σ B0329+54
+                         # geometry (validated at the feed's nominal 1422.0;
+                         # the preset moved onto the HI line 2026-09-13 — a
+                         # 1.6 MHz center shift a wideband fold cannot see)
     ("Pulsar — UHF", dict(
         mode='live', band=0, manual=420e6, rate=20e6, fmt='fil',
         nchans=256, integrate=16, lo_off=0.0)),  # 204.8 µs; Haswell 410–430 MHz
     ("Magnetar / high-DM", dict(
-        mode='live', band=1422e6, rate=16e6, fmt='fil',
+        mode='live', band=1420.406e6, rate=16e6, fmt='fil',
         nchans=4096, integrate=1, lo_off=0.0)),  # narrow channels beat DM smear
     ("Hydrogen line — drift scan", dict(
         mode='live', band=0, manual=1420.406e6, rate=2e6, fmt='ezra',
@@ -4411,7 +4431,7 @@ PLANNER_COLUMNS = (
      "on top."),
     ("Best band",
      "Of the bands the dish has feeds for (the Tuning presets: 408,\n"
-     "680.5, 1299.5, 1422, 1666 and 2304 MHz), the one where this source\n"
+     "680.5, 1299.5, 1420.4, 1666 and 2304 MHz), the one where this source\n"
      "detects FASTEST — the minimum estimated time-to-8-sigma, using flux\n"
      "scaled to each band, SEFD scaled by sky temperature (galactic\n"
      "synchrotron brightens the sky at low frequency), and pulse\n"
@@ -5047,7 +5067,7 @@ class PulsarPlannerDialog(QtWidgets.QDialog):
                 item(flux, 6, fmjy if fmjy is not None else -1.0),
                 item("—" if tmin is None else self._fmt_duration(tmin), 7,
                      tmin if tmin is not None else 1e12),
-                item("—" if bf is None else f"{bf:g}", 8,
+                item("—" if bf is None else f"{bf:.10g}", 8,
                      bf if bf is not None else 1e12),
                 item("—" if ff is None else f"{ff:.0f}", 9,
                      ff if ff is not None else 1e12),
@@ -5332,14 +5352,14 @@ class PulsarPlannerDialog(QtWidgets.QDialog):
                     "No band can be recommended without a catalog period and flux "
                     "for this source.")
             else:
-                line = (f"Of the bands the dish has feeds for, {bf:g} MHz detects "
+                line = (f"Of the bands the dish has feeds for, {bf:.10g} MHz detects "
                         f"this source fastest: about {self._fmt_duration(bt)} there")
                 if tmin is not None:
                     line += (f", against {self._fmt_duration(tmin)} at the "
                              f"{self._center_hz / 1e6:.3f} MHz you are tuned to now")
                 paras.append(line + ".")
                 paras.append(
-                    "Picked over the Tuning presets (408, 680.5, 1299.5, 1422, 1666, "
+                    "Picked over the Tuning presets (408, 680.5, 1299.5, 1420.4, 1666, "
                     "2304 MHz) by scaling this source's flux to each band, scaling "
                     "SEFD by sky temperature (the galaxy is far brighter at low "
                     "frequency), and broadening the pulse by channel DM smearing plus "
@@ -5367,12 +5387,12 @@ class PulsarPlannerDialog(QtWidgets.QDialog):
                     ratio = bt / ft
                     if ratio < 1.05:
                         paras.append(
-                            f"The dish's best real band, {bf:g} MHz, is as good as it "
+                            f"The dish's best real band, {bf:.10g} MHz, is as good as it "
                             f"gets ({self._fmt_duration(bt)}) — a purpose-built feed "
                             f"would buy nothing here.")
                     else:
                         paras.append(
-                            f"The dish's best real band, {bf:g} MHz, needs {ratio:.1f}x "
+                            f"The dish's best real band, {bf:.10g} MHz, needs {ratio:.1f}x "
                             f"longer ({self._fmt_duration(bt)}) — that factor is what a "
                             f"feed built for this source would buy.")
                 if ff <= lo * 1.01 or ff >= hi * 0.99:
@@ -7203,10 +7223,16 @@ class dses_workbench(gr.top_block, QtWidgets.QMainWindow):
         _add_wd(self._waterfall_plot.take_panel())
 
         # --- Frequency preset radio group ---
+        # The L-band entry tunes to the hydrogen line itself (1420.406 MHz),
+        # not the feed's nominal 1422.000 — at narrow spans (2 MS/s home
+        # stations) a 1422.0 center leaves the line entirely out of band,
+        # which is exactly how Ray recorded a hydrogen-free "HI" run on
+        # 2026-09-12. Pulsar folds don't care about the 1.6 MHz shift.
+        # Settings._migrate_legacy_keys remaps a stored 1422e6 preset.
         self._freq_preset_options = [408000000.0, 680500000.0, 1299500000.0,
-                                     1422000000.0, 1666000000.0, 2304000000.0, 0]
+                                     1420406000.0, 1666000000.0, 2304000000.0, 0]
         self._freq_preset_labels = ['408 MHz', '680.5 MHz', '1299.5 MHz',
-                                    '1422 MHz (HI)', '1666 MHz (OH)', '2304 MHz', 'Manual']
+                                    '1420.4 MHz (HI feed)', '1666 MHz (OH)', '2304 MHz', 'Manual']
         self._freq_preset_group_box = QtWidgets.QGroupBox("Pulsar Band: ")
         self._freq_preset_box = QtWidgets.QVBoxLayout()
         class variable_chooser_button_group(QtWidgets.QButtonGroup):
@@ -8829,8 +8855,24 @@ class dses_workbench(gr.top_block, QtWidgets.QMainWindow):
                 dc_txt = "DC artefact ON the tuned center"
                 warn = ("receiver DC artefact sits on the target — set an "
                         "LO offset beyond half the sample rate")
+            # Hydrogen-in-band check: tuned near the line but with the line
+            # outside the recorded span = an HI drift scan that cannot see
+            # hydrogen (Ray's 2026-09-12 run: center 1422.0 at 2 MS/s left
+            # the whole band 0.8 MHz above the gas). Only fires within
+            # ±25 MHz of the line so OH / continuum drift scans stay quiet.
+            hi_hz = 1420.405751786e6
+            hi_off = abs(self.center_freq - hi_hz)
+            hi_txt = ""
+            if hi_off < 25e6 and hi_off > rate / 2:
+                hi_txt = "  ·  HI line OUT OF the recorded band"
+                warn = (f"the hydrogen line (1420.406 MHz) is outside the "
+                        f"recorded band "
+                        f"({(self.center_freq - rate/2)/1e6:.3f}–"
+                        f"{(self.center_freq + rate/2)/1e6:.3f} MHz) — "
+                        f"tune the center to 1420.406, or use the Hydrogen "
+                        f"line Observation preset")
             lbl.setText("integrated spectra, one row per ~10–15 s  ·  "
-                        f"~1 MB/hr  ·  {dc_txt}")
+                        f"~1 MB/hr  ·  {dc_txt}{hi_txt}")
         lbl.setStyleSheet("color: #b45309;" if warn else "color: gray;")
         lbl.setToolTip(lbl.toolTip().split('\n\nWarning:')[0]
                        + (f"\n\nWarning: {warn}." if warn else ""))
