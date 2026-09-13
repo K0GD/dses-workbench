@@ -153,7 +153,7 @@ import time
 
 # === App metadata ===
 APP_NAME        = "DSES Radio Astronomy Workbench"
-APP_VERSION     = "1.5.2"
+APP_VERSION     = "1.5.3"
 APP_AUTHOR      = "Richard M Hambly (K0GD)"
 APP_AUTHOR_EMAIL = "rick@cnssys.com"
 APP_COPYRIGHT   = "Copyright © 2026 Richard M Hambly (K0GD)"
@@ -3120,10 +3120,17 @@ the 28σ B0329+54 detection at Haswell.</li>
 <li><b>Magnetar / high-DM</b>: L-band with 4096 channels — narrower channels
 tolerate the larger dispersion of magnetars and distant pulsars.</li>
 <li><b>Hydrogen line — drift scan</b>: ezRA .txt format at 1420.406 MHz,
-2 MHz span. Set the dish Az/El in the Recording group. Starting an ezRA
-recording whose band does not contain the hydrogen line asks for
-confirmation first (and the status bar warns as soon as the tuning goes
-off the line).</li>
+2 MHz span, with the receiver's DC artefact moved out of band by an LO
+offset. On radios with no LO shift stage (HackRF, RTL-SDR) the offset
+cannot be applied in hardware, so the preset adapts: if the radio can run
+8 MS/s it centers 1422.0 MHz instead — the line stays in band and the
+artefact sits 1.6 MHz away from any galactic gas (a configuration proven
+in the field by Ray Uberecken, AA0L); a radio that cannot reach that rate
+keeps the line-centered tuning with the artefact blanked in analysis. The
+status bar states which arrangement was applied. Set the dish Az/El in
+the Recording group. Starting an ezRA recording whose band does not
+contain the hydrogen line asks for confirmation first (and the status bar
+warns as soon as the tuning goes off the line).</li>
 <li><b>RFI survey — sweep</b>: switches to Sweep mode; set the range in the
 Sweep group.</li>
 <li><b>Manual (expert)</b>: touches nothing. The combo drops back here by
@@ -4061,11 +4068,22 @@ OBSERVATION_PRESETS = [
         nchans=4096, integrate=1, lo_off=0.0)),  # narrow channels beat DM smear
     ("Hydrogen line — drift scan", dict(
         mode='live', band=0, manual=1420.406e6, rate=2e6, fmt='ezra',
-        lo_off=1.5e6)),  # 0.75x rate: DC artefact out of band. NOT 2.0 MHz —
+        lo_off=1.5e6,    # 0.75x rate: DC artefact out of band. NOT 2.0 MHz —
                          # bench-measured 2026-08-19: an offset equal to the
                          # sample rate raises a reproducible +16 dB spur at
                          # +346 kHz on the B210; 0.75x rate is spur-free.
                          # Keep offsets away from integer multiples of rate.
+        # Radios with NO LO shift stage (HackRF, RTL-SDR) can't move the
+        # zero-IF DC artefact in hardware — lo_off falls back to classic
+        # tuning and the spike lands ON the line. Ray Uberecken's
+        # configuration (2026-09-13, his second and strongest detection)
+        # does the same job in the display domain: center 1422.0 at 8 MS/s
+        # keeps the line in band with the artefact 1.594 MHz (~340 km/s)
+        # from any galactic gas. Applied by _resolve_observation_cfg when
+        # the radio reports no LO-offset support AND can reach min_rate;
+        # below that (RTL-SDR tops out at 3.2 MS/s) the line-centered
+        # config stands and the spike is blanked in analysis, as before.
+        alt_no_shift=dict(manual=1422.0e6, rate=8e6, min_rate=6e6))),
     ("RFI survey — sweep", dict(mode='sweep')),
     ("Manual (expert)", None),
 ]
@@ -8745,6 +8763,33 @@ class dses_workbench(gr.top_block, QtWidgets.QMainWindow):
 
     # --- Observation presets -------------------------------------------------
 
+    def _resolve_observation_cfg(self, cfg):
+        """Adapt a preset bundle to the ACTIVE radio. Today one adaptation
+        exists: a preset carrying `alt_no_shift` (the HI drift scan) swaps to
+        its display-domain-offset variant when the radio has no LO shift
+        stage and can reach the variant's rate. Returns (cfg, note) — note is
+        a status-bar sentence when an adaptation was applied, else None."""
+        alt = cfg.get('alt_no_shift') if cfg else None
+        if not alt:
+            return cfg, None
+        src = getattr(self, '_source', None)
+        if src is None or self._playback_mode or src.lo_offset_supported():
+            return cfg, None
+        try:
+            _, rmax = src.samp_rate_range()
+        except Exception:
+            rmax = 0.0
+        if rmax < float(alt.get('min_rate', alt['rate'])):
+            return cfg, None            # RTL-SDR class: line-centered stands
+        rate = min(float(alt['rate']), float(rmax))
+        out = dict(cfg, manual=float(alt['manual']), rate=rate, lo_off=0.0)
+        note = (f"HI preset adapted for {src.display_label}: no LO-offset "
+                f"stage, so center {alt['manual']/1e6:.3f} MHz at "
+                f"{rate/1e6:g} MS/s keeps the line in band with the DC "
+                f"artefact {abs(alt['manual']-1420.405751786e6)/1e6:.3f} MHz "
+                f"off it")
+        return out, note
+
     def _apply_observation(self, idx):
         """Apply preset `idx` from OBSERVATION_PRESETS through the same
         setters the individual controls use. Guarded so the setters'
@@ -8752,6 +8797,11 @@ class dses_workbench(gr.top_block, QtWidgets.QMainWindow):
         _, cfg = OBSERVATION_PRESETS[idx]
         if cfg is None:
             return                      # Manual (expert): touch nothing
+        cfg, note = self._resolve_observation_cfg(cfg)
+        if note:
+            sb = getattr(self, '_status_bar', None)
+            if sb is not None:
+                sb.showMessage(note, 15000)
         if self.record:
             # Science settings are locked while recording (same rule as the
             # geometry spins) — refuse and show why.
@@ -8863,14 +8913,23 @@ class dses_workbench(gr.top_block, QtWidgets.QMainWindow):
                 warn = "very high disk rate"
         else:   # ezra drift scan
             off = float(getattr(self, 'lo_offset', 0.0))
+            hi_sep = abs(self.center_freq - 1420.405751786e6)
             if abs(off) > rate / 2:
                 dc_txt = "DC artefact out of band"
             elif off:
                 dc_txt = f"DC artefact {abs(off)/1e3:.0f} kHz off center"
-            else:
+            elif hi_sep < 0.5e6:
+                # Offset-0 with the tuned center on (or within the galactic
+                # gas band of) the line: the artefact sits in the science.
                 dc_txt = "DC artefact ON the tuned center"
                 warn = ("receiver DC artefact sits on the target — set an "
-                        "LO offset beyond half the sample rate")
+                        "LO offset beyond half the sample rate, or offset "
+                        "the tuned center itself (wide-band arrangement)")
+            else:
+                # Display-domain offset (the Ray configuration): center off
+                # the line, artefact at center = harmlessly out of the gas.
+                dc_txt = (f"DC artefact on the tuned center, "
+                          f"{hi_sep/1e6:.2f} MHz from the HI line")
             # Hydrogen-in-band check: tuned near the line but with the line
             # outside the recorded span = an HI drift scan that cannot see
             # hydrogen (Ray's 2026-09-12 run: center 1422.0 at 2 MS/s left
