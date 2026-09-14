@@ -53,11 +53,15 @@ from gnuradio import gr, blocks, uhd          # noqa: E402
 RATE = 2e6
 NFFT = 4096
 AVG = 100
+# Tune the RECEIVER this far below the carrier so the carrier lands well
+# away from the zero-IF DC artefact (first run confounded them: carrier
+# 200 Hz from DC read as "the same small peak on every port").
+TUNE_BELOW = 250e3
 
 
 def capture_carrier_db(tb, snk):
-    """Peak-bin level (dB, uncalibrated) + total band power of an averaged
-    PSD from the newest samples."""
+    """Carrier level (dB, uncalibrated): the peak bin OUTSIDE the DC region,
+    plus the median floor, from an averaged PSD of the newest samples."""
     snk.reset()
     time.sleep(0.3)            # flush the switch/retune transient
     snk.reset()
@@ -71,9 +75,13 @@ def capture_carrier_db(tb, snk):
     w = np.hanning(NFFT)
     p = (np.abs(np.fft.fftshift(np.fft.fft(x * w, axis=1), axes=1)) ** 2).mean(0)
     db = 10 * np.log10(p + 1e-30)
-    k = int(np.argmax(db))
-    tot = 10 * np.log10(p.sum() + 1e-30)
-    return db[k], (k - NFFT // 2) * RATE / NFFT, tot
+    c = NFFT // 2
+    db_masked = db.copy()
+    db_masked[c - 10:c + 11] = -300.0      # exclude the DC artefact
+    db_masked[:64] = db_masked[-64:] = -300.0   # and the filter skirts
+    k = int(np.argmax(db_masked))
+    floor = float(np.median(db))
+    return db[k], (k - c) * RATE / NFFT, floor
 
 
 def run_app_path(freq, gain):
@@ -83,8 +91,11 @@ def run_app_path(freq, gain):
         sys.exit("no B210 found")
     serial = devs[0]['serial']
     print(f"B210 s/n {serial} — APP path (UhdB200Source, the Workbench's own code)")
+    center = freq - TUNE_BELOW
+    print(f"tuned {center/1e6:.4f} MHz; carrier expected at "
+          f"{TUNE_BELOW/1e3:+.0f} kHz")
     src = sa.UhdB200Source(serial=serial, samp_rate=RATE,
-                           center_freq=freq, gain=gain)
+                           center_freq=center, gain=gain)
     tb = gr.top_block()
     snk = blocks.vector_sink_c(reserve_items=NFFT * AVG * 4)
     tb.connect(src.block, snk)
@@ -97,10 +108,10 @@ def run_app_path(freq, gain):
             tb.unlock()
         else:
             src.set_antenna(name)
-        pk, off, tot = capture_carrier_db(tb, snk)
-        rows.append((name, pk, off, tot))
-        print(f"  {name:12s}  peak {pk:7.1f} dB at {off/1e3:+7.1f} kHz   "
-              f"band {tot:7.1f} dB")
+        pk, off, floor = capture_carrier_db(tb, snk)
+        rows.append((name, pk, off, floor))
+        print(f"  {name:12s}  carrier {pk:7.1f} dB at {off/1e3:+7.1f} kHz   "
+              f"floor {floor:7.1f} dB   (C/N {pk-floor:5.1f} dB)")
     tb.stop()
     tb.wait()
     return rows
@@ -113,6 +124,9 @@ def run_raw_path(freq, gain):
     subdevs = dev.get_subdev_spec(0).split()
     ports = list(dev.get_antennas(0))
     dev.set_samp_rate(RATE)
+    center = freq - TUNE_BELOW
+    print(f"tuned {center/1e6:.4f} MHz; carrier expected at "
+          f"{TUNE_BELOW/1e3:+.0f} kHz")
     tb = gr.top_block()
     snk = blocks.vector_sink_c(reserve_items=NFFT * AVG * 4)
     tb.connect(dev, snk)
@@ -126,18 +140,18 @@ def run_raw_path(freq, gain):
             if spec != cur:
                 tb.lock()
                 dev.set_subdev_spec(spec, 0)
-                dev.set_center_freq(freq, 0)
+                dev.set_center_freq(center, 0)
                 dev.set_gain(gain, 0)
                 tb.unlock()
                 cur = spec
             elif not rows:
-                dev.set_center_freq(freq, 0)
+                dev.set_center_freq(center, 0)
                 dev.set_gain(gain, 0)
             dev.set_antenna(port, 0)
-            pk, off, tot = capture_carrier_db(tb, snk)
-            rows.append((name, pk, off, tot))
-            print(f"  {name:12s}  peak {pk:7.1f} dB at {off/1e3:+7.1f} kHz   "
-                  f"band {tot:7.1f} dB")
+            pk, off, floor = capture_carrier_db(tb, snk)
+            rows.append((name, pk, off, floor))
+            print(f"  {name:12s}  carrier {pk:7.1f} dB at {off/1e3:+7.1f} kHz   "
+                  f"floor {floor:7.1f} dB   (C/N {pk-floor:5.1f} dB)")
     tb.stop()
     tb.wait()
     return rows
@@ -147,13 +161,20 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--freq", type=float, default=1420.5e6,
                     help="carrier frequency (Hz) the signal generator is set to")
-    ap.add_argument("--gain", type=float, default=40.0)
+    ap.add_argument("--gain", type=float, default=60.0)
     ap.add_argument("--path", choices=("app", "raw"), default="app")
     args = ap.parse_args()
 
     rows = (run_app_path if args.path == "app" else run_raw_path)(
         args.freq, args.gain)
 
+    # Sanity: the carrier must actually be visible somewhere, or the
+    # summary is meaningless (the first run measured only the DC artefact).
+    best = max(r[1] - r[3] for r in rows)
+    if best < 15:
+        print(f"\nNO CARRIER SEEN (best C/N {best:.1f} dB) — check the "
+              "generator is keyed, on the expected frequency, and into the "
+              "port under test. The summary below is NOT meaningful.")
     # Per-side isolation summary (assumes the carrier is on ONE port; the
     # hotter selection of a side is taken as the fed port).
     print("\nisolation summary (hotter port of each side minus the other):")
