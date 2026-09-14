@@ -19,8 +19,13 @@ carrier level seen through all four selections. Interpretation:
     that side), not the app.
   * leak only in the --path app pass -> our wrapper; file it.
 
-One device open per process (the B210 reopen access-violation fault,
-2026-09-12) — hence two invocations rather than one script doing both.
+ONE FRONTEND PER PROCESS (--side A / --side B): remapping the streamer to
+the other frontend mid-run via lock()/set_subdev_spec/unlock() does NOT
+take effect — the 2026-09-14 first runs reported side-B rows that were
+still listening on side A (identical numbers gave it away; the app itself
+does a full flowgraph restart, so the app is unaffected). The subdev is
+now fixed before streaming starts. Also one device open per process (the
+B210 reopen access-violation fault, 2026-09-12).
 """
 import argparse
 import os
@@ -84,30 +89,31 @@ def capture_carrier_db(tb, snk):
     return db[k], (k - c) * RATE / NFFT, floor
 
 
-def run_app_path(freq, gain):
+def run_app_path(freq, gain, side):
     import dses_workbench as sa
     devs = sa.find_b200_uhd()
     if not devs:
         sys.exit("no B210 found")
     serial = devs[0]['serial']
-    print(f"B210 s/n {serial} — APP path (UhdB200Source, the Workbench's own code)")
+    print(f"B210 s/n {serial} — APP path (UhdB200Source, the Workbench's own "
+          f"code), frontend {side} only")
     center = freq - TUNE_BELOW
     print(f"tuned {center/1e6:.4f} MHz; carrier expected at "
           f"{TUNE_BELOW/1e3:+.0f} kHz")
     src = sa.UhdB200Source(serial=serial, samp_rate=RATE,
-                           center_freq=center, gain=gain)
+                           center_freq=center, gain=gain,
+                           antenna=f"{side} : TX/RX")
     tb = gr.top_block()
     snk = blocks.vector_sink_c(reserve_items=NFFT * AVG * 4)
     tb.connect(src.block, snk)
     tb.start()
     rows = []
-    for name in src.antennas:
+    names = [a for a in src.antennas if a.startswith(f"{side} ")]
+    for name in names:
         if src.antenna_needs_restart(name):
-            tb.lock()
-            src.set_antenna(name)
-            tb.unlock()
-        else:
-            src.set_antenna(name)
+            raise RuntimeError(f"{name} needs a frontend remap — run with "
+                               f"--side {name.split(' ')[0]} instead")
+        src.set_antenna(name)
         pk, off, floor = capture_carrier_db(tb, snk)
         rows.append((name, pk, off, floor))
         print(f"  {name:12s}  carrier {pk:7.1f} dB at {off/1e3:+7.1f} kHz   "
@@ -117,41 +123,36 @@ def run_app_path(freq, gain):
     return rows
 
 
-def run_raw_path(freq, gain):
-    print("RAW gr-uhd path (no Workbench wrapper)")
+def run_raw_path(freq, gain, side):
+    print(f"RAW gr-uhd path (no Workbench wrapper), frontend {side} only")
     dev = uhd.usrp_source(",".join(("", "")),
                           uhd.stream_args(cpu_format="fc32", channels=[0]))
     subdevs = dev.get_subdev_spec(0).split()
+    labels = ['A', 'B', 'C', 'D'][:len(subdevs)]
+    if side not in labels:
+        sys.exit(f"frontend {side} not present (device has {labels})")
+    # Subdev must be fixed BEFORE streaming starts — a mid-run remap via
+    # lock()/unlock() silently does not take (see module docstring).
+    dev.set_subdev_spec(subdevs[labels.index(side)], 0)
     ports = list(dev.get_antennas(0))
     dev.set_samp_rate(RATE)
     center = freq - TUNE_BELOW
     print(f"tuned {center/1e6:.4f} MHz; carrier expected at "
           f"{TUNE_BELOW/1e3:+.0f} kHz")
+    dev.set_center_freq(center, 0)
+    dev.set_gain(gain, 0)
     tb = gr.top_block()
     snk = blocks.vector_sink_c(reserve_items=NFFT * AVG * 4)
     tb.connect(dev, snk)
     tb.start()
     rows = []
-    labels = ['A', 'B', 'C', 'D'][:len(subdevs)]
-    cur = subdevs[0]
-    for lab, spec in zip(labels, subdevs):
-        for port in ports:
-            name = f"{lab} : {port}"
-            if spec != cur:
-                tb.lock()
-                dev.set_subdev_spec(spec, 0)
-                dev.set_center_freq(center, 0)
-                dev.set_gain(gain, 0)
-                tb.unlock()
-                cur = spec
-            elif not rows:
-                dev.set_center_freq(center, 0)
-                dev.set_gain(gain, 0)
-            dev.set_antenna(port, 0)
-            pk, off, floor = capture_carrier_db(tb, snk)
-            rows.append((name, pk, off, floor))
-            print(f"  {name:12s}  carrier {pk:7.1f} dB at {off/1e3:+7.1f} kHz   "
-                  f"floor {floor:7.1f} dB   (C/N {pk-floor:5.1f} dB)")
+    for port in ports:
+        name = f"{side} : {port}"
+        dev.set_antenna(port, 0)
+        pk, off, floor = capture_carrier_db(tb, snk)
+        rows.append((name, pk, off, floor))
+        print(f"  {name:12s}  carrier {pk:7.1f} dB at {off/1e3:+7.1f} kHz   "
+              f"floor {floor:7.1f} dB   (C/N {pk-floor:5.1f} dB)")
     tb.stop()
     tb.wait()
     return rows
@@ -163,10 +164,12 @@ def main():
                     help="carrier frequency (Hz) the signal generator is set to")
     ap.add_argument("--gain", type=float, default=60.0)
     ap.add_argument("--path", choices=("app", "raw"), default="app")
+    ap.add_argument("--side", choices=("A", "B"), default="A",
+                    help="which RX frontend to test (one per process)")
     args = ap.parse_args()
 
     rows = (run_app_path if args.path == "app" else run_raw_path)(
-        args.freq, args.gain)
+        args.freq, args.gain, args.side)
 
     # Sanity: the carrier must actually be visible somewhere, or the
     # summary is meaningless (the first run measured only the DC artefact).
