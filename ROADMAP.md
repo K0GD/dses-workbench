@@ -740,7 +740,12 @@ menu bar!) + drift-scan box test (dock behavior on headless Openbox/xrdp
 
 - [ ] **Drift-Scan Review — the morning-after quicklook for ezRA recordings
       (proposed 2026-09-19, from the Ray/Rich/Haswell September arc; Rick:
-      write it up).** Every drift-scan night this month — Ray's eight
+      write it up). SCHEDULED FOR 1.6.0 (Rick, 2026-09-19): it IS the next
+      release's feature, but implementation does not start until the
+      Haswell post-restore ROLLOVER is observed (expected late September);
+      1.6.0 then bundles this + f70f603 (az/el precision) and is cut at
+      the rollover-timed Pi scan break (update + re-enter full-precision
+      az/el + fresh segment before Glenn's October session).** Every drift-scan night this month — Ray's eight
       files, Rich's twelve-stripe survey, and every Haswell post-restore
       check — needed the SAME hand-written analysis before anyone could
       answer "did I detect it? is the recording clean?": parse the ezRA
