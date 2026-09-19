@@ -738,7 +738,46 @@ menu bar!) + drift-scan box test (dock behavior on headless Openbox/xrdp
 
 ## Backlog / unscheduled
 
-- [ ] **Constant-statistics display while recording** (from Ray's
+- [ ] **Drift-Scan Review — the morning-after quicklook for ezRA recordings
+      (proposed 2026-09-19, from the Ray/Rich/Haswell September arc; Rick:
+      write it up).** Every drift-scan night this month — Ray's eight
+      files, Rich's twelve-stripe survey, and every Haswell post-restore
+      check — needed the SAME hand-written analysis before anyone could
+      answer "did I detect it? is the recording clean?": parse the ezRA
+      `.txt`, check the header, census gaps and spurs, flatten the
+      bandpass, plot the waterfall and line profile, fit the transit. ezRA
+      owns the deep end (ezCon/ezSky/ezGal: condensation, RFI rejection,
+      sky maps, l–v diagrams, arm reconstruction — Rich's 09-18 plots
+      prove it) and we must NOT duplicate that; the gap is the per-night
+      triage layer BELOW it, which ezRA does not do and which its fragile
+      Windows toolchain (backslash-path trap, .conda-python crash) makes
+      hard for users to improvise. New tool (menu: Observe → Drift-Scan
+      Review…, also usable on the file just recorded): open an ezRA `.txt`
+      and produce one standard report —
+      * Header sanity: version, band vs the HI line, lat/long/amsl vs the
+        app's site settings, az/el STALENESS check (flag when the header
+        az/el disagrees with the current Recording-panel values — Ray's
+        recurring trap);
+      * Recording integrity: row count, cadence exactness, gap census,
+        total-power stability (rms, p-p);
+      * Spur census: narrow features vs a median-filtered bandpass, with
+        the known 1420.000-family called out;
+      * Waterfall (bandpass-flattened) and averaged line profile in
+        velocity units, DC-artefact position marked;
+      * Transit finder: light curve over a chosen velocity band, Gaussian
+        fit → peak %, FWHM, UT/LST centroid with the τ/2 end-stamp
+        correction applied, vs the sidereal prediction from a prior night
+        if one is loaded (the Ray workflow) — and for a stationary dish,
+        peak-vs-day trending (the Haswell sag monitor / Cyg A calibration
+        series);
+      * One-click export: figures + a text summary block suitable for
+        pasting into email (the FINDINGS workflow).
+      Reference implementations: HI_and_Drift_Scan\analysis_2026-09\
+      ray_noise\analyze_n8.py + ray_n8_figure.py (per-night quicklook),
+      rich_survey\survey_fingerprint.py/survey_checks.py (multi-file
+      census), and the Haswell transit Gaussian fit in SEGMENT5_NOTES
+      "POST-RESTORE DAY 1". Complementary to ezRA by design: the output
+      of this tool is the DECISION to feed the file onward into ezCon. (from Ray's
       2026-09-06 report, diagnosed 09-07): with recording active the
       display tick budget drops 0.4→0.12 and on a loaded host the Welch
       block count collapses toward 1; in dB-averaging mode the trace then
