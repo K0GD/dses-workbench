@@ -782,7 +782,26 @@ menu bar!) + drift-scan box test (dock behavior on headless Openbox/xrdp
       rich_survey\survey_fingerprint.py/survey_checks.py (multi-file
       census), and the Haswell transit Gaussian fit in SEGMENT5_NOTES
       "POST-RESTORE DAY 1". Complementary to ezRA by design: the output
-      of this tool is the DECISION to feed the file onward into ezCon. (from Ray's
+      of this tool is the DECISION to feed the file onward into ezCon.
+- [ ] **Recording-panel pointing: live Dec readout + Dec-first entry
+      (proposed 2026-09-21, from Ray's night-9 header — az 102.5/el 4,
+      a pointing that never comes within 50 deg of the galactic plane;
+      the true pointing had to be solved from the sky).** Two stages:
+      (a) CHEAP, bundle whenever convenient: a read-only consequences
+      line under the Az/El spins — "-> Dec +xx.x" (and, for ezRA
+      format, when that dec crosses the galactic plane) — computed
+      from the site lat/long already in settings with the planner's
+      existing sky math (precess/lst helpers); nonsense entries then
+      read as nonsense. (b) Dec-FIRST ENTRY as the alternative mode:
+      for a drift scan the constant coordinate is DECLINATION (beam RA
+      changes all night — "RA/Dec entry" is really Dec entry), so let
+      the user type a target Dec and have the app compute El (default
+      meridian az 180/0, or a user-fixed azimuth like Ray's ~187) and
+      fill the Az/El fields; the ezCol header format is unchanged —
+      the app just fills it correctly. Serves the manually-steered
+      home stations (Ray: fixed az, jack-screw el) and the
+      Dec-stepping survey directly.
+- [ ] **Constant-statistics display while recording** (from Ray's
       2026-09-06 report, diagnosed 09-07): with recording active the
       display tick budget drops 0.4→0.12 and on a loaded host the Welch
       block count collapses toward 1; in dB-averaging mode the trace then
