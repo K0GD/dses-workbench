@@ -39,4 +39,4 @@ here or by email to the author.
 | `Installing.md`, `Release_Workflow.md`, `ROADMAP.md` | install guide, release procedure, feature planning |
 | `make-release.ps1`, `make-release.sh` | build the cross-platform release zip |
 
-Richard M Hambly, K0GD — rick@cnssys.com
+Richard M Hambly, K0GD — k0gd@cnssys.com
