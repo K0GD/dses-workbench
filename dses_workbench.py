@@ -155,7 +155,7 @@ import time
 APP_NAME        = "DSES Radio Astronomy Workbench"
 APP_VERSION     = "1.5.3"
 APP_AUTHOR      = "Richard M Hambly (K0GD)"
-APP_AUTHOR_EMAIL = "rick@cnssys.com"
+APP_AUTHOR_EMAIL = "k0gd@cnssys.com"
 APP_COPYRIGHT   = "Copyright © 2026 Richard M Hambly (K0GD)"
 APP_LICENSE     = "GPL-3.0-or-later"
 APP_DESCRIPTION = ("Radio-astronomy workbench for the Ettus USRP B210 and other "

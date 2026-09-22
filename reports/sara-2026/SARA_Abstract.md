@@ -27,4 +27,4 @@ far gentler learning curve.
 
 ---
 
-*Word count: ~230. Contact: rick@cnssys.com*
+*Word count: ~230. Contact: k0gd@cnssys.com*

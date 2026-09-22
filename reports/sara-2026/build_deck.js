@@ -946,7 +946,7 @@ function figFrame(s, imgPath, x, y, w, h) {
   s.addText(
     [
       { text: "Richard M. Hambly (K0GD)", options: { bold: true, color: WHITE } },
-      { text: "   •   rick@cnssys.com   •   dses.science", options: { color: GOLD_SOFT } },
+      { text: "   •   k0gd@cnssys.com   •   dses.science", options: { color: GOLD_SOFT } },
     ],
     { x: 0.78, y: 6.5, w: 9.0, h: 0.4, margin: 0, fontFace: BODY, fontSize: 14 }
   );

@@ -1,7 +1,7 @@
 # DSES Radio Astronomy Workbench — Installation Guide
 
 **Version 1.5.3**
-Author: Richard M Hambly (K0GD) — rick@cnssys.com
+Author: Richard M Hambly (K0GD) — k0gd@cnssys.com
 License: GPL-3.0-or-later
 
 This document covers:

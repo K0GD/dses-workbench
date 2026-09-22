@@ -1,7 +1,7 @@
 # DSES Radio Astronomy Workbench — Release Workflow
 
 **Version 1.0.0**
-Author: Richard M Hambly (K0GD) — rick@cnssys.com
+Author: Richard M Hambly (K0GD) — k0gd@cnssys.com
 Audience: developer only — not shipped to recipients.
 
 This document is for the developer (you) cutting and publishing new releases. It complements `DSES_Radio_Astronomy_Workbench_Installation.pdf`, which is the user-facing install guide. Topics covered here:
