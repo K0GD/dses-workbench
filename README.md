@@ -21,9 +21,11 @@ program checks for updates itself and installs them in place.
 
 Release bundles, the install guide and the update manifest are published at
 <https://gpstime.com/sw_distribution/dses-workbench/> — **not** from this
-repository. This GitHub repository is a read-only mirror of the development
-history (the master lives on a DSES server); issues and questions are welcome
-here or by email to the author.
+repository. This GitHub repository — <https://github.com/K0GD/dses-workbench> —
+is a read-only mirror of the development history (the master lives on a DSES
+server); issues and questions are welcome here or by email to the author. The
+DSES EVE modem, which shares this program's B210 layer (`dses_radio.py`), is
+mirrored the same way at <https://github.com/K0GD/eve-modem>.
 
 ## Layout
 
