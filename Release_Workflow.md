@@ -189,7 +189,7 @@ Convention started at v1.4.0 (2026-09-08); releases before that have no tags. Us
 
 ### 4.9 Refresh the public GitHub mirror
 
-The development history is mirrored read-only at <https://github.com/dses-science/dses-workbench> in the DSES GitHub organization (same arrangement as the EVE modem's `dses-science/eve-modem`; mirrored since 2026-09-22, in the organization since 2026-09-23). The NAS bare repo stays the master; the mirror carries `main` and every release tag with the private working notes (`CLAUDE.md`) removed from every commit by `git filter-repo`. After the release commit and tag are pushed to origin:
+The development history is mirrored read-only at <https://github.com/dses-science/dses-workbench> in the DSES GitHub organization (same arrangement as the EVE modem's `dses-science/eve-modem`; mirrored since 2026-09-22, in the organization since 2026-09-23). The NAS bare repo stays the master; the mirror carries `main` and every release tag with the private working notes (`CLAUDE.md`) removed from every commit by `git filter-repo`, and co-author trailers removed from every commit and tag message. After the release commit and tag are pushed to origin:
 
 ```text
 bash tools/publish_github.sh

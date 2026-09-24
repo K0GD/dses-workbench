@@ -4,10 +4,12 @@
 # The NAS bare repo (origin) stays the master. GitHub holds a read-only copy for
 # the DSES group and other stations, with the private working notes (CLAUDE.md)
 # removed from EVERY commit: a fresh clone of the local repo is rewritten with
-# git filter-repo, then force-pushed. The rewrite is deterministic, so repeated
-# runs produce the same history and the mirror's commit ids stay stable; tags
-# are carried across. Same rules and mechanism as the EVE modem mirror
-# (EVE_Modem/tools/publish_github.sh, 2026-09-22).
+# git filter-repo, then force-pushed. The public history carries each commit's
+# author only: co-author trailers are removed from every commit and tag message,
+# and the push is refused if one survives (ported from the EVE script 2026-09-23).
+# The rewrite is deterministic, so repeated runs produce the same history and the
+# mirror's commit ids stay stable; tags are carried across. Same rules and
+# mechanism as the EVE modem mirror (EVE_Modem/tools/publish_github.sh, 2026-09-22).
 #
 #   bash tools/publish_github.sh              # mirror main + tags to dses-science/dses-workbench
 #   GITHUB_REPO=<owner>/<name> bash tools/publish_github.sh   # mirror to another repository
@@ -25,6 +27,9 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO="${GITHUB_REPO:-dses-science/dses-workbench}"
 URL="https://github.com/${REPO}.git"
 EXCLUDE=(CLAUDE.md)                 # private working notes; add paths here if needed
+# filter-repo message callback (Python, bytes): drop co-author trailer lines
+TRAILERS='import re
+return re.sub(rb"(?im)^[ \t]*co-authored-by:[^\n]*(?:\n|$)", b"", message).rstrip() + b"\n"'
 
 if [ -n "$(git -C "$here" status --porcelain)" ]; then
     echo "note: working tree has uncommitted changes - they are NOT mirrored (committed history only)" >&2
@@ -55,10 +60,16 @@ git clone -q --no-local "$here" "$work/mirror"
 cd "$work/mirror"
 args=()
 for p in "${EXCLUDE[@]}"; do args+=(--path "$p"); done
-echo "== removing ${EXCLUDE[*]} from every commit"
-git filter-repo --quiet --invert-paths "${args[@]}"
+echo "== removing ${EXCLUDE[*]} from every commit; co-author trailers from every message"
+git filter-repo --quiet --invert-paths "${args[@]}" --message-callback "$TRAILERS"
 if git log --all --name-only --format= -- "${EXCLUDE[@]}" | grep -q .; then
     echo "filter failed: excluded paths still present" >&2
+    exit 1
+fi
+# Count, don't grep -q: under pipefail an early grep exit on a big log reads as "no match".
+left="$( { git log --all --format=%B; git for-each-ref refs/tags --format='%(contents)'; } | grep -ci '^[[:space:]]*co-authored-by:' || true )"
+if [ "$left" != "0" ]; then
+    echo "filter failed: $left co-author trailer line(s) still present" >&2
     exit 1
 fi
 echo "== $(git rev-list --count main) commits, $(git tag | wc -l | tr -d ' ') tags after filtering"
